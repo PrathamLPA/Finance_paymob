@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terms and Conditions</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <main class="container">
+        <h1>Terms and Conditions</h1>
+        <p class="version">Version {{ terms_version }}</p>
+
+        <div class="terms-content">
+            {{ terms_html | safe }}
+        </div>
+
+        {% if error %}
+        <p class="error">{{ error }}</p>
+        {% endif %}
+
+        <form method="post" action="/payment/{{ token }}/accept" class="accept-form">
+            <label class="checkbox-label">
+                <input type="checkbox" name="accepted" value="yes" required>
+                I have read and agree to the Terms and Conditions
+            </label>
+            <button type="submit" class="btn-primary">Accept &amp; Continue</button>
+        </form>
+    </main>
+</body>
+</html>
