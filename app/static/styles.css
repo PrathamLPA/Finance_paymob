@@ -236,6 +236,26 @@ body.paymob-page {
     border-radius: 3px;
 }
 
+.external-policy-link {
+    margin: -0.75rem 0 1.5rem;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.external-policy-link a,
+.consent-text a {
+    color: var(--paymob-blue);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.external-policy-link a:hover,
+.consent-text a:hover {
+    text-decoration: underline;
+    color: var(--paymob-blue-hover);
+}
+
 .consent-box {
     display: flex;
     align-items: flex-start;

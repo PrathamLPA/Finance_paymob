@@ -65,6 +65,13 @@
                 {{ terms_html | safe }}
             </div>
 
+            <p class="external-policy-link">
+                For the complete refund and data protection policy, see
+                <a href="{{ refund_policy_url }}" target="_blank" rel="noopener noreferrer">
+                    Refund Policy
+                </a>.
+            </p>
+
             {% if error %}
             <div class="alert alert-error" role="alert">{{ error }}</div>
             {% endif %}
@@ -73,7 +80,9 @@
                 <label class="consent-box">
                     <input type="checkbox" name="accepted" value="yes" id="accept-checkbox" required>
                     <span class="consent-text">
-                        I have read and agree to the Terms and Conditions (version {{ terms_version }}).
+                        I have read and agree to the Terms and Conditions (version {{ terms_version }}),
+                        including the
+                        <a href="{{ refund_policy_url }}" target="_blank" rel="noopener noreferrer">Refund Policy</a>.
                         I understand I will be redirected to <strong>Paymob</strong> to complete payment securely.
                     </span>
                 </label>

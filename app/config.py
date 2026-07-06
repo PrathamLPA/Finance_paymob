@@ -57,6 +57,7 @@ class Settings(BaseSettings):
 
     # Workflow
     terms_version: str = "1.0"
+    refund_policy_url: str = "https://learnerspoint.org/refund-policy"
     payment_session_ttl_hours: int = 72
     default_currency: str = "AED"
     storage_path: str = "storage"

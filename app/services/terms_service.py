@@ -49,6 +49,7 @@ class TermsService:
         return {
             "terms_version": self.settings.terms_version,
             "terms_html": self.markdown_to_html(markdown),
+            "refund_policy_url": self.settings.refund_policy_url,
         }
 
     def generate_acceptance_pdf(self, session: PaymentSession) -> str:
@@ -70,6 +71,12 @@ class TermsService:
                 y = 750
             c.drawString(72, y, line[:90])
             y -= 14
+
+        if y < 72:
+            c.showPage()
+            y = 750
+        y -= 14
+        c.drawString(72, y, f"Full refund policy: {self.settings.refund_policy_url}")
 
         c.save()
         return str(pdf_path)
