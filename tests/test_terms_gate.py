@@ -45,4 +45,4 @@ def test_acceptance_records_and_redirects(client, seed_lead):
         follow_redirects=False,
     )
     assert accept.status_code == 303
-    assert "mock.paymob" in accept.headers["location"]
+    assert "paymob.com" in accept.headers["location"]

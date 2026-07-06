@@ -2,8 +2,10 @@
 
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.db.url import resolve_supabase_url
 
 
 class Settings(BaseSettings):
@@ -67,6 +69,11 @@ class Settings(BaseSettings):
         if value.startswith("postgres://"):
             return value.replace("postgres://", "postgresql+psycopg://", 1)
         return value
+
+    @model_validator(mode="after")
+    def resolve_supabase_database_url(self) -> "Settings":
+        self.database_url = resolve_supabase_url(self.database_url)
+        return self
 
 
 @lru_cache

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -17,6 +16,7 @@ from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import SOURCE_FINANCE_DEAL, SOURCE_LEAD, PaymentSession
 from app.models.payment_transaction import PaymentTransaction
 from app.services.invoice_service import InvoiceService
+from app.services.paymob_mapper import apply_paymob_fields
 from app.services.payment_session_service import PaymentSessionService
 
 logger = logging.getLogger(__name__)
@@ -164,6 +164,7 @@ class WorkflowOrchestrator:
             remaining_balance=remaining,
             raw_payload=data.raw_payload,
         )
+        apply_paymob_fields(transaction, data)
         self.db.add(transaction)
         self.session_service.mark_completed(session)
         self.db.flush()
@@ -204,20 +205,19 @@ class WorkflowOrchestrator:
         if not session:
             raise ValueError("Payment session not found")
 
+        from app.integrations.paymob import build_mock_paymob_payload
+
         charge_amount = amount or session.charge_amount
-        payload = {
-            "transaction_id": f"MOCK-TXN-{session.id}",
-            "amount": str(charge_amount),
-            "currency": session.currency,
-            "merchant_reference": session.merchant_reference,
-            "success": True,
-        }
-        data = PaymentWebhookData(
-            transaction_id=payload["transaction_id"],
-            amount=Decimal(str(charge_amount)),
+        amount_cents = int(charge_amount * 100)
+        txn_id = 100000 + session.id
+        order_id = 200000 + session.id
+
+        payload = build_mock_paymob_payload(
+            transaction_id=txn_id,
+            amount_cents=amount_cents,
             currency=session.currency,
-            merchant_reference=session.merchant_reference,
-            order_id=f"MOCK-ORD-{session.id}",
-            raw_payload=json.dumps(payload),
+            merchant_order_id=session.merchant_reference,
+            order_id=order_id,
+            email=session.workflow.customer_email or "customer@example.com",
         )
-        return await self.handle_paymob_webhook(data)
+        return await self.handle_paymob_payload(payload)

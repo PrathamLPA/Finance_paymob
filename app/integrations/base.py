@@ -21,6 +21,25 @@ class PaymentWebhookData:
     merchant_reference: str
     order_id: str | None
     raw_payload: str | None
+    # Paymob transaction callback fields (developers.paymob.com)
+    amount_cents: int | None = None
+    paymob_created_at: str | None = None
+    error_occured: bool = False
+    has_parent_transaction: bool = False
+    paymob_integration_id: int | None = None
+    is_3d_secure: bool = False
+    is_auth: bool = False
+    is_capture: bool = False
+    is_refunded: bool = False
+    is_standalone_payment: bool = True
+    is_voided: bool = False
+    paymob_order_id: str | None = None
+    owner: int | None = None
+    pending: bool = False
+    source_pan: str | None = None
+    source_sub_type: str | None = None
+    source_type: str | None = None
+    success: bool = True
 
 
 @dataclass

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.integrations.factory import get_bitrix_client
+from app.services.seed_mock_data import seed_mock_data
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 router = APIRouter(prefix="/api/dev", tags=["dev"])
@@ -102,3 +103,9 @@ async def simulate_paymob_webhook(
         "amount_paid": str(workflow.amount_paid),
         "remaining_balance": str(workflow.remaining_balance),
     }
+
+
+@router.post("/seed-mock-data")
+async def seed_mock_customers(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Seed mock customers with Paymob-shaped payment data for Supabase visualization."""
+    return seed_mock_data(db)

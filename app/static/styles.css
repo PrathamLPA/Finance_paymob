@@ -1,100 +1,361 @@
+:root {
+    --paymob-navy: #0b1a2e;
+    --paymob-navy-light: #132337;
+    --paymob-blue: #0066ff;
+    --paymob-blue-hover: #0052cc;
+    --paymob-blue-glow: rgba(0, 102, 255, 0.25);
+    --paymob-accent: #00c2ff;
+    --surface: #ffffff;
+    --surface-muted: #f4f7fb;
+    --border: #e2e8f0;
+    --text-primary: #0f172a;
+    --text-secondary: #64748b;
+    --text-inverse: #e2e8f0;
+    --error-bg: #fef2f2;
+    --error-text: #dc2626;
+    --radius: 12px;
+    --shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+
 * {
     box-sizing: border-box;
 }
 
-body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    line-height: 1.6;
-    color: #1a1a1a;
-    background: #f5f7fa;
+body.paymob-page {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     margin: 0;
-    padding: 2rem 1rem;
+    min-height: 100vh;
+    color: var(--text-primary);
+    background: var(--paymob-navy);
+    line-height: 1.6;
 }
 
-.container {
-    max-width: 720px;
+.page-bg {
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(ellipse 80% 60% at 50% -10%, rgba(0, 102, 255, 0.18), transparent),
+        radial-gradient(ellipse 50% 40% at 100% 100%, rgba(0, 194, 255, 0.08), transparent),
+        var(--paymob-navy);
+    z-index: -1;
+}
+
+.site-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.25rem 2rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(11, 26, 46, 0.85);
+    backdrop-filter: blur(12px);
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.brand-icon {
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--paymob-blue), var(--paymob-accent));
+    border-radius: 10px;
+    color: #fff;
+}
+
+.brand-name {
+    display: block;
+    font-weight: 700;
+    font-size: 1rem;
+    color: #fff;
+    letter-spacing: -0.02em;
+}
+
+.brand-tagline {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.secure-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #86efac;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.25);
+    padding: 0.4rem 0.75rem;
+    border-radius: 999px;
+}
+
+.main-content {
+    max-width: 680px;
     margin: 0 auto;
-    background: #fff;
-    padding: 2rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    padding: 2rem 1.25rem 3rem;
 }
 
-h1 {
-    margin-top: 0;
-    font-size: 1.75rem;
+.steps {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin-bottom: 1.75rem;
 }
 
-.version {
-    color: #666;
-    font-size: 0.875rem;
-    margin-bottom: 1.5rem;
-}
-
-.terms-content {
-    border: 1px solid #e0e0e0;
-    border-radius: 6px;
-    padding: 1.5rem;
-    max-height: 400px;
-    overflow-y: auto;
-    margin-bottom: 1.5rem;
-    background: #fafafa;
-}
-
-.terms-content h2 {
-    font-size: 1.1rem;
-    margin-top: 1.25rem;
-}
-
-.terms-content h2:first-child {
-    margin-top: 0;
-}
-
-.accept-form {
+.step {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    align-items: center;
+    gap: 0.35rem;
+    opacity: 0.45;
 }
 
-.checkbox-label {
+.step.active {
+    opacity: 1;
+}
+
+.step-num {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-inverse);
+    font-size: 0.8rem;
+    font-weight: 700;
+    border: 2px solid rgba(255, 255, 255, 0.15);
+}
+
+.step.active .step-num {
+    background: var(--paymob-blue);
+    border-color: var(--paymob-blue);
+    color: #fff;
+    box-shadow: 0 0 20px var(--paymob-blue-glow);
+}
+
+.step-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-inverse);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.step-line {
+    width: 48px;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.12);
+    margin: 0 0.5rem;
+    margin-bottom: 1.25rem;
+}
+
+.terms-card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 2rem;
+    border: 1px solid var(--border);
+}
+
+.card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.card-header h1 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    color: var(--text-primary);
+}
+
+.version-pill {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--paymob-blue);
+    background: rgba(0, 102, 255, 0.1);
+    padding: 0.3rem 0.65rem;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.card-subtitle {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin: 0 0 1.25rem;
+}
+
+.terms-scroll {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    max-height: 340px;
+    overflow-y: auto;
+    background: var(--surface-muted);
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+    color: #334155;
+}
+
+.terms-scroll h2 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 1.25rem 0 0.5rem;
+}
+
+.terms-scroll h2:first-child {
+    margin-top: 0;
+}
+
+.terms-scroll p {
+    margin: 0 0 0.75rem;
+}
+
+.terms-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+.terms-scroll::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+}
+
+.consent-box {
     display: flex;
     align-items: flex-start;
-    gap: 0.5rem;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: var(--surface-muted);
+    border: 1px solid var(--border);
+    border-radius: 8px;
     cursor: pointer;
+    margin-bottom: 1.25rem;
+    transition: border-color 0.2s;
 }
 
-.checkbox-label input {
-    margin-top: 0.25rem;
+.consent-box:has(input:checked) {
+    border-color: var(--paymob-blue);
+    background: rgba(0, 102, 255, 0.04);
 }
 
-.btn-primary {
-    background: #2563eb;
+.consent-box input {
+    margin-top: 0.2rem;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--paymob-blue);
+    flex-shrink: 0;
+}
+
+.consent-text {
+    font-size: 0.875rem;
+    color: #334155;
+    line-height: 1.5;
+}
+
+.btn-paymob {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    background: linear-gradient(135deg, var(--paymob-blue), #0052cc);
     color: #fff;
     border: none;
-    padding: 0.875rem 1.5rem;
+    padding: 1rem 1.5rem;
     font-size: 1rem;
-    border-radius: 6px;
-    cursor: pointer;
     font-weight: 600;
+    font-family: inherit;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+    box-shadow: 0 4px 20px var(--paymob-blue-glow);
 }
 
-.btn-primary:hover {
-    background: #1d4ed8;
+.btn-paymob:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 28px var(--paymob-blue-glow);
 }
 
-.error {
-    color: #dc2626;
-    background: #fef2f2;
+.btn-paymob:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+.alert {
     padding: 0.75rem 1rem;
-    border-radius: 6px;
+    border-radius: 8px;
+    font-size: 0.875rem;
     margin-bottom: 1rem;
 }
 
-.message {
+.alert-error {
+    background: var(--error-bg);
+    color: var(--error-text);
+    border: 1px solid #fecaca;
+}
+
+.powered-by {
     text-align: center;
+    margin-top: 1.5rem;
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.powered-by a {
+    color: var(--paymob-accent);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.powered-by a:hover {
+    text-decoration: underline;
+}
+
+/* Error page */
+body.error-page-body {
+    font-family: "Inter", sans-serif;
+    background: var(--paymob-navy);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
     padding: 2rem;
 }
 
-.message.error-page {
-    color: #dc2626;
+.error-card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 2.5rem;
+    text-align: center;
+    max-width: 420px;
+    box-shadow: var(--shadow);
+}
+
+.error-card h1 {
+    color: var(--error-text);
+    font-size: 1.25rem;
+    margin: 0 0 0.75rem;
+}
+
+.error-card p {
+    color: var(--text-secondary);
+    margin: 0;
 }
