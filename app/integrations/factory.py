@@ -22,7 +22,7 @@ def get_bitrix_client(settings: Settings | None = None):
 
 def get_paymob_client(settings: Settings | None = None):
     settings = settings or get_settings()
-    if settings.use_mock_integrations or not settings.paymob_api_key:
+    if settings.use_mock_integrations or not settings.paymob_secret_key:
         return MockPaymobClient(settings)
     return RealPaymobClient(settings)
 

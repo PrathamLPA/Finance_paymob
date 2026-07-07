@@ -253,7 +253,7 @@ class RealPaymobClient(MockPaymobClient):
         customer_email: str | None,
         customer_name: str | None,
     ) -> PaymobSession:
-        if not self.settings.paymob_api_key or self.settings.use_mock_integrations:
+        if not self.settings.paymob_secret_key or self.settings.use_mock_integrations:
             return await super().create_payment_session(
                 amount=amount,
                 currency=currency,
@@ -266,33 +266,69 @@ class RealPaymobClient(MockPaymobClient):
         name = customer_name or "Customer"
         first_name = name.split()[0]
         last_name = " ".join(name.split()[1:]) or "User"
+        base = self.settings.paymob_base_url.rstrip("/")
+        email = customer_email or "customer@example.com"
+        na = "NA"
+
+        intention_payload = {
+            "amount": amount_cents,
+            "currency": currency,
+            "payment_methods": [self.settings.paymob_integration_id],
+            "special_reference": merchant_reference,
+            "items": [
+                {
+                    "name": "Course payment",
+                    "amount": amount_cents,
+                    "description": merchant_reference,
+                    "quantity": 1,
+                }
+            ],
+            "billing_data": {
+                "email": email,
+                "first_name": first_name,
+                "last_name": last_name,
+                "phone_number": "+971500000000",
+                "apartment": na,
+                "floor": na,
+                "street": na,
+                "building": na,
+                "shipping_method": na,
+                "postal_code": na,
+                "city": na,
+                "country": "AE",
+                "state": na,
+            },
+            "customer": {
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": email,
+            },
+            "notification_url": f"{self.settings.public_base_url.rstrip('/')}/webhooks/paymob",
+            "redirection_url": f"{self.settings.public_base_url.rstrip('/')}/payment/thank-you",
+        }
+
+        headers = {
+            "Authorization": f"Token {self.settings.paymob_secret_key}",
+            "Content-Type": "application/json",
+            "Expect": "",
+        }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            auth_resp = await client.post(
-                "https://accept.paymob.com/api/auth/tokens",
-                json={"api_key": self.settings.paymob_api_key},
-            )
-            auth_resp.raise_for_status()
-            token = auth_resp.json()["token"]
-
             intention_resp = await client.post(
-                "https://accept.paymob.com/v1/intention/",
-                headers={"Authorization": f"Token {token}"},
-                json={
-                    "amount": amount_cents,
-                    "currency": currency,
-                    "payment_methods": [self.settings.paymob_integration_id],
-                    "special_reference": merchant_reference,
-                    "billing_data": {
-                        "email": customer_email or "customer@example.com",
-                        "first_name": first_name,
-                        "last_name": last_name,
-                        "phone_number": "+971500000000",
-                        "country": "AE",
-                    },
-                },
+                f"{base}/v1/intention/",
+                headers=headers,
+                json=intention_payload,
             )
-            intention_resp.raise_for_status()
+            if intention_resp.is_error:
+                detail = intention_resp.text
+                try:
+                    detail = intention_resp.json().get("detail", detail)
+                except Exception:
+                    pass
+                logger.error("Paymob intention failed (%s): %s", intention_resp.status_code, str(detail)[:500])
+                raise ValueError(
+                    f"Paymob intention failed ({intention_resp.status_code}): {detail}"
+                ) from None
             data = intention_resp.json()
 
         client_secret = data.get("client_secret", "")

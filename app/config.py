@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     paymob_public_key: str = ""
     paymob_integration_id: int = 0
     paymob_hmac_secret: str = ""
+    paymob_base_url: str = "https://accept.paymob.com"
     paymob_checkout_base_url: str = "https://accept.paymob.com/unifiedcheckout/"
 
     # Zoho Books
