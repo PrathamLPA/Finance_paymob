@@ -94,6 +94,23 @@ class PaymentSessionService:
         self.db.refresh(session)
         return session
 
+    async def refresh_paymob_checkout(self, session: PaymentSession) -> str:
+        workflow = session.workflow
+        new_reference = f"WF-{workflow.id}-{uuid.uuid4().hex[:8]}"
+        paymob_session = await self.paymob.create_payment_session(
+            amount=session.charge_amount,
+            currency=session.currency,
+            merchant_reference=new_reference,
+            customer_email=workflow.customer_email,
+            customer_name=workflow.customer_name,
+        )
+        session.merchant_reference = new_reference
+        session.paymob_session_id = paymob_session.session_id
+        session.paymob_checkout_url = paymob_session.checkout_url
+        self.db.commit()
+        self.db.refresh(session)
+        return session.paymob_checkout_url
+
     def mark_terms_accepted(self, session: PaymentSession) -> None:
         session.status = SESSION_TERMS_ACCEPTED
         self.db.commit()

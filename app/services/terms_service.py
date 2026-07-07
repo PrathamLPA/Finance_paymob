@@ -96,7 +96,7 @@ class TermsService:
             raise HTTPException(status_code=404, detail="Payment session not found or expired")
 
         if session.status == SESSION_TERMS_ACCEPTED and session.paymob_checkout_url:
-            return session.paymob_checkout_url
+            return await self.session_service.refresh_paymob_checkout(session)
 
         pdf_path = self.generate_acceptance_pdf(session)
 
