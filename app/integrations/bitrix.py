@@ -112,6 +112,12 @@ class MockBitrixClient:
         self._mock_deals[deal_id] = deal
         logger.info("[MockBitrix] Updated payment summary on deal %s", deal_id)
 
+    async def set_deal_payment_link(self, deal_id: int, payment_url: str) -> None:
+        deal = await self.get_deal(deal_id)
+        deal[self.settings.bitrix_field_payment_link] = payment_url
+        self._mock_deals[deal_id] = deal
+        logger.info("[MockBitrix] Set payment link on deal %s: %s", deal_id, payment_url)
+
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
         opportunity = lead.get("OPPORTUNITY")
         if opportunity is not None and str(opportunity).strip():
@@ -206,6 +212,15 @@ class RealBitrixClient:
             self.settings.bitrix_field_remaining_balance: str(summary.remaining_balance),
         }
         await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
+
+    async def set_deal_payment_link(self, deal_id: int, payment_url: str) -> None:
+        if not self.settings.bitrix_field_payment_link:
+            raise RuntimeError("BITRIX_FIELD_PAYMENT_LINK is not configured")
+        await self._call(
+            "crm.deal.update",
+            {"id": deal_id, "fields": {self.settings.bitrix_field_payment_link: payment_url}},
+        )
+        logger.info("Set payment link on Bitrix deal %s", deal_id)
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
         opportunity = lead.get("OPPORTUNITY")

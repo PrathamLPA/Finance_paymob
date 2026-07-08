@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     bitrix_field_amount_paid: str = "UF_CRM_AMOUNT_PAID"
     bitrix_field_remaining_balance: str = "UF_CRM_REMAINING_BALANCE"
     bitrix_field_total_amount: str = "UF_CRM_TOTAL_AMOUNT"
+    bitrix_field_payment_link: str = "UF_CRM_PAYMENT_LINK"
+    bitrix_field_customer_email: str = "UF_CRM_CUSTOMER_EMAIL"
 
     # Paymob
     paymob_api_key: str = ""

@@ -108,13 +108,9 @@ class WorkflowOrchestrator:
             workflow, source_type=source_type, source_id=source_id
         )
 
-        if workflow.customer_email:
-            payment_url = self.session_service.build_payment_url(session.token)
-            self.email.send_payment_request(
-                to_email=workflow.customer_email,
-                customer_name=workflow.customer_name,
-                payment_url=payment_url,
-            )
+        payment_url = self.session_service.build_payment_url(session.token)
+        # Write link to Bitrix deal field so Bitrix can email it (no SendGrid).
+        await self.bitrix.set_deal_payment_link(finance_deal_id, payment_url)
 
         logger.info(
             "Payment link created for finance deal %s — token %s...",
