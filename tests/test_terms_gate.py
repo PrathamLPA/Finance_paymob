@@ -2,6 +2,8 @@
 
 from decimal import Decimal
 
+from tests.conftest import SAMPLE_REGISTRANT
+
 
 def test_terms_page_has_no_customer_data(client, seed_lead):
     seed_lead(101)
@@ -13,7 +15,9 @@ def test_terms_page_has_no_customer_data(client, seed_lead):
 
     page = client.get(f"/payment/{token}")
     assert page.status_code == 200
-    assert "Terms and Conditions" in page.text
+    assert "Payment Terms" in page.text
+    assert "Is this course for you or someone else?" in page.text
+    assert "registrant_name" in page.text
     assert "secret@example.com" not in page.text
     assert "5000" not in page.text
     assert "checkbox" in page.text.lower() or "accepted" in page.text.lower()
@@ -41,7 +45,7 @@ def test_acceptance_records_and_redirects(client, seed_lead):
 
     accept = client.post(
         f"/payment/{token}/accept",
-        data={"accepted": "yes"},
+        data={"accepted": "yes", **SAMPLE_REGISTRANT},
         follow_redirects=False,
     )
     assert accept.status_code == 303

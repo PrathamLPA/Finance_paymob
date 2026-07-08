@@ -19,6 +19,13 @@ from app.config import get_settings
 from app.db.session import Base, get_db
 from app.main import app
 
+SAMPLE_REGISTRANT = {
+    "course_for": "self",
+    "registrant_name": "Test Customer",
+    "registrant_email": "customer@example.com",
+    "registrant_phone": "+971500000000",
+}
+
 
 @pytest.fixture(autouse=True)
 def reset_singletons():

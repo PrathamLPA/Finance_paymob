@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment — Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=3">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -35,63 +35,199 @@
     </header>
 
     <main class="main-content">
-        <div class="steps" aria-label="Payment progress">
+        <nav class="steps" aria-label="Payment progress">
             <div class="step active">
                 <span class="step-num">1</span>
-                <span class="step-label">Review Terms</span>
+                <span class="step-label">Your Details</span>
             </div>
-            <div class="step-line"></div>
+            <div class="step-line" aria-hidden="true"></div>
             <div class="step">
                 <span class="step-num">2</span>
                 <span class="step-label">Accept</span>
             </div>
-            <div class="step-line"></div>
+            <div class="step-line" aria-hidden="true"></div>
             <div class="step">
                 <span class="step-num">3</span>
                 <span class="step-label">Pay via Paymob</span>
             </div>
-        </div>
+        </nav>
 
         <article class="terms-card">
-            <div class="card-header">
-                <h1>Terms &amp; Conditions</h1>
-                <span class="version-pill">v{{ terms_version }}</span>
+            <div class="card-hero">
+                <div class="card-hero-icon" aria-hidden="true">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+                        <rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M2 10h20" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M6 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <div class="card-hero-text">
+                    <div class="card-header">
+                        <h1>Secure Payment</h1>
+                        <span class="version-pill">v{{ terms_version }}</span>
+                    </div>
+                    <p class="card-subtitle">
+                        Complete your details, review the payment terms below, then continue to Paymob.
+                    </p>
+                </div>
             </div>
-            <p class="card-subtitle">
-                Please review our terms carefully before proceeding to the secure payment page.
-            </p>
-
-            <div class="terms-scroll" tabindex="0">
-                {{ terms_html | safe }}
-            </div>
-
-            <p class="external-policy-link">
-                For the complete refund and data protection policy, see
-                <a href="{{ refund_policy_url }}" target="_blank" rel="noopener noreferrer">
-                    Refund Policy
-                </a>.
-            </p>
 
             {% if error %}
-            <div class="alert alert-error" role="alert">{{ error }}</div>
+            <div class="alert alert-error" role="alert">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M12 8v5M12 16h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <span>{{ error }}</span>
+            </div>
             {% endif %}
 
             <form method="post" action="/payment/{{ token }}/accept" class="accept-form" id="accept-form">
-                <label class="consent-box">
-                    <input type="checkbox" name="accepted" value="yes" id="accept-checkbox" required>
-                    <span class="consent-text">
-                        I have read and agree to the Terms and Conditions (version {{ terms_version }}),
-                        including the
-                        <a href="{{ refund_policy_url }}" target="_blank" rel="noopener noreferrer">Refund Policy</a>.
-                        I understand I will be redirected to <strong>Paymob</strong> to complete payment securely.
-                    </span>
-                </label>
-                <button type="submit" class="btn-paymob" id="submit-btn" disabled>
-                    <span>Accept &amp; Continue to Payment</span>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                </button>
+                <section class="registrant-panel" aria-labelledby="registrant-heading">
+                    <div class="panel-header">
+                        <span class="panel-step-badge">Step 1</span>
+                        <h2 class="section-heading" id="registrant-heading">Participant details</h2>
+                    </div>
+
+                    <div class="details-warning" role="note">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                        </svg>
+                        <div>
+                            <strong>Please double-check your details before continuing.</strong>
+                            The information you enter here cannot be changed once submitted and will be used
+                            exactly as provided for your course certificate. Ensure your name, email, and
+                            phone number are accurate.
+                        </div>
+                    </div>
+
+                    <fieldset class="course-for-fieldset">
+                        <legend class="field-label">Is this course for you or someone else?</legend>
+                        <div class="toggle-group" role="radiogroup" aria-label="Course registration for">
+                            <label class="toggle-btn{% if course_for == 'self' %} selected{% endif %}">
+                                <input type="radio" name="course_for" value="self" required
+                                    {% if course_for == 'self' %}checked{% endif %}>
+                                <span class="toggle-icon" aria-hidden="true">
+                                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                                        <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/>
+                                        <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    </svg>
+                                </span>
+                                <span class="toggle-label">For me</span>
+                                <span class="toggle-hint">I'm enrolling myself</span>
+                            </label>
+                            <label class="toggle-btn{% if course_for == 'someone_else' %} selected{% endif %}">
+                                <input type="radio" name="course_for" value="someone_else" required
+                                    {% if course_for == 'someone_else' %}checked{% endif %}>
+                                <span class="toggle-icon" aria-hidden="true">
+                                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                                        <circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/>
+                                        <circle cx="17" cy="9" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+                                        <path d="M3 20c0-2.761 2.686-5 6-5M14 20c0-2.21 1.79-4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    </svg>
+                                </span>
+                                <span class="toggle-label">For someone else</span>
+                                <span class="toggle-hint">I'm paying on their behalf</span>
+                            </label>
+                        </div>
+                    </fieldset>
+
+                    <div class="form-fields">
+                        <label class="field field-full">
+                            <span class="field-label">Name</span>
+                            <span class="input-wrap">
+                                <span class="input-icon" aria-hidden="true">
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                                        <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/>
+                                        <path d="M4 20c0-3.314 3.582-6 8-6s8 2.686 8 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    </svg>
+                                </span>
+                                <input type="text" name="registrant_name" class="field-input" required
+                                    autocomplete="name" placeholder="Full name"
+                                    value="{{ registrant_name }}">
+                            </span>
+                        </label>
+
+                        <label class="field">
+                            <span class="field-label">Email</span>
+                            <span class="input-wrap">
+                                <span class="input-icon" aria-hidden="true">
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                                        <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                                        <path d="M3 7l9 6 9-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    </svg>
+                                </span>
+                                <input type="email" name="registrant_email" class="field-input" required
+                                    autocomplete="email" placeholder="you@example.com"
+                                    value="{{ registrant_email }}">
+                            </span>
+                        </label>
+
+                        <label class="field">
+                            <span class="field-label">Phone Number</span>
+                            <span class="input-wrap">
+                                <span class="input-icon" aria-hidden="true">
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                                        <path d="M6.5 4h3l1.5 4-2 1.5a11 11 0 005 5L17.5 13 21.5 14.5V18a2 2 0 01-2 2C10.5 20 4 13.5 4 5.5A2 2 0 016 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </span>
+                                <input type="tel" name="registrant_phone" class="field-input" required
+                                    autocomplete="tel" placeholder="+971 50 000 0000"
+                                    value="{{ registrant_phone }}">
+                            </span>
+                        </label>
+                    </div>
+                </section>
+
+                <section class="terms-panel" aria-labelledby="terms-heading">
+                    <div class="terms-divider">
+                        <div class="panel-header">
+                            <span class="panel-step-badge muted">Step 2</span>
+                            <div>
+                                <h2 class="terms-divider-title" id="terms-heading">Payment Terms &amp; Conditions</h2>
+                                <p class="terms-divider-hint">Scroll through and read carefully before accepting.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="terms-scroll" tabindex="0">
+                        {{ terms_html | safe }}
+                    </div>
+
+                    <p class="external-policy-link">
+                        For the complete refund and data protection policy, see
+                        <a href="{{ refund_policy_url }}" target="_blank" rel="noopener noreferrer">
+                            Refund Policy
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path d="M14 4h6v6M10 14L20 4M15 9h5v10H4V9h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </a>.
+                    </p>
+                </section>
+
+                <div class="form-footer">
+                    <label class="consent-box">
+                        <input type="checkbox" name="accepted" value="yes" id="accept-checkbox" required>
+                        <span class="consent-text">
+                            I have read and agree to the Terms and Conditions (version {{ terms_version }}),
+                            including the
+                            <a href="{{ refund_policy_url }}" target="_blank" rel="noopener noreferrer">Refund Policy</a>.
+                            I understand I will be redirected to <strong>Paymob</strong> to complete payment securely.
+                        </span>
+                    </label>
+                    <button type="submit" class="btn-paymob" id="submit-btn" disabled>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                            <path d="M8 11V8a4 4 0 118 0v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                        </svg>
+                        <span>Accept &amp; Continue to Payment</span>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    <p class="form-footer-note">You'll be redirected to Paymob's secure checkout to complete your payment.</p>
+                </div>
             </form>
         </article>
 
@@ -102,11 +238,30 @@
     </main>
 
     <script>
+        const form = document.getElementById('accept-form');
         const checkbox = document.getElementById('accept-checkbox');
         const submitBtn = document.getElementById('submit-btn');
-        checkbox.addEventListener('change', () => {
-            submitBtn.disabled = !checkbox.checked;
+        const toggleBtns = form.querySelectorAll('.toggle-btn');
+
+        function updateSubmitState() {
+            const courseFor = form.querySelector('input[name="course_for"]:checked');
+            const name = form.querySelector('input[name="registrant_name"]').value.trim();
+            const email = form.querySelector('input[name="registrant_email"]').value.trim();
+            const phone = form.querySelector('input[name="registrant_phone"]').value.trim();
+            submitBtn.disabled = !(checkbox.checked && courseFor && name && email && phone);
+        }
+
+        toggleBtns.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                toggleBtns.forEach((b) => b.classList.remove('selected'));
+                btn.classList.add('selected');
+                updateSubmitState();
+            });
         });
+
+        form.addEventListener('input', updateSubmitState);
+        checkbox.addEventListener('change', updateSubmitState);
+        updateSubmitState();
     </script>
 </body>
 </html>

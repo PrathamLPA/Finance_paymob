@@ -5,6 +5,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.models.customer_workflow import CustomerWorkflow
+from tests.conftest import SAMPLE_REGISTRANT
 
 
 def _complete_first_payment(client, seed_lead, lead_id: int = 301) -> dict:
@@ -13,7 +14,11 @@ def _complete_first_payment(client, seed_lead, lead_id: int = 301) -> dict:
         "/api/dev/send-payment-link",
         json={"lead_id": lead_id, "customer_email": "subsequent@test.com", "total_amount": "10000"},
     ).json()
-    client.post(f"/payment/{link['token']}/accept", data={"accepted": "yes"}, follow_redirects=False)
+    client.post(
+        f"/payment/{link['token']}/accept",
+        data={"accepted": "yes", **SAMPLE_REGISTRANT},
+        follow_redirects=False,
+    )
     payment = client.post(
         "/api/dev/simulate-paymob-webhook",
         json={"merchant_reference": link["merchant_reference"], "amount": "4000"},
@@ -34,7 +39,11 @@ def test_second_payment_updates_same_invoice(client, seed_lead, db_session):
     new_token = link.json()["token"]
     new_ref = link.json()["merchant_reference"]
 
-    client.post(f"/payment/{new_token}/accept", data={"accepted": "yes"}, follow_redirects=False)
+    client.post(
+        f"/payment/{new_token}/accept",
+        data={"accepted": "yes", **SAMPLE_REGISTRANT},
+        follow_redirects=False,
+    )
 
     second = client.post(
         "/api/dev/simulate-paymob-webhook",

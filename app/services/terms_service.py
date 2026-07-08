@@ -30,41 +30,95 @@ class TermsService:
         return self.terms_path.read_text(encoding="utf-8")
 
     def markdown_to_html(self, markdown: str) -> str:
-        html = markdown
-        html = re.sub(r"^# (.+)$", r"<h2>\1</h2>", html, flags=re.MULTILINE)
-        html = re.sub(r"^\*\*(.+?)\*\*", r"<strong>\1</strong>", html, flags=re.MULTILINE)
-        paragraphs = []
-        for block in html.split("\n\n"):
+        blocks: list[str] = []
+        for block in markdown.split("\n\n"):
             block = block.strip()
             if not block:
                 continue
-            if block.startswith("<h2>"):
-                paragraphs.append(block)
-            else:
-                paragraphs.append(f"<p>{block}</p>")
-        return "\n".join(paragraphs)
+            if block.startswith("# "):
+                blocks.append(f"<h2>{block[2:]}</h2>")
+                continue
+            if block.startswith("**") and block.endswith("**"):
+                blocks.append(f'<p class="terms-version"><strong>{block[2:-2]}</strong></p>')
+                continue
 
-    def get_terms_context(self) -> dict:
+            lines = block.split("\n")
+            if re.match(r"^\d+\.\s", lines[0]):
+                blocks.append(f'<p class="terms-section-title"><strong>{lines[0]}</strong></p>')
+                body_lines = lines[1:]
+                if body_lines and all(line.startswith("- ") for line in body_lines):
+                    items = "".join(f"<li>{line[2:]}</li>" for line in body_lines)
+                    blocks.append(f"<ul>{items}</ul>")
+                elif body_lines:
+                    blocks.append(f"<p>{' '.join(body_lines)}</p>")
+                continue
+
+            if all(line.startswith("- ") for line in lines):
+                items = "".join(f"<li>{line[2:]}</li>" for line in lines)
+                blocks.append(f"<ul>{items}</ul>")
+                continue
+
+            blocks.append(f"<p>{block.replace(chr(10), ' ')}</p>")
+        return "\n".join(blocks)
+
+    def validate_registrant_details(
+        self,
+        *,
+        course_for: str | None,
+        registrant_name: str | None,
+        registrant_email: str | None,
+        registrant_phone: str | None,
+    ) -> str | None:
+        if course_for not in ("self", "someone_else"):
+            return "Please select whether this course is for you or someone else."
+        if not registrant_name or not registrant_name.strip():
+            return "Please enter your name."
+        if not registrant_email or not registrant_email.strip():
+            return "Please enter your email address."
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", registrant_email.strip()):
+            return "Please enter a valid email address."
+        if not registrant_phone or not registrant_phone.strip():
+            return "Please enter your phone number."
+        return None
+
+    def get_terms_context(self, **form_values: str | None) -> dict:
         markdown = self.load_terms_markdown()
         return {
             "terms_version": self.settings.terms_version,
             "terms_html": self.markdown_to_html(markdown),
             "refund_policy_url": self.settings.refund_policy_url,
+            "course_for": form_values.get("course_for"),
+            "registrant_name": form_values.get("registrant_name") or "",
+            "registrant_email": form_values.get("registrant_email") or "",
+            "registrant_phone": form_values.get("registrant_phone") or "",
         }
 
-    def generate_acceptance_pdf(self, session: PaymentSession) -> str:
+    def generate_acceptance_pdf(
+        self,
+        session: PaymentSession,
+        *,
+        course_for: str,
+        registrant_name: str,
+        registrant_email: str,
+        registrant_phone: str,
+    ) -> str:
         pdf_dir = Path(self.settings.storage_path) / "pdfs" / "terms"
         pdf_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = pdf_dir / f"terms_acceptance_{session.id}_{session.token[:8]}.pdf"
 
         markdown = self.load_terms_markdown()
+        course_label = "For me" if course_for == "self" else "For someone else"
         c = canvas.Canvas(str(pdf_path), pagesize=letter)
         c.drawString(72, 750, "Terms and Conditions — Acceptance Record")
         c.drawString(72, 730, f"Version: {self.settings.terms_version}")
         c.drawString(72, 710, f"Accepted at: {datetime.now(timezone.utc).isoformat()}")
         c.drawString(72, 690, f"Session token: {session.token[:16]}...")
+        c.drawString(72, 670, f"Course registration: {course_label}")
+        c.drawString(72, 650, f"Name: {registrant_name[:70]}")
+        c.drawString(72, 630, f"Email: {registrant_email[:70]}")
+        c.drawString(72, 610, f"Phone: {registrant_phone[:70]}")
 
-        y = 660
+        y = 580
         for line in markdown.split("\n"):
             if y < 72:
                 c.showPage()
@@ -87,9 +141,22 @@ class TermsService:
         *,
         accepted: bool,
         ip_address: str | None = None,
+        course_for: str,
+        registrant_name: str,
+        registrant_email: str,
+        registrant_phone: str,
     ) -> str:
         if not accepted:
             raise HTTPException(status_code=400, detail="You must accept the Terms and Conditions to continue")
+
+        validation_error = self.validate_registrant_details(
+            course_for=course_for,
+            registrant_name=registrant_name,
+            registrant_email=registrant_email,
+            registrant_phone=registrant_phone,
+        )
+        if validation_error:
+            raise HTTPException(status_code=400, detail=validation_error)
 
         session = self.session_service.get_active_session_by_token(token)
         if not session:
@@ -98,13 +165,23 @@ class TermsService:
         if session.status == SESSION_TERMS_ACCEPTED and session.paymob_checkout_url:
             return await self.session_service.refresh_paymob_checkout(session)
 
-        pdf_path = self.generate_acceptance_pdf(session)
+        pdf_path = self.generate_acceptance_pdf(
+            session,
+            course_for=course_for,
+            registrant_name=registrant_name.strip(),
+            registrant_email=registrant_email.strip(),
+            registrant_phone=registrant_phone.strip(),
+        )
 
         acceptance = TermsAcceptance(
             payment_session_id=session.id,
             ip_address=ip_address,
             pdf_path=pdf_path,
             terms_version=self.settings.terms_version,
+            course_for=course_for,
+            registrant_name=registrant_name.strip(),
+            registrant_email=registrant_email.strip(),
+            registrant_phone=registrant_phone.strip(),
         )
         self.db.add(acceptance)
         self.session_service.mark_terms_accepted(session)

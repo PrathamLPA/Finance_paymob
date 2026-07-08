@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.integrations.factory import get_email_client
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_transaction import PaymentTransaction
+from tests.conftest import SAMPLE_REGISTRANT
 
 
 def test_lead_trigger_email_uses_middleware_url_not_paymob(client, seed_lead):
@@ -36,7 +37,11 @@ def test_first_payment_creates_three_deals_and_invoice(client, seed_lead, db_ses
     token = link.json()["token"]
     merchant_reference = link.json()["merchant_reference"]
 
-    client.post(f"/payment/{token}/accept", data={"accepted": "yes"}, follow_redirects=False)
+    client.post(
+        f"/payment/{token}/accept",
+        data={"accepted": "yes", **SAMPLE_REGISTRANT},
+        follow_redirects=False,
+    )
 
     payment = client.post(
         "/api/dev/simulate-paymob-webhook",

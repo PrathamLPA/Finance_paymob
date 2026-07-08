@@ -23,5 +23,9 @@ class TermsAcceptance(Base):
     ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
     pdf_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     terms_version: Mapped[str] = mapped_column(String(20))
+    course_for: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    registrant_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    registrant_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    registrant_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     payment_session: Mapped[PaymentSession] = relationship(back_populates="terms_acceptance")
