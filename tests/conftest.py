@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["USE_MOCK_INTEGRATIONS"] = "true"
 os.environ["PUBLIC_BASE_URL"] = "http://testserver"
+os.environ["BITRIX_WEBHOOK_SECRET"] = ""
 
 from app.config import get_settings
 from app.db.session import Base, get_db

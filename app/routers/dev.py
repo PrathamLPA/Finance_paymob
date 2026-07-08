@@ -37,15 +37,23 @@ async def send_payment_link(
     orchestrator = WorkflowOrchestrator(db)
 
     if body.lead_id:
-        bitrix = get_bitrix_client()
-        if hasattr(bitrix, "seed_lead") and body.customer_email:
-            bitrix.seed_lead(
-                body.lead_id,
-                email=body.customer_email,
-                name=body.customer_name or "Test Customer",
-                amount=body.total_amount or Decimal("10000.00"),
-            )
-        session = await orchestrator.initiate_payment_from_lead(body.lead_id)
+        override_kwargs: dict[str, Any] = {}
+        if body.customer_email and body.customer_name and body.total_amount is not None:
+            override_kwargs = {
+                "customer_email": body.customer_email,
+                "customer_name": body.customer_name,
+                "total_amount": body.total_amount,
+            }
+        else:
+            bitrix = get_bitrix_client()
+            if hasattr(bitrix, "seed_lead") and body.customer_email:
+                bitrix.seed_lead(
+                    body.lead_id,
+                    email=body.customer_email,
+                    name=body.customer_name or "Test Customer",
+                    amount=body.total_amount or Decimal("10000.00"),
+                )
+        session = await orchestrator.initiate_payment_from_lead(body.lead_id, **override_kwargs)
         return {
             "status": "ok",
             "source": "lead",

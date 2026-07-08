@@ -60,9 +60,24 @@ class WorkflowOrchestrator:
         self.db.refresh(workflow)
         return workflow
 
-    async def initiate_payment_from_lead(self, lead_id: int) -> PaymentSession:
+    async def initiate_payment_from_lead(
+        self,
+        lead_id: int,
+        *,
+        customer_email: str | None = None,
+        customer_name: str | None = None,
+        total_amount: Decimal | None = None,
+    ) -> PaymentSession:
         workflow = self.get_or_create_workflow(lead_id)
-        await self.sync_workflow_from_lead(workflow)
+        if customer_email and customer_name and total_amount is not None:
+            workflow.customer_email = customer_email
+            workflow.customer_name = customer_name
+            workflow.total_amount = total_amount
+            workflow.currency = self.settings.default_currency
+            self.db.commit()
+            self.db.refresh(workflow)
+        else:
+            await self.sync_workflow_from_lead(workflow)
 
         source_type, source_id = PaymentSessionService.source_lead(lead_id)
         session = await self.session_service.create_session(
@@ -108,6 +123,21 @@ class WorkflowOrchestrator:
         )
         return session
 
+    async def _create_dev_simulated_deals(self, workflow: CustomerWorkflow) -> None:
+        """Assign mock Bitrix deal IDs for local dev webhook simulation."""
+        lead_id = workflow.bitrix_lead_id
+        workflow.sales_deal_id = 900001 + lead_id
+        workflow.finance_deal_id = 900002 + lead_id
+        workflow.b2c_deal_id = 900003 + lead_id
+        workflow.first_payment_at = datetime.now(timezone.utc)
+        logger.info(
+            "Dev simulate — mock deals for lead %s: sales=%s finance=%s b2c=%s",
+            lead_id,
+            workflow.sales_deal_id,
+            workflow.finance_deal_id,
+            workflow.b2c_deal_id,
+        )
+
     async def _create_deals_on_first_payment(self, workflow: CustomerWorkflow) -> None:
         context = {
             "customer_email": workflow.customer_email,
@@ -135,7 +165,9 @@ class WorkflowOrchestrator:
             b2c_deal_id,
         )
 
-    async def handle_paymob_webhook(self, data: PaymentWebhookData) -> CustomerWorkflow | None:
+    async def handle_paymob_webhook(
+        self, data: PaymentWebhookData, *, dev_simulate: bool = False
+    ) -> CustomerWorkflow | None:
         existing = self.db.scalar(
             select(PaymentTransaction).where(PaymentTransaction.transaction_id == data.transaction_id)
         )
@@ -170,9 +202,15 @@ class WorkflowOrchestrator:
         self.db.flush()
 
         if workflow.is_first_payment_pending:
-            await self._create_deals_on_first_payment(workflow)
+            if dev_simulate:
+                await self._create_dev_simulated_deals(workflow)
+            else:
+                await self._create_deals_on_first_payment(workflow)
 
-        await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
+        if dev_simulate:
+            logger.info("Dev simulate — skipping Zoho invoice sync")
+        else:
+            await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
         self.db.commit()
         self.db.refresh(workflow)
         return workflow
@@ -220,4 +258,8 @@ class WorkflowOrchestrator:
             order_id=order_id,
             email=session.workflow.customer_email or "customer@example.com",
         )
-        return await self.handle_paymob_payload(payload)
+        data = self.paymob.parse_successful_payment(payload)
+        if not data:
+            return None
+        dev_simulate = not self.settings.use_mock_integrations
+        return await self.handle_paymob_webhook(data, dev_simulate=dev_simulate)

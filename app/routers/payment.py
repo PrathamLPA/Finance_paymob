@@ -15,6 +15,14 @@ router = APIRouter(prefix="/payment", tags=["payment"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
 
 
+@router.get("/thank-you", response_class=HTMLResponse)
+async def payment_thank_you(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        "thank_you.html",
+        {"request": request},
+    )
+
+
 @router.get("/{token}", response_class=HTMLResponse)
 async def payment_terms_page(
     token: str,
