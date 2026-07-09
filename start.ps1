@@ -1,10 +1,6 @@
-# Start Finance Automation locally (PostgreSQL + API server)
+# Start Finance Automation locally (API on 8001 + Frontend on 3000)
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
-
-Write-Host "Starting PostgreSQL..." -ForegroundColor Cyan
-docker compose up -d
-Start-Sleep -Seconds 4
 
 if (-not (Test-Path .env)) {
     Copy-Item .env.example .env
@@ -14,22 +10,30 @@ if (-not (Test-Path .env)) {
 if (-not (Test-Path .venv)) {
     Write-Host "Creating virtual environment..." -ForegroundColor Cyan
     python -m venv .venv
-    .venv\Scripts\pip install -r requirements.txt
+    .venv\Scripts\pip install -r backend\requirements.txt
+    .venv\Scripts\pip install -r frontend\requirements.txt
 }
 
-$env:PYTHONPATH = "."
-Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
-
 Write-Host "Running database migrations..." -ForegroundColor Cyan
-.venv\Scripts\python.exe -m alembic upgrade head
+Push-Location backend
+$env:PYTHONPATH = (Get-Location).Path
+& "$PSScriptRoot\.venv\Scripts\python.exe" -m alembic upgrade head
+Pop-Location
 
 Write-Host ""
-Write-Host "Starting server at http://localhost:8000" -ForegroundColor Green
-Write-Host "  API docs:    http://localhost:8000/docs" -ForegroundColor Green
-Write-Host "  Health:      http://localhost:8000/health" -ForegroundColor Green
+Write-Host "Backend (API):     http://localhost:8001" -ForegroundColor Green
+Write-Host "Frontend (pages):  http://localhost:3000" -ForegroundColor Green
+Write-Host "Bitrix Handler:    https://<API_PUBLIC>/webhooks/bitrix24" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "To create a test payment page, run in another terminal:" -ForegroundColor Yellow
-Write-Host '  Invoke-RestMethod -Uri "http://localhost:8000/api/dev/send-payment-link" -Method POST -ContentType "application/json" -Body ''{"lead_id": 1001, "customer_email": "you@example.com", "total_amount": "10000"}''' -ForegroundColor Gray
-Write-Host ""
+Write-Host "Starting both services. Ctrl+C stops the frontend; stop the backend window separately if needed." -ForegroundColor Cyan
 
-.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+Start-Process powershell -ArgumentList @(
+    "-NoExit",
+    "-Command",
+    "Set-Location '$PSScriptRoot\backend'; `$env:PYTHONPATH='.'; & '$PSScriptRoot\.venv\Scripts\python.exe' -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001"
+)
+
+Start-Sleep -Seconds 2
+Set-Location "$PSScriptRoot\frontend"
+$env:PYTHONPATH = (Get-Location).Path
+& "$PSScriptRoot\.venv\Scripts\python.exe" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 3000

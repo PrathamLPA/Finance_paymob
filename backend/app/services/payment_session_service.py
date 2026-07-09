@@ -121,7 +121,8 @@ class PaymentSessionService:
         self.db.commit()
 
     def build_payment_url(self, token: str) -> str:
-        return f"{self.settings.public_base_url.rstrip('/')}/payment/{token}"
+        base = self.settings.payment_frontend_base_url or self.settings.public_base_url
+        return f"{base.rstrip('/')}/payment/{token}"
 
     @staticmethod
     def source_lead(lead_id: int) -> tuple[str, int]:

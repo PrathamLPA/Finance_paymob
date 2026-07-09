@@ -1,20 +1,38 @@
 """Application configuration from environment variables."""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.db.url import resolve_supabase_url
 
+# backend/app/config.py → repo root (Finance Project LPA)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(
+            str(_REPO_ROOT / ".env"),
+            str(_BACKEND_ROOT / ".env"),
+            ".env",
+        ),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     app_name: str = "Finance Automation"
     app_env: str = "development"
     log_level: str = "INFO"
-    public_base_url: str = "http://localhost:8000"
+    # Public URL of this API service (webhooks, Paymob notification_url)
+    public_base_url: str = "http://localhost:8001"
+    # Customer payment pages (Railway frontend service)
+    payment_frontend_base_url: str = "http://localhost:3000"
+    # Allowed browser origin for CORS (frontend)
+    frontend_origin: str = "http://localhost:3000"
 
     database_url: str = "postgresql+psycopg://finance:finance@localhost:5432/finance_automation"
 

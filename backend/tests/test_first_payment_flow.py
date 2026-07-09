@@ -18,13 +18,13 @@ def test_lead_trigger_email_uses_middleware_url_not_paymob(client, seed_lead):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["payment_url"].startswith("http://testserver/payment/")
+    assert data["payment_url"].startswith("http://frontend.test/payment/")
     assert "mock.paymob" not in data["payment_url"]
 
     email_client = get_email_client()
     assert len(email_client.sent_emails) >= 1
     body = email_client.sent_emails[-1]["body"]
-    assert "http://testserver/payment/" in body
+    assert "http://frontend.test/payment/" in body
     assert "mock.paymob" not in body
 
 
@@ -38,9 +38,8 @@ def test_first_payment_creates_three_deals_and_invoice(client, seed_lead, db_ses
     merchant_reference = link.json()["merchant_reference"]
 
     client.post(
-        f"/payment/{token}/accept",
-        data={"accepted": "yes", **SAMPLE_REGISTRANT},
-        follow_redirects=False,
+        f"/api/payment/{token}/accept",
+        json={"accepted": True, **SAMPLE_REGISTRANT},
     )
 
     payment = client.post(

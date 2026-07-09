@@ -304,7 +304,10 @@ class RealPaymobClient(MockPaymobClient):
                 "email": email,
             },
             "notification_url": f"{self.settings.public_base_url.rstrip('/')}/webhooks/paymob",
-            "redirection_url": f"{self.settings.public_base_url.rstrip('/')}/payment/thank-you",
+            "redirection_url": (
+                f"{(self.settings.payment_frontend_base_url or self.settings.public_base_url).rstrip('/')}"
+                f"/payment/thank-you"
+            ),
         }
 
         headers = {
