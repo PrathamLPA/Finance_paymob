@@ -7,7 +7,7 @@ This monorepo deploys as **two Railway services**.
 | Setting | Value |
 |---------|--------|
 | Root Directory | `backend` |
-| Start command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| Start command | `sh start.sh` (reads Railway `PORT` env) |
 | Dockerfile | `backend/Dockerfile` (optional) |
 
 **Bitrix Outbound webhook Handler must be:**
@@ -40,7 +40,7 @@ alembic upgrade head
 | Setting | Value |
 |---------|--------|
 | Root Directory | `frontend` |
-| Start command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| Start command | `sh start.sh` (reads Railway `PORT` env) |
 
 ### Frontend env vars
 
