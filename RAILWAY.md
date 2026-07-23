@@ -35,6 +35,19 @@ After deploy, run migrations once (Railway one-off / release command):
 alembic upgrade head
 ```
 
+Verify production:
+
+```text
+GET https://<backend>/          → API info JSON (not a web page)
+GET https://<backend>/health    → {"status":"ok"}
+GET https://<backend>/ready     → database check (must show database: ok)
+GET https://<frontend>/health   → finance-payment-frontend
+```
+
+**Common mistake:** Opening backend root `/` shows API JSON — payment UI is only at `https://<frontend>/payment/{token}`.
+
+Copy **all** variables from [`backend/railway.env.example`](backend/railway.env.example) into Railway backend (not just the 4 URL vars). Missing `DATABASE_URL` causes 500 on payment link creation.
+
 ## Service B — Frontend (customer payment pages)
 
 | Setting | Value |

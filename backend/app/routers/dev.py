@@ -110,7 +110,18 @@ async def simulate_paymob_webhook(
         "zoho_invoice_id": workflow.zoho_invoice_id,
         "amount_paid": str(workflow.amount_paid),
         "remaining_balance": str(workflow.remaining_balance),
+        "payment_status": workflow.payment_status,
+        "payment_percentage": str(workflow.payment_percentage()),
+        "reminders_enabled": workflow.reminders_enabled,
     }
+
+
+@router.post("/process-reminders")
+async def process_reminders(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Manually run due payment reminders (also runs on the background scheduler)."""
+    from app.services.reminder_service import ReminderService
+
+    return await ReminderService(db).process_due_reminders()
 
 
 @router.post("/seed-mock-data")

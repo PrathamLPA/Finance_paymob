@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,10 +13,13 @@ from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
-from app.integrations.factory import get_email_client
+from app.integrations.factory import get_bitrix_client, get_email_client
+from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import PaymentSession, SESSION_TERMS_ACCEPTED
 from app.models.terms_acceptance import TermsAcceptance
 from app.services.payment_session_service import PaymentSessionService
+
+logger = logging.getLogger(__name__)
 
 
 class TermsService:
@@ -187,6 +191,14 @@ class TermsService:
         self.session_service.mark_terms_accepted(session)
 
         workflow = session.workflow
+        workflow.customer_name = registrant_name.strip()
+        workflow.customer_email = registrant_email.strip()
+        workflow.customer_phone = registrant_phone.strip()
+        self.db.commit()
+        self.db.refresh(workflow)
+
+        await self._sync_registrant_to_bitrix(workflow)
+
         if workflow.customer_email:
             self.email.send_terms_acceptance(
                 to_email=workflow.customer_email,
@@ -199,3 +211,19 @@ class TermsService:
             raise HTTPException(status_code=500, detail="Payment checkout URL not available")
 
         return session.paymob_checkout_url
+
+    async def _sync_registrant_to_bitrix(self, workflow: CustomerWorkflow) -> None:
+        bitrix = get_bitrix_client(self.settings)
+        deal_ids = [workflow.sales_deal_id, workflow.finance_deal_id, workflow.b2c_deal_id]
+        for deal_id in deal_ids:
+            if not deal_id:
+                continue
+            try:
+                await bitrix.sync_deal_customer_details(
+                    deal_id,
+                    name=workflow.customer_name,
+                    email=workflow.customer_email,
+                    phone=workflow.customer_phone,
+                )
+            except Exception:
+                logger.exception("Failed to sync registrant to Bitrix deal %s", deal_id)

@@ -55,6 +55,42 @@ class PaymentSessionService:
             return None
         return session
 
+    def get_active_session_for_workflow(self, workflow: CustomerWorkflow) -> PaymentSession | None:
+        sessions = self.db.scalars(
+            select(PaymentSession)
+            .where(
+                PaymentSession.workflow_id == workflow.id,
+                PaymentSession.status.in_((SESSION_PENDING, SESSION_TERMS_ACCEPTED)),
+            )
+            .order_by(PaymentSession.created_at.desc())
+        ).all()
+        for session in sessions:
+            if _ensure_utc(session.expires_at) <= _utcnow():
+                session.status = SESSION_EXPIRED
+                continue
+            return session
+        self.db.commit()
+        return None
+
+    async def get_or_create_reusable_session(self, workflow: CustomerWorkflow) -> PaymentSession:
+        """Reuse a non-expired payment session when charge amount still matches."""
+        expected = workflow.remaining_balance if workflow.amount_paid > 0 else workflow.total_amount
+        if expected <= 0 and workflow.total_amount > 0:
+            expected = workflow.total_amount
+
+        existing = self.get_active_session_for_workflow(workflow)
+        if existing and existing.charge_amount == expected:
+            return existing
+        if existing:
+            existing.status = SESSION_EXPIRED
+            self.db.commit()
+
+        if workflow.finance_deal_id:
+            source_type, source_id = self.source_finance_deal(workflow.finance_deal_id)
+        else:
+            source_type, source_id = self.source_lead(workflow.bitrix_lead_id)
+        return await self.create_session(workflow, source_type=source_type, source_id=source_id)
+
     async def create_session(
         self,
         workflow: CustomerWorkflow,

@@ -16,6 +16,9 @@ os.environ["PUBLIC_BASE_URL"] = "http://api.test"
 os.environ["PAYMENT_FRONTEND_BASE_URL"] = "http://frontend.test"
 os.environ["FRONTEND_ORIGIN"] = "http://frontend.test"
 os.environ["BITRIX_WEBHOOK_SECRET"] = ""
+os.environ["REMINDER_SCHEDULER_ENABLED"] = "false"
+os.environ["PAYMENT_REQUIRED_PERCENT"] = "50"
+os.environ["BITRIX_FINANCE_THRESHOLD_MET_STAGE_ID"] = "FINANCE_THRESHOLD_MET"
 
 from app.config import get_settings
 from app.db.session import Base, get_db

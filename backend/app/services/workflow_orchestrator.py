@@ -18,6 +18,7 @@ from app.models.payment_transaction import PaymentTransaction
 from app.services.invoice_service import InvoiceService
 from app.services.paymob_mapper import apply_paymob_fields
 from app.services.payment_session_service import PaymentSessionService
+from app.services.payment_threshold_service import PaymentThresholdService
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class WorkflowOrchestrator:
         self.email = get_email_client(self.settings)
         self.session_service = PaymentSessionService(db, self.settings)
         self.invoice_service = InvoiceService(db, self.settings)
+        self.threshold_service = PaymentThresholdService(db, self.settings)
 
     def get_or_create_workflow(self, lead_id: int) -> CustomerWorkflow:
         workflow = self.db.scalar(
@@ -79,10 +81,7 @@ class WorkflowOrchestrator:
         else:
             await self.sync_workflow_from_lead(workflow)
 
-        source_type, source_id = PaymentSessionService.source_lead(lead_id)
-        session = await self.session_service.create_session(
-            workflow, source_type=source_type, source_id=source_id
-        )
+        session = await self.session_service.get_or_create_reusable_session(workflow)
 
         if workflow.customer_email:
             payment_url = self.session_service.build_payment_url(session.token)
@@ -91,6 +90,8 @@ class WorkflowOrchestrator:
                 customer_name=workflow.customer_name,
                 payment_url=payment_url,
             )
+            workflow.last_reminder_at = datetime.now(timezone.utc)
+            self.db.commit()
 
         logger.info("Payment link created for lead %s — token %s...", lead_id, session.token[:8])
         return session
@@ -103,14 +104,13 @@ class WorkflowOrchestrator:
         if workflow.remaining_balance <= 0 and workflow.amount_paid >= workflow.total_amount:
             raise ValueError(f"Finance deal {finance_deal_id} has no remaining balance")
 
-        source_type, source_id = PaymentSessionService.source_finance_deal(finance_deal_id)
-        session = await self.session_service.create_session(
-            workflow, source_type=source_type, source_id=source_id
-        )
+        session = await self.session_service.get_or_create_reusable_session(workflow)
 
         payment_url = self.session_service.build_payment_url(session.token)
         # Write link to Bitrix deal field so Bitrix can email it (no SendGrid).
         await self.bitrix.set_deal_payment_link(finance_deal_id, payment_url)
+        workflow.last_reminder_at = datetime.now(timezone.utc)
+        self.db.commit()
 
         logger.info(
             "Payment link created for finance deal %s — token %s...",
@@ -152,6 +152,17 @@ class WorkflowOrchestrator:
         workflow.first_payment_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(workflow)
+
+        for deal_id in (sales_deal_id, finance_deal_id, b2c_deal_id):
+            try:
+                await self.bitrix.sync_deal_customer_details(
+                    deal_id,
+                    name=workflow.customer_name,
+                    email=workflow.customer_email,
+                    phone=workflow.customer_phone,
+                )
+            except Exception:
+                logger.exception("Failed to sync customer details to deal %s", deal_id)
 
         logger.info(
             "First payment — created deals for lead %s: sales=%s finance=%s b2c=%s",
@@ -207,6 +218,11 @@ class WorkflowOrchestrator:
             logger.info("Dev simulate — skipping Zoho invoice sync")
         else:
             await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
+
+        await self.threshold_service.apply_after_payment(
+            workflow,
+            latest_transaction_id=transaction.transaction_id,
+        )
         self.db.commit()
         self.db.refresh(workflow)
         return workflow

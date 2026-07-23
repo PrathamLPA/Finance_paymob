@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     bitrix_field_total_amount: str = "UF_CRM_TOTAL_AMOUNT"
     bitrix_field_payment_link: str = "UF_CRM_PAYMENT_LINK"
     bitrix_field_customer_email: str = "UF_CRM_CUSTOMER_EMAIL"
+    bitrix_field_payment_percentage: str = "UF_CRM_PAYMENT_PERCENTAGE"
+    bitrix_field_payment_status: str = "UF_CRM_PAYMENT_STATUS"
+    bitrix_field_transaction_id: str = "UF_CRM_TRANSACTION_ID"
+    # Stage to move finance deal to once required payment % is met
+    bitrix_finance_threshold_met_stage_id: str = "FINANCE_THRESHOLD_MET"
+    bitrix_field_customer_phone: str = "UF_CRM_CUSTOMER_PHONE"
+    bitrix_field_customer_name: str = "UF_CRM_CUSTOMER_NAME"
 
     # Paymob
     paymob_api_key: str = ""
@@ -70,6 +77,8 @@ class Settings(BaseSettings):
     zoho_organization_id: str = ""
     zoho_accounts_url: str = "https://accounts.zoho.com"
     zoho_books_api_url: str = "https://www.zohoapis.com/books/v3"
+    # Optional catalog item; if empty, invoices use ad-hoc line items
+    zoho_default_item_id: str = ""
 
     # Email
     sendgrid_api_key: str = ""
@@ -82,6 +91,13 @@ class Settings(BaseSettings):
     payment_session_ttl_hours: int = 72
     default_currency: str = "AED"
     storage_path: str = "storage"
+    # Minimum paid % of total before customer may proceed (e.g. 50)
+    payment_required_percent: float = 50.0
+    # Automated payment reminders
+    reminder_enabled: bool = True
+    reminder_interval_hours: int = 24
+    reminder_scheduler_enabled: bool = True
+    reminder_scheduler_poll_seconds: int = 300
 
     @field_validator("database_url")
     @classmethod

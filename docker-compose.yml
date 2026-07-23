@@ -9,6 +9,49 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance -d finance_automation"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://finance:finance@db:5432/finance_automation
+      PUBLIC_BASE_URL: http://localhost:8001
+      PAYMENT_FRONTEND_BASE_URL: http://localhost:3001
+      FRONTEND_ORIGIN: http://localhost:3001
+      USE_MOCK_INTEGRATIONS: "true"
+      PORT: "8000"
+    volumes:
+      - ./backend:/app
+      - ./storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3001:3000"
+    environment:
+      # browser hits localhost:3001; frontend container talks to backend on Docker network
+      API_BASE_URL: http://backend:8000
+      PORT: "3000"
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      - backend
+    command: >
+      sh -c "uvicorn app.main:app --host 0.0.0.0 --port 3000 --reload"
 
 volumes:
   postgres_data:

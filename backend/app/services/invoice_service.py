@@ -30,6 +30,10 @@ class InvoiceService:
         transaction: PaymentTransaction,
     ) -> InvoiceReference:
         if workflow.zoho_invoice_id:
+            if workflow.zoho_customer_id:
+                customer_map = getattr(self.zoho, "_customer_ids", None)
+                if isinstance(customer_map, dict):
+                    customer_map[f"invoice:{workflow.zoho_invoice_id}"] = workflow.zoho_customer_id
             invoice = await self.zoho.apply_payment_to_invoice(
                 invoice_id=workflow.zoho_invoice_id,
                 amount=transaction.amount,
@@ -49,6 +53,10 @@ class InvoiceService:
                 transaction_id=transaction.transaction_id,
             )
             workflow.zoho_invoice_id = invoice.invoice_id
+            customer_map = getattr(self.zoho, "_customer_ids", {})
+            zoho_customer = customer_map.get(f"invoice:{invoice.invoice_id}")
+            if zoho_customer:
+                workflow.zoho_customer_id = zoho_customer
             self.db.commit()
 
         document = await self.zoho.get_invoice_document(invoice.invoice_id)
@@ -80,6 +88,8 @@ class InvoiceService:
             remaining_balance=workflow.remaining_balance,
             currency=workflow.currency,
             latest_transaction_id=transaction.transaction_id,
+            payment_percentage=workflow.payment_percentage(),
+            payment_status=workflow.payment_status,
         )
 
         deal_ids = [workflow.sales_deal_id, workflow.finance_deal_id, workflow.b2c_deal_id]

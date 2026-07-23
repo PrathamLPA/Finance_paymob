@@ -109,6 +109,12 @@ class MockBitrixClient:
         deal[self.settings.bitrix_field_total_amount] = str(summary.total_amount)
         deal[self.settings.bitrix_field_amount_paid] = str(summary.amount_paid)
         deal[self.settings.bitrix_field_remaining_balance] = str(summary.remaining_balance)
+        if summary.payment_percentage is not None and self.settings.bitrix_field_payment_percentage:
+            deal[self.settings.bitrix_field_payment_percentage] = str(summary.payment_percentage)
+        if summary.payment_status and self.settings.bitrix_field_payment_status:
+            deal[self.settings.bitrix_field_payment_status] = summary.payment_status
+        if summary.latest_transaction_id and self.settings.bitrix_field_transaction_id:
+            deal[self.settings.bitrix_field_transaction_id] = summary.latest_transaction_id
         self._mock_deals[deal_id] = deal
         logger.info("[MockBitrix] Updated payment summary on deal %s", deal_id)
 
@@ -117,6 +123,30 @@ class MockBitrixClient:
         deal[self.settings.bitrix_field_payment_link] = payment_url
         self._mock_deals[deal_id] = deal
         logger.info("[MockBitrix] Set payment link on deal %s: %s", deal_id, payment_url)
+
+    async def set_deal_stage(self, deal_id: int, stage_id: str) -> None:
+        deal = await self.get_deal(deal_id)
+        deal["STAGE_ID"] = stage_id
+        self._mock_deals[deal_id] = deal
+        logger.info("[MockBitrix] Set deal %s stage to %s", deal_id, stage_id)
+
+    async def sync_deal_customer_details(
+        self,
+        deal_id: int,
+        *,
+        name: str | None,
+        email: str | None,
+        phone: str | None,
+    ) -> None:
+        deal = await self.get_deal(deal_id)
+        if name and self.settings.bitrix_field_customer_name:
+            deal[self.settings.bitrix_field_customer_name] = name
+        if email and self.settings.bitrix_field_customer_email:
+            deal[self.settings.bitrix_field_customer_email] = email
+        if phone and self.settings.bitrix_field_customer_phone:
+            deal[self.settings.bitrix_field_customer_phone] = phone
+        self._mock_deals[deal_id] = deal
+        logger.info("[MockBitrix] Synced customer details on deal %s", deal_id)
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
         opportunity = lead.get("OPPORTUNITY")
@@ -211,6 +241,12 @@ class RealBitrixClient:
             self.settings.bitrix_field_amount_paid: str(summary.amount_paid),
             self.settings.bitrix_field_remaining_balance: str(summary.remaining_balance),
         }
+        if summary.payment_percentage is not None and self.settings.bitrix_field_payment_percentage:
+            fields[self.settings.bitrix_field_payment_percentage] = str(summary.payment_percentage)
+        if summary.payment_status and self.settings.bitrix_field_payment_status:
+            fields[self.settings.bitrix_field_payment_status] = summary.payment_status
+        if summary.latest_transaction_id and self.settings.bitrix_field_transaction_id:
+            fields[self.settings.bitrix_field_transaction_id] = summary.latest_transaction_id
         await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
 
     async def set_deal_payment_link(self, deal_id: int, payment_url: str) -> None:
@@ -221,6 +257,29 @@ class RealBitrixClient:
             {"id": deal_id, "fields": {self.settings.bitrix_field_payment_link: payment_url}},
         )
         logger.info("Set payment link on Bitrix deal %s", deal_id)
+
+    async def set_deal_stage(self, deal_id: int, stage_id: str) -> None:
+        await self._call("crm.deal.update", {"id": deal_id, "fields": {"STAGE_ID": stage_id}})
+        logger.info("Set Bitrix deal %s stage to %s", deal_id, stage_id)
+
+    async def sync_deal_customer_details(
+        self,
+        deal_id: int,
+        *,
+        name: str | None,
+        email: str | None,
+        phone: str | None,
+    ) -> None:
+        fields: dict[str, Any] = {}
+        if name and self.settings.bitrix_field_customer_name:
+            fields[self.settings.bitrix_field_customer_name] = name
+        if email and self.settings.bitrix_field_customer_email:
+            fields[self.settings.bitrix_field_customer_email] = email
+        if phone and self.settings.bitrix_field_customer_phone:
+            fields[self.settings.bitrix_field_customer_phone] = phone
+        if not fields:
+            return
+        await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
         opportunity = lead.get("OPPORTUNITY")

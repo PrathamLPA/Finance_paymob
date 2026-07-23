@@ -20,6 +20,19 @@ if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
+@app.get("/")
+async def root() -> dict:
+    settings = get_settings()
+    return {
+        "service": "finance-payment-frontend",
+        "status": "running",
+        "message": "Open a payment link: /payment/{token}",
+        "health": "/health",
+        "thank_you": "/payment/thank-you",
+        "api_base_url": settings.api_base_url,
+    }
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "finance-payment-frontend"}

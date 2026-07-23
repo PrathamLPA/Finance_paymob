@@ -69,6 +69,8 @@ class PaymentSummary:
     remaining_balance: Decimal
     currency: str
     latest_transaction_id: str | None
+    payment_percentage: Decimal | None = None
+    payment_status: str | None = None
 
 
 class BitrixIntegration(Protocol):
@@ -87,6 +89,17 @@ class BitrixIntegration(Protocol):
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None: ...
 
     async def set_deal_payment_link(self, deal_id: int, payment_url: str) -> None: ...
+
+    async def set_deal_stage(self, deal_id: int, stage_id: str) -> None: ...
+
+    async def sync_deal_customer_details(
+        self,
+        deal_id: int,
+        *,
+        name: str | None,
+        email: str | None,
+        phone: str | None,
+    ) -> None: ...
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal: ...
 
