@@ -29,11 +29,7 @@ Do **not** point Bitrix at the frontend URL.
 - Paymob keys (`PAYMOB_*`)
 - `USE_MOCK_INTEGRATIONS=false` in production
 
-After deploy, run migrations once (Railway one-off / release command):
-
-```bash
-alembic upgrade head
-```
+Migrations run automatically on every deploy via `backend/start.sh` (`alembic upgrade head` before uvicorn).
 
 Verify production:
 
