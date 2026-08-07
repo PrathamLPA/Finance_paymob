@@ -1,7 +1,9 @@
 """Webhook endpoints for Bitrix24 and Paymob."""
 
+import json
 import logging
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -12,6 +14,35 @@ from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+
+
+def _redact_sensitive(value: Any) -> Any:
+    """Redact credentials while preserving CRM fields for temporary diagnostics."""
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, child in value.items():
+            normalized = str(key).lower()
+            if any(word in normalized for word in ("token", "password", "secret", "authorization")):
+                redacted[str(key)] = "[REDACTED]"
+            else:
+                redacted[str(key)] = _redact_sensitive(child)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value
+
+
+def _log_bitrix_payload(entity_type: str, entity_id: int, payload: dict[str, Any]) -> None:
+    settings = get_settings()
+    if not settings.log_bitrix_payloads:
+        return
+    logger.warning(
+        "TEMP_BITRIX_PAYLOAD entity_type=%s entity_id=%s fields=%s payload=%s",
+        entity_type,
+        entity_id,
+        sorted(payload.keys()),
+        json.dumps(_redact_sensitive(payload), default=str, ensure_ascii=False),
+    )
 
 
 def _expand_bracket_keys(flat: dict[str, Any]) -> dict[str, Any]:
@@ -71,6 +102,10 @@ def _authorize(request: Request, payload: dict[str, Any]) -> None:
     if application_token == expected or header_secret == expected:
         return
 
+    logger.warning(
+        "Bitrix webhook authentication rejected content_type=%s",
+        request.headers.get("content-type"),
+    )
     raise HTTPException(status_code=401, detail="Invalid webhook token")
 
 
@@ -123,6 +158,7 @@ async def _resolve_deal_stage(orchestrator: WorkflowOrchestrator, deal_id: int) 
     except Exception:
         logger.exception("Failed to fetch Bitrix deal %s", deal_id)
         return None, {}
+    _log_bitrix_payload("deal", deal_id, deal)
     stage_id = deal.get("STAGE_ID")
     return (str(stage_id) if stage_id else None), deal
 
@@ -130,10 +166,12 @@ async def _resolve_deal_stage(orchestrator: WorkflowOrchestrator, deal_id: int) 
 async def _fetch_lead(orchestrator: WorkflowOrchestrator, lead_id: int) -> dict[str, Any]:
     """Fetch the complete current lead; webhook fields are not authoritative."""
     try:
-        return await orchestrator.bitrix.get_lead(lead_id)
+        lead = await orchestrator.bitrix.get_lead(lead_id)
     except Exception as exc:
         logger.exception("Failed to fetch Bitrix lead %s", lead_id)
         raise HTTPException(status_code=502, detail="Could not fetch lead from Bitrix") from exc
+    _log_bitrix_payload("lead", lead_id, lead)
+    return lead
 
 
 @router.post("/bitrix24")
@@ -141,6 +179,7 @@ async def bitrix24_webhook(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    request_id = uuid4().hex[:12]
     settings = get_settings()
     payload = await _read_payload(request)
     _authorize(request, payload)
@@ -149,13 +188,27 @@ async def bitrix24_webhook(
     event = str(payload.get("event") or payload.get("EVENT") or "")
     action = str(payload.get("action") or payload.get("ACTION") or "")
     stage_id = _extract_stage_id(payload)
+    logger.info(
+        "Bitrix webhook received request_id=%s event=%s action=%s content_type=%s",
+        request_id,
+        event or "-",
+        action or "-",
+        request.headers.get("content-type") or "-",
+    )
 
     if action == "send_payment_link" or payload.get("send_payment_link"):
         deal_id = _extract_deal_id(payload)
         if not deal_id:
+            logger.warning("Bitrix webhook ignored request_id=%s reason=missing_deal_id", request_id)
             return {"status": "ignored", "reason": "missing_deal_id"}
         try:
             session = await orchestrator.initiate_payment_from_finance_deal(deal_id)
+            logger.info(
+                "Bitrix payment link processed request_id=%s source=button deal_id=%s session_id=%s",
+                request_id,
+                deal_id,
+                session.id,
+            )
             return {
                 "status": "processed",
                 "source": "finance_deal_button",
@@ -163,16 +216,30 @@ async def bitrix24_webhook(
                 "payment_url": orchestrator.session_service.build_payment_url(session.token),
             }
         except ValueError as exc:
+            logger.warning(
+                "Bitrix payment link failed request_id=%s deal_id=%s reason=%s",
+                request_id,
+                deal_id,
+                exc,
+            )
             return {"status": "error", "reason": str(exc)}
 
     if "lead" in event.lower() or payload.get("entity_type") == "lead":
         lead_id = _extract_lead_id(payload)
         if not lead_id:
+            logger.warning("Bitrix webhook ignored request_id=%s reason=missing_lead_id", request_id)
             return {"status": "ignored", "reason": "missing_lead_id"}
 
         lead = await _fetch_lead(orchestrator, lead_id)
         stage_id = str(lead.get("STATUS_ID") or "")
         if stage_id != settings.bitrix_lead_payment_stage_id:
+            logger.info(
+                "Bitrix lead ignored request_id=%s lead_id=%s stage_id=%s expected_stage=%s",
+                request_id,
+                lead_id,
+                stage_id or "-",
+                settings.bitrix_lead_payment_stage_id,
+            )
             return {
                 "status": "ignored",
                 "reason": "not_payment_stage",
@@ -184,6 +251,12 @@ async def bitrix24_webhook(
         active_session = orchestrator.session_service.get_active_session_for_workflow(workflow)
         if active_session:
             await orchestrator.sync_workflow_from_lead(workflow, lead)
+            logger.info(
+                "Bitrix lead ignored request_id=%s lead_id=%s reason=payment_link_already_active session_id=%s",
+                request_id,
+                lead_id,
+                active_session.id,
+            )
             return {
                 "status": "ignored",
                 "reason": "payment_link_already_active",
@@ -191,7 +264,26 @@ async def bitrix24_webhook(
                 "payment_url": orchestrator.session_service.build_payment_url(active_session.token),
             }
 
-        session = await orchestrator.initiate_payment_from_lead(lead_id, lead_data=lead)
+        try:
+            session = await orchestrator.initiate_payment_from_lead(lead_id, lead_data=lead)
+        except ValueError as exc:
+            logger.warning(
+                "Bitrix lead payment link failed request_id=%s lead_id=%s amount=%s reason=%s",
+                request_id,
+                lead_id,
+                lead.get("OPPORTUNITY") or "-",
+                exc,
+            )
+            return {"status": "error", "reason": str(exc), "lead_id": lead_id}
+
+        logger.info(
+            "Bitrix lead imported request_id=%s lead_id=%s stage_id=%s stored_fields=%s session_id=%s",
+            request_id,
+            lead_id,
+            stage_id,
+            len(lead),
+            session.id,
+        )
         return {
             "status": "processed",
             "source": "lead_stage",
@@ -203,6 +295,7 @@ async def bitrix24_webhook(
     if "deal" in event.lower() or payload.get("entity_type") == "deal":
         deal_id = _extract_deal_id(payload)
         if not deal_id:
+            logger.warning("Bitrix webhook ignored request_id=%s reason=missing_deal_id", request_id)
             return {"status": "ignored", "reason": "missing_deal_id"}
 
         deal: dict[str, Any] = {}
@@ -210,6 +303,13 @@ async def bitrix24_webhook(
             stage_id, deal = await _resolve_deal_stage(orchestrator, deal_id)
 
         if stage_id != settings.bitrix_finance_generate_link_stage_id:
+            logger.info(
+                "Bitrix deal ignored request_id=%s deal_id=%s stage_id=%s expected_stage=%s",
+                request_id,
+                deal_id,
+                stage_id or "-",
+                settings.bitrix_finance_generate_link_stage_id,
+            )
             return {"status": "ignored", "reason": "not_generate_link_stage", "stage_id": stage_id}
 
         # ONCRMDEALUPDATE also fires for our own payment-link write; don't loop.
@@ -220,6 +320,12 @@ async def bitrix24_webhook(
                 orchestrator.session_service.get_active_session_for_workflow(workflow) if workflow else None
             )
             if active_session:
+                logger.info(
+                    "Bitrix deal ignored request_id=%s deal_id=%s reason=payment_link_already_active session_id=%s",
+                    request_id,
+                    deal_id,
+                    active_session.id,
+                )
                 return {
                     "status": "ignored",
                     "reason": "payment_link_already_active",
@@ -229,6 +335,13 @@ async def bitrix24_webhook(
 
         try:
             session = await orchestrator.initiate_payment_from_finance_deal(deal_id)
+            logger.info(
+                "Bitrix deal processed request_id=%s deal_id=%s stage_id=%s session_id=%s",
+                request_id,
+                deal_id,
+                stage_id,
+                session.id,
+            )
             return {
                 "status": "processed",
                 "source": "finance_deal_stage",
@@ -236,8 +349,19 @@ async def bitrix24_webhook(
                 "payment_url": orchestrator.session_service.build_payment_url(session.token),
             }
         except ValueError as exc:
+            logger.warning(
+                "Bitrix deal failed request_id=%s deal_id=%s reason=%s",
+                request_id,
+                deal_id,
+                exc,
+            )
             return {"status": "error", "reason": str(exc)}
 
+    logger.info(
+        "Bitrix webhook ignored request_id=%s reason=unhandled_event event=%s",
+        request_id,
+        event or "-",
+    )
     return {"status": "ignored", "reason": "unhandled_event", "event": event}
 
 
@@ -247,17 +371,31 @@ async def paymob_webhook(
     db: Session = Depends(get_db),
     hmac: str | None = Header(default=None, alias="HMAC"),
 ) -> dict[str, Any]:
+    request_id = uuid4().hex[:12]
+    logger.info("Paymob webhook received request_id=%s", request_id)
     payload = await request.json()
     orchestrator = WorkflowOrchestrator(db)
 
     try:
         workflow = await orchestrator.handle_paymob_payload(payload, hmac)
     except ValueError as exc:
+        logger.warning("Paymob webhook rejected request_id=%s reason=%s", request_id, exc)
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     if workflow is None:
+        logger.info(
+            "Paymob webhook ignored request_id=%s reason=no_successful_transaction_or_duplicate",
+            request_id,
+        )
         return {"status": "ignored", "reason": "no_successful_transaction_or_duplicate"}
 
+    logger.info(
+        "Paymob webhook processed request_id=%s workflow_id=%s amount_paid=%s remaining_balance=%s",
+        request_id,
+        workflow.id,
+        workflow.amount_paid,
+        workflow.remaining_balance,
+    )
     return {
         "status": "processed",
         "workflow_id": workflow.id,

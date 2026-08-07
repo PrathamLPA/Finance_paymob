@@ -14,6 +14,22 @@ from app.integrations.base import InvoiceReference, PaymentSummary
 logger = logging.getLogger(__name__)
 
 
+def extract_amount(entity: dict[str, Any], fallback_field: str = "") -> Decimal:
+    """Read OPPORTUNITY, falling back to a configured custom amount field."""
+    candidates = [entity.get("OPPORTUNITY")]
+    if fallback_field:
+        candidates.append(entity.get(fallback_field))
+
+    for candidate in candidates:
+        if candidate is None or not str(candidate).strip():
+            continue
+        try:
+            return Decimal(str(candidate).replace(",", "").strip())
+        except (ArithmeticError, ValueError):
+            logger.warning("Could not parse Bitrix amount value %r", candidate)
+    return Decimal("0.00")
+
+
 class MockBitrixClient:
     """Placeholder Bitrix client for prototype — logs actions and returns fake IDs."""
 
@@ -149,10 +165,7 @@ class MockBitrixClient:
         logger.info("[MockBitrix] Synced customer details on deal %s", deal_id)
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
-        opportunity = lead.get("OPPORTUNITY")
-        if opportunity is not None and str(opportunity).strip():
-            return Decimal(str(opportunity))
-        return Decimal("0.00")
+        return extract_amount(lead, self.settings.bitrix_field_lead_amount)
 
     def extract_customer_details(self, lead: dict[str, Any]) -> tuple[str | None, str | None]:
         emails = lead.get("EMAIL") or []
@@ -282,10 +295,7 @@ class RealBitrixClient:
         await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
-        opportunity = lead.get("OPPORTUNITY")
-        if opportunity is not None and str(opportunity).strip():
-            return Decimal(str(opportunity))
-        return Decimal("0.00")
+        return extract_amount(lead, self.settings.bitrix_field_lead_amount)
 
     def extract_customer_details(self, lead: dict[str, Any]) -> tuple[str | None, str | None]:
         emails = lead.get("EMAIL") or []

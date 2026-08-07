@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     bitrix_finance_threshold_met_stage_id: str = "FINANCE_THRESHOLD_MET"
     bitrix_field_customer_phone: str = "UF_CRM_CUSTOMER_PHONE"
     bitrix_field_customer_name: str = "UF_CRM_CUSTOMER_NAME"
+    # Optional custom field holding the amount when OPPORTUNITY is empty
+    bitrix_field_lead_amount: str = ""
+    # Temporary diagnostics: logs fetched lead/deal fields (may contain customer PII).
+    log_bitrix_payloads: bool = False
 
     # Paymob
     paymob_api_key: str = ""

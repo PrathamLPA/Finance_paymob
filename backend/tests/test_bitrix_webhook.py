@@ -170,6 +170,49 @@ def test_lead_update_outside_payment_stage_is_not_imported(client, seed_lead, db
     assert workflow is None
 
 
+def test_lead_without_amount_returns_error_not_crash(client, seed_lead, db_session):
+    settings = get_settings()
+    seed_lead(408, email="no-amount@test.com", amount=Decimal("0"))
+    bitrix = get_bitrix_client()
+    bitrix._mock_leads[408]["STATUS_ID"] = settings.bitrix_lead_payment_stage_id
+    bitrix._mock_leads[408]["OPPORTUNITY"] = ""
+
+    response = client.post(
+        "/webhooks/bitrix24",
+        data={"event": "ONCRMLEADUPDATE", "data[FIELDS][ID]": "408"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "error"
+    assert "no payment amount" in response.json()["reason"]
+
+
+def test_lead_amount_read_from_custom_field(client, seed_lead, monkeypatch):
+    from app.config import Settings
+
+    settings = get_settings()
+    seed_lead(409, email="custom-amount@test.com", amount=Decimal("0"))
+    bitrix = get_bitrix_client()
+    bitrix._mock_leads[409]["STATUS_ID"] = settings.bitrix_lead_payment_stage_id
+    bitrix._mock_leads[409]["OPPORTUNITY"] = ""
+    bitrix._mock_leads[409]["UF_CRM_PROSPECT_VALUE"] = "3,500.00"
+
+    monkeypatch.setenv("BITRIX_FIELD_LEAD_AMOUNT", "UF_CRM_PROSPECT_VALUE")
+    get_settings.cache_clear()
+    bitrix.settings = Settings()
+
+    response = client.post(
+        "/webhooks/bitrix24",
+        data={"event": "ONCRMLEADUPDATE", "data[FIELDS][ID]": "409"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "processed"
+
+    bitrix.settings = settings
+    get_settings.cache_clear()
+
+
 def test_repeat_lead_update_reuses_active_payment_link(client, seed_lead):
     settings = get_settings()
     seed_lead(407, email="repeat-lead@test.com", amount=Decimal("1000"))

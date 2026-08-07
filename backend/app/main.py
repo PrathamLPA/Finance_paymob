@@ -12,7 +12,10 @@ from app.config import get_settings
 from app.routers import dev, health, payment_api, webhooks
 
 settings = get_settings()
-logging.basicConfig(level=settings.log_level)
+logging.basicConfig(
+    level=settings.log_level,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 Path(settings.storage_path).mkdir(parents=True, exist_ok=True)
@@ -45,6 +48,12 @@ async def _reminder_scheduler_loop() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     task: asyncio.Task | None = None
+    logger.info(
+        "API starting environment=%s mock_integrations=%s reminder_scheduler=%s",
+        settings.app_env,
+        settings.use_mock_integrations,
+        settings.reminder_enabled and settings.reminder_scheduler_enabled,
+    )
     if settings.reminder_enabled and settings.reminder_scheduler_enabled:
         task = asyncio.create_task(_reminder_scheduler_loop())
         logger.info(
@@ -61,6 +70,7 @@ async def lifespan(_app: FastAPI):
                 await task
             except asyncio.CancelledError:
                 pass
+        logger.info("API shutdown complete")
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

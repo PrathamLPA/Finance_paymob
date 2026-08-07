@@ -94,6 +94,12 @@ class WorkflowOrchestrator:
         else:
             await self.sync_workflow_from_lead(workflow, lead_data)
 
+        if workflow.total_amount <= 0:
+            raise ValueError(
+                f"Lead {lead_id} has no payment amount — set OPPORTUNITY "
+                f"(or BITRIX_FIELD_LEAD_AMOUNT) in Bitrix before requesting payment"
+            )
+
         session = await self.session_service.get_or_create_reusable_session(workflow)
 
         if workflow.customer_email:
