@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, Numeric, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -26,6 +26,9 @@ class CustomerWorkflow(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     bitrix_lead_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    bitrix_lead_stage_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    bitrix_lead_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    lead_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     sales_deal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     finance_deal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     b2c_deal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)

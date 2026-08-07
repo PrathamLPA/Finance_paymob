@@ -51,13 +51,25 @@ class WorkflowOrchestrator:
             select(CustomerWorkflow).where(CustomerWorkflow.finance_deal_id == finance_deal_id)
         )
 
-    async def sync_workflow_from_lead(self, workflow: CustomerWorkflow) -> CustomerWorkflow:
-        lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
+    async def sync_workflow_from_lead(
+        self,
+        workflow: CustomerWorkflow,
+        lead: dict | None = None,
+    ) -> CustomerWorkflow:
+        lead = lead or await self.bitrix.get_lead(workflow.bitrix_lead_id)
         workflow.total_amount = self.bitrix.extract_lead_amount(lead)
         email, name = self.bitrix.extract_customer_details(lead)
         workflow.customer_email = email
         workflow.customer_name = name
+        phones = lead.get("PHONE") or []
+        if isinstance(phones, list) and phones:
+            workflow.customer_phone = phones[0].get("VALUE")
+        elif isinstance(phones, str):
+            workflow.customer_phone = phones
         workflow.currency = lead.get("CURRENCY_ID") or self.settings.default_currency
+        workflow.bitrix_lead_stage_id = lead.get("STATUS_ID")
+        workflow.bitrix_lead_payload = lead
+        workflow.lead_synced_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(workflow)
         return workflow
@@ -69,6 +81,7 @@ class WorkflowOrchestrator:
         customer_email: str | None = None,
         customer_name: str | None = None,
         total_amount: Decimal | None = None,
+        lead_data: dict | None = None,
     ) -> PaymentSession:
         workflow = self.get_or_create_workflow(lead_id)
         if customer_email and customer_name and total_amount is not None:
@@ -79,7 +92,7 @@ class WorkflowOrchestrator:
             self.db.commit()
             self.db.refresh(workflow)
         else:
-            await self.sync_workflow_from_lead(workflow)
+            await self.sync_workflow_from_lead(workflow, lead_data)
 
         session = await self.session_service.get_or_create_reusable_session(workflow)
 
