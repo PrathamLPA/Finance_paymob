@@ -452,6 +452,7 @@ async def paymob_webhook(
     hmac: str | None = Header(default=None, alias="HMAC"),
 ) -> dict[str, Any]:
     request_id = uuid4().hex[:12]
+    settings = get_settings()
     raw_body = await request.body()
     payload_format = "json"
 
@@ -545,6 +546,13 @@ async def paymob_webhook(
             obj.get("id") or "-",
             exc,
         )
+        if settings.log_paymob_payloads:
+            # Opt-in: the raw body pins down which fields Paymob actually signed.
+            logger.warning(
+                "Paymob rejected raw body | request_id=%s body=%s",
+                request_id,
+                raw_body[:8000].decode("utf-8", "replace"),
+            )
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except Exception:
         logger.exception(
