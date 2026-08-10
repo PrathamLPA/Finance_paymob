@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.session import get_db
+from app.integrations.paymob import extract_transaction_obj
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -444,8 +445,6 @@ async def paymob_webhook(
     hmac: str | None = Header(default=None, alias="HMAC"),
 ) -> dict[str, Any]:
     request_id = uuid4().hex[:12]
-    # Paymob sends the HMAC as a ?hmac= query param; the header is not always set.
-    signature = hmac or request.query_params.get("hmac")
     raw_body = await request.body()
 
     try:
@@ -462,15 +461,24 @@ async def paymob_webhook(
         )
         return {"status": "ignored", "reason": "empty_body"}
 
-    obj = payload.get("obj") if isinstance(payload.get("obj"), dict) else payload
+    # UAE Intention callbacks carry the HMAC in the JSON body; legacy uses header/query.
+    signature = hmac or request.query_params.get("hmac") or payload.get("hmac")
+
+    obj = extract_transaction_obj(payload)
+    intention = payload.get("intention") if isinstance(payload.get("intention"), dict) else {}
+    ref = (
+        ((obj.get("order") or {}).get("merchant_order_id") if isinstance(obj.get("order"), dict) else None)
+        or intention.get("special_reference")
+        or "-"
+    )
     logger.info(
-        "Paymob webhook received | type=%s txn=%s ref=%s amount=%s %s success=%s hmac=%s",
-        payload.get("type") or "-",
+        "Paymob webhook received | txn=%s ref=%s amount=%s %s success=%s pending=%s hmac=%s",
         obj.get("id") or "-",
-        (obj.get("order") or {}).get("merchant_order_id") if isinstance(obj.get("order"), dict) else "-",
+        ref,
         obj.get("amount_cents") or "-",
         obj.get("currency") or "-",
         obj.get("success"),
+        obj.get("pending"),
         "yes" if signature else "MISSING",
     )
 

@@ -48,6 +48,15 @@ def _bool_str(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
+def extract_transaction_obj(payload: dict[str, Any]) -> dict[str, Any]:
+    """Handle both legacy ({"obj": …}) and UAE Intention ({"transaction": …}) callbacks."""
+    for key in ("obj", "transaction"):
+        candidate = payload.get(key)
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return payload
+
+
 def build_transaction_hmac_concat(obj: dict[str, Any]) -> str:
     order = obj.get("order") or {}
     source = obj.get("source_data") or {}
@@ -183,7 +192,7 @@ class MockPaymobClient:
             return True
         if not signature:
             return False
-        obj = payload.get("obj") or payload
+        obj = extract_transaction_obj(payload)
         calculated = hmac.new(
             self.settings.paymob_hmac_secret.encode(),
             build_transaction_hmac_concat(obj).encode(),
@@ -192,7 +201,7 @@ class MockPaymobClient:
         return hmac.compare_digest(calculated, signature)
 
     def parse_successful_payment(self, payload: dict[str, Any]) -> PaymentWebhookData | None:
-        obj = payload.get("obj") or payload
+        obj = extract_transaction_obj(payload)
         success = obj.get("success")
         if success is False or str(success).lower() == "false":
             return None
@@ -202,9 +211,11 @@ class MockPaymobClient:
         amount_cents = int(obj.get("amount_cents") or 0)
         amount = Decimal(amount_cents) / Decimal("100") if amount_cents else Decimal("0")
 
+        intention = payload.get("intention") if isinstance(payload.get("intention"), dict) else {}
         merchant_reference = str(
             order.get("merchant_order_id")
             or obj.get("merchant_order_id")
+            or intention.get("special_reference")
             or payload.get("merchant_reference")
             or ""
         )
