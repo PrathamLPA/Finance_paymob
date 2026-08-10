@@ -455,11 +455,11 @@ async def paymob_webhook(
         return {"status": "ignored", "reason": "no_successful_transaction_or_duplicate"}
 
     logger.info(
-        "Paymob webhook processed request_id=%s workflow_id=%s amount_paid=%s remaining_balance=%s",
-        request_id,
-        workflow.id,
+        "OK payment received | lead_id=%s paid=%s remaining=%s status=%s",
+        workflow.bitrix_lead_id,
         workflow.amount_paid,
         workflow.remaining_balance,
+        workflow.payment_status,
     )
     return {
         "status": "processed",
@@ -467,6 +467,7 @@ async def paymob_webhook(
         "amount_paid": str(workflow.amount_paid),
         "remaining_balance": str(workflow.remaining_balance),
         "zoho_invoice_id": workflow.zoho_invoice_id,
+        "payment_status": workflow.payment_status,
     }
 
 

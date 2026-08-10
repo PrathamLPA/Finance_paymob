@@ -276,9 +276,50 @@ class WorkflowOrchestrator:
             workflow,
             latest_transaction_id=transaction.transaction_id,
         )
+        await self._comment_payment_received(workflow, data.amount, data.currency)
         self.db.commit()
         self.db.refresh(workflow)
         return workflow
+
+    async def _comment_payment_received(
+        self,
+        workflow: CustomerWorkflow,
+        amount: Decimal,
+        currency: str,
+    ) -> None:
+        """Notify Bitrix with a timeline comment after a successful payment."""
+        status = workflow.payment_status
+        pct = workflow.payment_percentage()
+        comment = (
+            f"Payment received: {amount} {currency}\n"
+            f"Paid: {workflow.amount_paid} / {workflow.total_amount} {workflow.currency} "
+            f"({pct:.0f}%)\n"
+            f"Remaining: {workflow.remaining_balance} {workflow.currency}\n"
+            f"Status: {status}"
+        )
+
+        targets: list[tuple[str, int]] = [("LEAD", workflow.bitrix_lead_id)]
+        if workflow.finance_deal_id:
+            targets.append(("DEAL", workflow.finance_deal_id))
+
+        for entity_type, entity_id in targets:
+            try:
+                await self.bitrix.add_timeline_comment(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    comment=comment,
+                )
+                logger.info(
+                    "Payment received comment posted on Bitrix %s %s",
+                    entity_type.lower(),
+                    entity_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to post payment comment on Bitrix %s %s",
+                    entity_type,
+                    entity_id,
+                )
 
     async def handle_paymob_payload(self, payload: dict, signature: str | None = None) -> CustomerWorkflow | None:
         if not self.paymob.verify_webhook(payload, signature):
