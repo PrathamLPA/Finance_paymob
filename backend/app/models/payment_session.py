@@ -41,6 +41,8 @@ class PaymentSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("(CURRENT_TIMESTAMP)"))
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Bitrix fires lead updates constantly; comment once per link, not per event.
+    link_commented_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     workflow: Mapped[CustomerWorkflow] = relationship(back_populates="payment_sessions")
     terms_acceptance: Mapped[Optional[TermsAcceptance]] = relationship(

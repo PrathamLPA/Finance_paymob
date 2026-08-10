@@ -46,6 +46,37 @@ class WorkflowOrchestrator:
         self.db.flush()
         return workflow
 
+    async def announce_payment_link(
+        self,
+        session: PaymentSession,
+        *,
+        entity_type: str,
+        entity_id: int,
+    ) -> bool:
+        """Comment the link on the CRM entity once per session, not per webhook."""
+        if session.link_commented_at:
+            return False
+
+        payment_url = self.session_service.build_payment_url(session.token)
+        try:
+            await self.bitrix.add_timeline_comment(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                comment=f"Payment link: {payment_url}",
+            )
+        except Exception:
+            logger.exception(
+                "Failed to post payment link comment on Bitrix %s %s", entity_type, entity_id
+            )
+            return False
+
+        session.link_commented_at = datetime.now(timezone.utc)
+        self.db.commit()
+        logger.info(
+            "Payment link commented on Bitrix %s %s", entity_type.lower(), entity_id
+        )
+        return True
+
     def get_workflow_by_finance_deal(self, finance_deal_id: int) -> CustomerWorkflow | None:
         return self.db.scalar(
             select(CustomerWorkflow).where(CustomerWorkflow.finance_deal_id == finance_deal_id)
@@ -103,14 +134,7 @@ class WorkflowOrchestrator:
         session = await self.session_service.get_or_create_reusable_session(workflow)
         payment_url = self.session_service.build_payment_url(session.token)
 
-        try:
-            await self.bitrix.add_timeline_comment(
-                entity_type="LEAD",
-                entity_id=lead_id,
-                comment=f"Payment link: {payment_url}",
-            )
-        except Exception:
-            logger.exception("Failed to post payment link comment on Bitrix lead %s", lead_id)
+        await self.announce_payment_link(session, entity_type="LEAD", entity_id=lead_id)
 
         if workflow.customer_email:
             self.email.send_payment_request(
@@ -137,16 +161,7 @@ class WorkflowOrchestrator:
         payment_url = self.session_service.build_payment_url(session.token)
         # Write link to Bitrix deal field so Bitrix can email it (no SendGrid).
         await self.bitrix.set_deal_payment_link(finance_deal_id, payment_url)
-        try:
-            await self.bitrix.add_timeline_comment(
-                entity_type="DEAL",
-                entity_id=finance_deal_id,
-                comment=f"Payment link: {payment_url}",
-            )
-        except Exception:
-            logger.exception(
-                "Failed to post payment link comment on Bitrix deal %s", finance_deal_id
-            )
+        await self.announce_payment_link(session, entity_type="DEAL", entity_id=finance_deal_id)
         workflow.last_reminder_at = datetime.now(timezone.utc)
         self.db.commit()
 

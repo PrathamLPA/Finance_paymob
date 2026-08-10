@@ -307,10 +307,14 @@ async def bitrix24_webhook(
         if active_session:
             await orchestrator.sync_workflow_from_lead(workflow, lead)
             payment_url = orchestrator.session_service.build_payment_url(active_session.token)
+            commented = await orchestrator.announce_payment_link(
+                active_session, entity_type="LEAD", entity_id=lead_id
+            )
             logger.info(
-                "SKIP new link | lead_id=%s title=%s | reason=link_already_active url=%s",
+                "SKIP new link | lead_id=%s title=%s | reason=link_already_active commented=%s url=%s",
                 lead_id,
                 summary["title"],
+                "yes" if commented else "already",
                 payment_url,
             )
             return {
@@ -378,9 +382,13 @@ async def bitrix24_webhook(
                 orchestrator.session_service.get_active_session_for_workflow(workflow) if workflow else None
             )
             if active_session:
+                commented = await orchestrator.announce_payment_link(
+                    active_session, entity_type="DEAL", entity_id=deal_id
+                )
                 logger.info(
-                    "SKIP new link | deal_id=%s | reason=link_already_active url=%s",
+                    "SKIP new link | deal_id=%s | reason=link_already_active commented=%s url=%s",
                     deal_id,
+                    "yes" if commented else "already",
                     existing_link,
                 )
                 return {
