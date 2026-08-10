@@ -46,15 +46,26 @@ class WorkflowOrchestrator:
         self.db.flush()
         return workflow
 
+    def note_lead_stage(self, lead_id: int, stage_id: str) -> None:
+        """Track the lead's stage without creating a workflow for unrelated leads."""
+        workflow = self.db.scalar(
+            select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == lead_id)
+        )
+        if not workflow or workflow.bitrix_lead_stage_id == stage_id:
+            return
+        workflow.bitrix_lead_stage_id = stage_id
+        self.db.commit()
+
     async def announce_payment_link(
         self,
         session: PaymentSession,
         *,
         entity_type: str,
         entity_id: int,
+        force: bool = False,
     ) -> bool:
-        """Comment the link on the CRM entity once per session, not per webhook."""
-        if session.link_commented_at:
+        """Comment the link on the CRM entity once per session, unless forced."""
+        if session.link_commented_at and not force:
             return False
 
         payment_url = self.session_service.build_payment_url(session.token)

@@ -303,6 +303,8 @@ async def bitrix24_webhook(
                 summary["opportunity"],
                 summary["currency"],
             )
+            # Remember the move away so a return to the payment stage counts as new.
+            orchestrator.note_lead_stage(lead_id, stage_id)
             return {
                 "status": "ignored",
                 "reason": "not_payment_stage",
@@ -311,12 +313,17 @@ async def bitrix24_webhook(
             }
 
         workflow = orchestrator.get_or_create_workflow(lead_id)
+        # Re-announce the link when the lead re-enters the stage, not on every edit.
+        entered_stage = (workflow.bitrix_lead_stage_id or "") != stage_id
         active_session = orchestrator.session_service.get_active_session_for_workflow(workflow)
         if active_session:
             await orchestrator.sync_workflow_from_lead(workflow, lead)
             payment_url = orchestrator.session_service.build_payment_url(active_session.token)
             commented = await orchestrator.announce_payment_link(
-                active_session, entity_type="LEAD", entity_id=lead_id
+                active_session,
+                entity_type="LEAD",
+                entity_id=lead_id,
+                force=entered_stage,
             )
             logger.info(
                 "SKIP new link | lead_id=%s title=%s | reason=link_already_active commented=%s url=%s",
