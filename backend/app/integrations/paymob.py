@@ -57,9 +57,31 @@ def extract_transaction_obj(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def extract_order_id(obj: dict[str, Any]) -> Any:
+    """Paymob sends order as a nested object, a bare id, or a flat order_id."""
+    order = obj.get("order")
+    if isinstance(order, dict):
+        return order.get("id", "")
+    if isinstance(order, (int, str)) and order != "":
+        return order
+    for key in ("order_id", "order.id"):
+        if obj.get(key) is not None:
+            return obj[key]
+    return ""
+
+
+def extract_source_field(obj: dict[str, Any], field: str) -> Any:
+    """source_data arrives nested, dot-flattened, or underscore-flattened."""
+    source = obj.get("source_data")
+    if isinstance(source, dict) and field in source:
+        return source.get(field, "")
+    for key in (f"source_data.{field}", f"source_data_{field}"):
+        if obj.get(key) is not None:
+            return obj[key]
+    return ""
+
+
 def build_transaction_hmac_concat(obj: dict[str, Any]) -> str:
-    order = obj.get("order") or {}
-    source = obj.get("source_data") or {}
     values = [
         obj.get("amount_cents", ""),
         obj.get("created_at", ""),
@@ -74,15 +96,44 @@ def build_transaction_hmac_concat(obj: dict[str, Any]) -> str:
         _bool_str(obj.get("is_refunded", False)),
         _bool_str(obj.get("is_standalone_payment", True)),
         _bool_str(obj.get("is_voided", False)),
-        order.get("id", "") if isinstance(order, dict) else "",
+        extract_order_id(obj),
         obj.get("owner", ""),
         _bool_str(obj.get("pending", False)),
-        source.get("pan", "") if isinstance(source, dict) else "",
-        source.get("sub_type", "") if isinstance(source, dict) else "",
-        source.get("type", "") if isinstance(source, dict) else "",
+        extract_source_field(obj, "pan"),
+        extract_source_field(obj, "sub_type"),
+        extract_source_field(obj, "type"),
         _bool_str(obj.get("success", False)),
     ]
     return "".join(str(v) for v in values)
+
+
+def missing_transaction_hmac_fields(obj: dict[str, Any]) -> list[str]:
+    """Return absent fields that Paymob includes in its transaction HMAC."""
+    direct_fields = (
+        "amount_cents",
+        "created_at",
+        "currency",
+        "error_occured",
+        "has_parent_transaction",
+        "id",
+        "integration_id",
+        "is_3d_secure",
+        "is_auth",
+        "is_capture",
+        "is_refunded",
+        "is_standalone_payment",
+        "is_voided",
+        "owner",
+        "pending",
+        "success",
+    )
+    missing = [field for field in direct_fields if obj.get(field) is None]
+    if extract_order_id(obj) == "":
+        missing.append("order_id")
+    for field in ("pan", "sub_type", "type"):
+        if extract_source_field(obj, field) == "":
+            missing.append(f"source_data_{field}")
+    return missing
 
 
 def build_mock_paymob_payload(
@@ -187,18 +238,78 @@ class MockPaymobClient:
 
     def verify_webhook(self, payload: dict[str, Any], signature: str | None) -> bool:
         if self.settings.use_mock_integrations:
+            logger.debug("Paymob HMAC verification bypassed reason=mock_integrations")
             return True
         if not self.settings.paymob_hmac_secret:
-            return True
+            logger.error(
+                "Paymob HMAC verification failed reason=secret_not_configured "
+                "action=set_PAYMOB_HMAC_SECRET"
+            )
+            return False
         if not signature:
+            logger.warning("Paymob HMAC verification failed reason=signature_missing")
             return False
         obj = extract_transaction_obj(payload)
+        concat = build_transaction_hmac_concat(obj)
+        received = str(signature).strip().lower()
         calculated = hmac.new(
             self.settings.paymob_hmac_secret.encode(),
-            build_transaction_hmac_concat(obj).encode(),
+            concat.encode(),
             hashlib.sha512,
         ).hexdigest()
-        return hmac.compare_digest(calculated, signature)
+        if hmac.compare_digest(calculated, received):
+            logger.info(
+                "Paymob HMAC verified | txn=%s integration_id=%s",
+                obj.get("id") or "-",
+                obj.get("integration_id") or "-",
+            )
+            return True
+
+        missing_fields = missing_transaction_hmac_fields(obj)
+        payload_shape = (
+            "obj"
+            if isinstance(payload.get("obj"), dict)
+            else "transaction"
+            if isinstance(payload.get("transaction"), dict)
+            else "root"
+        )
+        order_shape = type(obj.get("order")).__name__
+        source_shape = type(obj.get("source_data")).__name__
+        secret_fingerprint = hashlib.sha256(
+            self.settings.paymob_hmac_secret.encode()
+        ).hexdigest()[:8]
+        likely_cause = (
+            "malformed_signature"
+            if len(received) != 128
+            else "missing_or_differently_named_fields"
+            if missing_fields
+            else "wrong_hmac_secret_or_value_format"
+        )
+        logger.warning(
+            "Paymob HMAC verification failed | txn=%s reason=mismatch likely=%s "
+            "shape=%s order_shape=%s source_shape=%s missing_fields=%s "
+            "signature_len=%s calculated=%s… received=%s… "
+            "secret_len=%s secret_fingerprint=%s concat_len=%s concat_sha256=%s",
+            obj.get("id") or "-",
+            likely_cause,
+            payload_shape,
+            order_shape,
+            source_shape,
+            missing_fields or "none",
+            len(received),
+            calculated[:16],
+            received[:16],
+            len(self.settings.paymob_hmac_secret),
+            secret_fingerprint,
+            len(concat),
+            hashlib.sha256(concat.encode()).hexdigest()[:16],
+        )
+        logger.debug(
+            "Paymob HMAC transaction keys txn=%s keys=%s",
+            obj.get("id") or "-",
+            sorted(obj.keys()),
+        )
+        return False
 
     def parse_successful_payment(self, payload: dict[str, Any]) -> PaymentWebhookData | None:
         obj = extract_transaction_obj(payload)

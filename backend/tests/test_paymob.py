@@ -5,7 +5,12 @@ import hmac
 from decimal import Decimal
 
 from app.config import Settings
-from app.integrations.paymob import MockPaymobClient, build_mock_paymob_payload, build_transaction_hmac_concat
+from app.integrations.paymob import (
+    MockPaymobClient,
+    build_mock_paymob_payload,
+    build_transaction_hmac_concat,
+    missing_transaction_hmac_fields,
+)
 
 
 def _build_hmac(obj: dict, secret: str) -> str:
@@ -47,3 +52,44 @@ def test_parse_paymob_payload_fields():
     assert data.merchant_reference == "WF-2-ref"
     assert data.source_sub_type == "MasterCard"
     assert data.is_3d_secure is True
+
+
+def test_hmac_concat_accepts_uae_flattened_transaction_fields():
+    obj = build_mock_paymob_payload(
+        transaction_id=999,
+        amount_cents=500000,
+        currency="AED",
+        merchant_order_id="WF-1-abc",
+        order_id=555,
+    )["obj"]
+    flattened = dict(obj)
+    source = flattened.pop("source_data")
+    order = flattened.pop("order")
+    flattened.update(
+        {
+            "order_id": order["id"],
+            "source_data.pan": source["pan"],
+            "source_data.sub_type": source["sub_type"],
+            "source_data.type": source["type"],
+        }
+    )
+
+    assert build_transaction_hmac_concat(flattened) == build_transaction_hmac_concat(obj)
+    assert missing_transaction_hmac_fields(flattened) == []
+
+
+def test_hmac_diagnostics_identify_missing_fields():
+    obj = build_mock_paymob_payload(
+        transaction_id=999,
+        amount_cents=500000,
+        currency="AED",
+        merchant_order_id="WF-1-abc",
+        order_id=555,
+    )["obj"]
+    del obj["integration_id"]
+    del obj["source_data"]["pan"]
+
+    assert missing_transaction_hmac_fields(obj) == [
+        "integration_id",
+        "source_data_pan",
+    ]

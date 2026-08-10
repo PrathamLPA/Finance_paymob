@@ -453,23 +453,38 @@ async def paymob_webhook(
 ) -> dict[str, Any]:
     request_id = uuid4().hex[:12]
     raw_body = await request.body()
+    payload_format = "json"
 
     try:
         payload = json.loads(raw_body) if raw_body else {}
     except ValueError:
+        payload_format = "form"
         form = await request.form()
         payload = _expand_bracket_keys(dict(form))
 
     if not isinstance(payload, dict) or not payload:
         logger.warning(
-            "Paymob webhook ignored request_id=%s reason=empty_body body=%s",
+            "Paymob webhook ignored | request_id=%s reason=empty_or_invalid_body "
+            "content_type=%s body_bytes=%s",
             request_id,
-            raw_body[:500].decode("utf-8", "replace"),
+            request.headers.get("content-type") or "-",
+            len(raw_body),
         )
         return {"status": "ignored", "reason": "empty_body"}
 
     # UAE Intention callbacks carry the HMAC in the JSON body; legacy uses header/query.
-    signature = hmac or request.query_params.get("hmac") or payload.get("hmac")
+    if hmac:
+        signature_source = "header"
+        signature = hmac
+    elif request.query_params.get("hmac"):
+        signature_source = "query"
+        signature = request.query_params["hmac"]
+    elif payload.get("hmac"):
+        signature_source = "body"
+        signature = str(payload["hmac"])
+    else:
+        signature_source = "missing"
+        signature = None
 
     obj = extract_transaction_obj(payload)
     intention = payload.get("intention") if isinstance(payload.get("intention"), dict) else {}
@@ -478,31 +493,45 @@ async def paymob_webhook(
         or intention.get("special_reference")
         or "-"
     )
+    payload_shape = (
+        "obj"
+        if isinstance(payload.get("obj"), dict)
+        else "transaction"
+        if isinstance(payload.get("transaction"), dict)
+        else "root"
+    )
     logger.info(
-        "Paymob webhook received | txn=%s ref=%s amount=%s %s success=%s pending=%s hmac=%s",
+        "Paymob webhook received | request_id=%s txn=%s ref=%s amount=%s %s "
+        "success=%s pending=%s format=%s shape=%s signature=%s body_bytes=%s",
+        request_id,
         obj.get("id") or "-",
         ref,
         obj.get("amount_cents") or "-",
         obj.get("currency") or "-",
         obj.get("success"),
         obj.get("pending"),
-        "yes" if signature else "MISSING",
+        payload_format,
+        payload_shape,
+        signature_source,
+        len(raw_body),
     )
 
     if obj.get("id") is None:
         logger.warning(
-            "Paymob webhook ignored request_id=%s reason=not_a_transaction keys=%s body=%s",
+            "Paymob webhook ignored | request_id=%s reason=not_a_transaction "
+            "payload_keys=%s transaction_keys=%s",
             request_id,
             sorted(payload.keys()),
-            raw_body[:1000].decode("utf-8", "replace"),
+            sorted(obj.keys()),
         )
         return {"status": "ignored", "reason": "not_a_transaction"}
 
     if not signature:
         logger.warning(
-            "Paymob webhook rejected request_id=%s reason=missing_hmac "
-            "(expected ?hmac= query param or HMAC header)",
+            "Paymob webhook rejected | request_id=%s txn=%s reason=missing_hmac "
+            "expected=header_query_or_body",
             request_id,
+            obj.get("id"),
         )
         raise HTTPException(status_code=401, detail="Missing Paymob HMAC")
 
@@ -511,22 +540,37 @@ async def paymob_webhook(
         workflow = await orchestrator.handle_paymob_payload(payload, signature)
     except ValueError as exc:
         logger.warning(
-            "Paymob webhook rejected request_id=%s reason=%s txn=%s",
+            "Paymob webhook rejected | request_id=%s txn=%s reason=%s",
             request_id,
-            exc,
             obj.get("id") or "-",
+            exc,
         )
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception:
+        logger.exception(
+            "Paymob webhook processing failed | request_id=%s txn=%s ref=%s",
+            request_id,
+            obj.get("id") or "-",
+            ref,
+        )
+        raise
 
     if workflow is None:
         logger.info(
-            "Paymob webhook ignored request_id=%s reason=no_successful_transaction_or_duplicate",
+            "Paymob webhook ignored | request_id=%s txn=%s "
+            "reason=failed_pending_or_duplicate success=%s pending=%s",
             request_id,
+            obj.get("id") or "-",
+            obj.get("success"),
+            obj.get("pending"),
         )
         return {"status": "ignored", "reason": "no_successful_transaction_or_duplicate"}
 
     logger.info(
-        "OK payment received | lead_id=%s paid=%s remaining=%s status=%s",
+        "OK payment received | request_id=%s txn=%s lead_id=%s "
+        "paid=%s remaining=%s status=%s",
+        request_id,
+        obj.get("id") or "-",
         workflow.bitrix_lead_id,
         workflow.amount_paid,
         workflow.remaining_balance,
