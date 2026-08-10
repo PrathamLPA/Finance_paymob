@@ -69,12 +69,17 @@ def _log_bitrix_entity(entity_type: str, entity_id: int, payload: dict[str, Any]
     settings = get_settings()
     if entity_type == "lead":
         summary = _lead_summary(payload)
+        # Only leads at the payment stage matter; the rest is background chatter.
+        at_payment_stage = str(payload.get("STATUS_ID") or "") == settings.bitrix_lead_payment_stage_id
     elif entity_type == "deal":
         summary = _deal_summary(payload)
+        at_payment_stage = True
     else:
         summary = {"keys": len(payload)}
+        at_payment_stage = True
 
-    logger.info(
+    log = logger.info if at_payment_stage else logger.debug
+    log(
         "Bitrix %s fetched id=%s title=%s stage=%s amount=%s %s email=%s",
         entity_type,
         entity_id,
@@ -240,7 +245,8 @@ async def bitrix24_webhook(
     event = str(payload.get("event") or payload.get("EVENT") or "")
     action = str(payload.get("action") or payload.get("ACTION") or "")
     stage_id = _extract_stage_id(payload)
-    logger.info(
+    # Every lead edit reaches us; stage-relevant lines are logged further down.
+    logger.debug(
         "Bitrix webhook received request_id=%s event=%s action=%s content_type=%s",
         request_id,
         event or "-",
@@ -286,7 +292,8 @@ async def bitrix24_webhook(
         stage_id = str(lead.get("STATUS_ID") or "")
         summary = _lead_summary(lead)
         if stage_id != settings.bitrix_lead_payment_stage_id:
-            logger.info(
+            # Bitrix fires on every lead edit; only the payment stage is interesting.
+            logger.debug(
                 "SKIP payment link | lead_id=%s title=%s stage=%s (need %s) amount=%s %s | reason=wrong_stage",
                 lead_id,
                 summary["title"],
@@ -366,7 +373,7 @@ async def bitrix24_webhook(
             stage_id, deal = await _resolve_deal_stage(orchestrator, deal_id)
 
         if stage_id != settings.bitrix_finance_generate_link_stage_id:
-            logger.info(
+            logger.debug(
                 "SKIP payment link | deal_id=%s stage=%s (need %s) | reason=wrong_stage",
                 deal_id,
                 stage_id or "-",
@@ -422,7 +429,7 @@ async def bitrix24_webhook(
             )
             return {"status": "error", "reason": str(exc)}
 
-    logger.info(
+    logger.debug(
         "Bitrix webhook ignored request_id=%s reason=unhandled_event event=%s",
         request_id,
         event or "-",
@@ -437,12 +444,23 @@ async def paymob_webhook(
     hmac: str | None = Header(default=None, alias="HMAC"),
 ) -> dict[str, Any]:
     request_id = uuid4().hex[:12]
-    logger.info("Paymob webhook received request_id=%s", request_id)
+    # Paymob sends the HMAC as a ?hmac= query param; the header is not always set.
+    signature = hmac or request.query_params.get("hmac")
     payload = await request.json()
     orchestrator = WorkflowOrchestrator(db)
 
+    obj = payload.get("obj") or payload
+    logger.info(
+        "Paymob webhook received | txn=%s ref=%s amount=%s %s success=%s",
+        obj.get("id") or "-",
+        (obj.get("order") or {}).get("merchant_order_id") or "-",
+        obj.get("amount_cents") or "-",
+        obj.get("currency") or "-",
+        obj.get("success"),
+    )
+
     try:
-        workflow = await orchestrator.handle_paymob_payload(payload, hmac)
+        workflow = await orchestrator.handle_paymob_payload(payload, signature)
     except ValueError as exc:
         logger.warning("Paymob webhook rejected request_id=%s reason=%s", request_id, exc)
         raise HTTPException(status_code=401, detail=str(exc)) from exc

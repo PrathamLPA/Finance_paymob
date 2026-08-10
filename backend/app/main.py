@@ -16,6 +16,8 @@ logging.basicConfig(
     level=settings.log_level,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+# Bitrix polls us constantly; one httpx line per lead fetch drowns real events.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 Path(settings.storage_path).mkdir(parents=True, exist_ok=True)
