@@ -41,6 +41,7 @@ class MockBitrixClient:
         self.settings = settings or get_settings()
         self._mock_leads: dict[int, dict[str, Any]] = {}
         self._mock_deals: dict[int, dict[str, Any]] = {}
+        self._mock_comments: dict[tuple[str, int], list[dict[str, Any]]] = {}
 
     def seed_lead(self, lead_id: int, *, email: str, name: str, amount: Decimal) -> None:
         self._mock_leads[lead_id] = {
@@ -139,6 +140,24 @@ class MockBitrixClient:
         deal[self.settings.bitrix_field_payment_link] = payment_url
         self._mock_deals[deal_id] = deal
         logger.info("[MockBitrix] Set payment link on deal %s: %s", deal_id, payment_url)
+
+    async def add_timeline_comment(
+        self,
+        *,
+        entity_type: str,
+        entity_id: int,
+        comment: str,
+    ) -> int | None:
+        comments = self._mock_comments.setdefault((entity_type.upper(), entity_id), [])
+        comment_id = len(comments) + 1
+        comments.append({"id": comment_id, "COMMENT": comment})
+        logger.info(
+            "[MockBitrix] Timeline comment on %s %s: %s",
+            entity_type,
+            entity_id,
+            comment[:120],
+        )
+        return comment_id
 
     async def set_deal_stage(self, deal_id: int, stage_id: str) -> None:
         deal = await self.get_deal(deal_id)
@@ -270,6 +289,32 @@ class RealBitrixClient:
             {"id": deal_id, "fields": {self.settings.bitrix_field_payment_link: payment_url}},
         )
         logger.info("Set payment link on Bitrix deal %s", deal_id)
+
+    async def add_timeline_comment(
+        self,
+        *,
+        entity_type: str,
+        entity_id: int,
+        comment: str,
+    ) -> int | None:
+        result = await self._call(
+            "crm.timeline.comment.add",
+            {
+                "fields": {
+                    "ENTITY_TYPE": entity_type.upper(),
+                    "ENTITY_ID": entity_id,
+                    "COMMENT": comment,
+                }
+            },
+        )
+        comment_id = int(result) if result is not None else None
+        logger.info(
+            "Added Bitrix timeline comment id=%s on %s %s",
+            comment_id,
+            entity_type,
+            entity_id,
+        )
+        return comment_id
 
     async def set_deal_stage(self, deal_id: int, stage_id: str) -> None:
         await self._call("crm.deal.update", {"id": deal_id, "fields": {"STAGE_ID": stage_id}})

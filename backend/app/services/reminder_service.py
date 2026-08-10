@@ -69,8 +69,24 @@ class ReminderService:
         if workflow.finance_deal_id:
             try:
                 await self.bitrix.set_deal_payment_link(workflow.finance_deal_id, payment_url)
+                await self.bitrix.add_timeline_comment(
+                    entity_type="DEAL",
+                    entity_id=workflow.finance_deal_id,
+                    comment=f"Payment reminder link: {payment_url}",
+                )
             except Exception:
                 logger.exception("Failed to refresh Bitrix payment link for deal %s", workflow.finance_deal_id)
+        elif workflow.bitrix_lead_id:
+            try:
+                await self.bitrix.add_timeline_comment(
+                    entity_type="LEAD",
+                    entity_id=workflow.bitrix_lead_id,
+                    comment=f"Payment reminder link: {payment_url}",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to post reminder comment on Bitrix lead %s", workflow.bitrix_lead_id
+                )
 
         workflow.last_reminder_at = self._utcnow()
         workflow.reminder_count = (workflow.reminder_count or 0) + 1

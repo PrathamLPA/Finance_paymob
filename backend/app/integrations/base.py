@@ -90,6 +90,14 @@ class BitrixIntegration(Protocol):
 
     async def set_deal_payment_link(self, deal_id: int, payment_url: str) -> None: ...
 
+    async def add_timeline_comment(
+        self,
+        *,
+        entity_type: str,
+        entity_id: int,
+        comment: str,
+    ) -> int | None: ...
+
     async def set_deal_stage(self, deal_id: int, stage_id: str) -> None: ...
 
     async def sync_deal_customer_details(

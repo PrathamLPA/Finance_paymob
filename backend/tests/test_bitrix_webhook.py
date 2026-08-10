@@ -213,6 +213,24 @@ def test_lead_amount_read_from_custom_field(client, seed_lead, monkeypatch):
     get_settings.cache_clear()
 
 
+def test_lead_payment_link_posts_timeline_comment(client, seed_lead):
+    settings = get_settings()
+    seed_lead(410, email="comment@test.com", amount=Decimal("1500"))
+    bitrix = get_bitrix_client()
+    bitrix._mock_leads[410]["STATUS_ID"] = settings.bitrix_lead_payment_stage_id
+
+    response = client.post(
+        "/webhooks/bitrix24",
+        data={"event": "ONCRMLEADUPDATE", "data[FIELDS][ID]": "410"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "processed"
+    comments = bitrix._mock_comments.get(("LEAD", 410), [])
+    assert len(comments) == 1
+    assert response.json()["payment_url"] in comments[0]["COMMENT"]
+
+
 def test_repeat_lead_update_reuses_active_payment_link(client, seed_lead):
     settings = get_settings()
     seed_lead(407, email="repeat-lead@test.com", amount=Decimal("1000"))
