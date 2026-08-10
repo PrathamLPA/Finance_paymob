@@ -39,7 +39,67 @@ def _form_context(
 
 @router.get("/thank-you", response_class=HTMLResponse)
 async def payment_thank_you(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse("thank_you.html", {"request": request})
+    """Paymob redirects here after checkout. UX only — webhook is source of truth."""
+    params = request.query_params
+    success_raw = (params.get("success") or params.get("txn_response_code") or "").lower()
+    success = success_raw in ("true", "1", "approved", "00")
+    failed = success_raw in ("false", "0") or (params.get("error_occured") or "").lower() in (
+        "true",
+        "1",
+    )
+
+    amount_cents = params.get("amount_cents") or params.get("amount")
+    currency = (params.get("currency") or "AED").upper()
+    amount_display = None
+    if amount_cents and str(amount_cents).isdigit():
+        amount_display = f"{int(amount_cents) / 100:.2f} {currency}"
+
+    merchant_order_id = (
+        params.get("merchant_order_id")
+        or params.get("merchant_order")
+        or params.get("order")
+        or ""
+    )
+
+    if failed:
+        heading = "Payment not completed"
+        message = (
+            "Paymob reported that this payment did not succeed. "
+            "You can close this window and try again from your payment link."
+        )
+        page_title = "Payment Failed"
+        footnote = "No amount was recorded in our system for a failed attempt."
+    elif success:
+        heading = "Payment submitted"
+        message = (
+            "Your card payment was submitted. We are confirming it with Paymob now — "
+            "this usually takes a few seconds."
+        )
+        page_title = "Payment Submitted"
+        footnote = (
+            "Confirmation appears as a comment on your Bitrix lead once the Paymob webhook arrives."
+        )
+    else:
+        heading = "Returning from Paymob"
+        message = (
+            "If you completed payment, we are confirming it now. "
+            "If you cancelled, no charge was made."
+        )
+        page_title = "Payment Status"
+        footnote = "Final status comes from the Paymob webhook, not this page."
+
+    return templates.TemplateResponse(
+        "thank_you.html",
+        {
+            "request": request,
+            "page_title": page_title,
+            "heading": heading,
+            "message": message,
+            "footnote": footnote,
+            "amount_display": amount_display,
+            "merchant_order_id": merchant_order_id,
+        },
+    )
 
 
 @router.get("/{token}", response_class=HTMLResponse)

@@ -3,14 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payment Received</title>
+    <title>{{ page_title }}</title>
     <link rel="stylesheet" href="/static/styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
 <body class="error-page-body">
     <div class="error-card">
-        <h1>Payment Received</h1>
-        <p>Thank you. Your payment has been submitted successfully. You may close this window.</p>
+        <h1>{{ heading }}</h1>
+        <p>{{ message }}</p>
+        {% if amount_display %}
+        <p><strong>Amount:</strong> {{ amount_display }}</p>
+        {% endif %}
+        {% if merchant_order_id %}
+        <p class="form-footer-note">Reference: {{ merchant_order_id }}</p>
+        {% endif %}
+        <p class="form-footer-note">{{ footnote }}</p>
     </div>
 </body>
 </html>
