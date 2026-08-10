@@ -261,22 +261,44 @@ class WorkflowOrchestrator:
         self.session_service.mark_completed(session)
         self.db.flush()
 
-        if workflow.is_first_payment_pending:
-            if dev_simulate:
-                await self._create_dev_simulated_deals(workflow)
-            else:
-                await self._create_deals_on_first_payment(workflow)
+        # Money is recorded; tell Bitrix before anything else can fail.
+        first_payment = workflow.is_first_payment_pending
+        self.threshold_service.refresh_status(workflow)
+        self.db.commit()
+        await self._comment_payment_received(workflow, data.amount, data.currency)
+
+        if first_payment:
+            try:
+                if dev_simulate:
+                    await self._create_dev_simulated_deals(workflow)
+                else:
+                    await self._create_deals_on_first_payment(workflow)
+            except Exception:
+                logger.exception(
+                    "Failed to create Bitrix deals after first payment for lead %s",
+                    workflow.bitrix_lead_id,
+                )
 
         if dev_simulate:
             logger.info("Dev simulate — skipping Zoho invoice sync")
         else:
-            await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
+            try:
+                await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
+            except Exception:
+                logger.exception(
+                    "Failed to sync invoice after payment for lead %s", workflow.bitrix_lead_id
+                )
 
-        await self.threshold_service.apply_after_payment(
-            workflow,
-            latest_transaction_id=transaction.transaction_id,
-        )
-        await self._comment_payment_received(workflow, data.amount, data.currency)
+        try:
+            await self.threshold_service.apply_after_payment(
+                workflow,
+                latest_transaction_id=transaction.transaction_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to apply payment threshold for lead %s", workflow.bitrix_lead_id
+            )
+
         self.db.commit()
         self.db.refresh(workflow)
         return workflow
