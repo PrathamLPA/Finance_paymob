@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     log_bitrix_payloads: bool = False
 
     # Paymob
+    # Temporary diagnostics: dumps the transaction object when HMAC verification fails.
+    log_paymob_payloads: bool = False
     paymob_api_key: str = ""
     paymob_secret_key: str = ""
     paymob_public_key: str = ""

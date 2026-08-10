@@ -6,7 +6,9 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import uuid
+from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
 
@@ -42,9 +44,9 @@ HMAC_FIELD_ORDER = [
 ]
 
 
-def _bool_str(value: Any) -> str:
+def _bool_str(value: Any, *, style: str = "lower") -> str:
     if isinstance(value, bool):
-        return str(value).lower()
+        return str(value).lower() if style == "lower" else str(value)
     return str(value) if value is not None else ""
 
 
@@ -81,30 +83,58 @@ def extract_source_field(obj: dict[str, Any], field: str) -> Any:
     return ""
 
 
-def build_transaction_hmac_concat(obj: dict[str, Any]) -> str:
+def build_transaction_hmac_concat(
+    obj: dict[str, Any],
+    *,
+    bool_style: str = "lower",
+    created_at: str | None = None,
+) -> str:
     values = [
         obj.get("amount_cents", ""),
-        obj.get("created_at", ""),
+        obj.get("created_at", "") if created_at is None else created_at,
         obj.get("currency", ""),
-        _bool_str(obj.get("error_occured", False)),
-        _bool_str(obj.get("has_parent_transaction", False)),
+        _bool_str(obj.get("error_occured", False), style=bool_style),
+        _bool_str(obj.get("has_parent_transaction", False), style=bool_style),
         obj.get("id", ""),
         obj.get("integration_id", ""),
-        _bool_str(obj.get("is_3d_secure", False)),
-        _bool_str(obj.get("is_auth", False)),
-        _bool_str(obj.get("is_capture", False)),
-        _bool_str(obj.get("is_refunded", False)),
-        _bool_str(obj.get("is_standalone_payment", True)),
-        _bool_str(obj.get("is_voided", False)),
+        _bool_str(obj.get("is_3d_secure", False), style=bool_style),
+        _bool_str(obj.get("is_auth", False), style=bool_style),
+        _bool_str(obj.get("is_capture", False), style=bool_style),
+        _bool_str(obj.get("is_refunded", False), style=bool_style),
+        _bool_str(obj.get("is_standalone_payment", True), style=bool_style),
+        _bool_str(obj.get("is_voided", False), style=bool_style),
         extract_order_id(obj),
         obj.get("owner", ""),
-        _bool_str(obj.get("pending", False)),
+        _bool_str(obj.get("pending", False), style=bool_style),
         extract_source_field(obj, "pan"),
         extract_source_field(obj, "sub_type"),
         extract_source_field(obj, "type"),
-        _bool_str(obj.get("success", False)),
+        _bool_str(obj.get("success", False), style=bool_style),
     ]
     return "".join(str(v) for v in values)
+
+
+def _created_at_variants(value: str) -> list[tuple[str, str]]:
+    """Paymob signs created_at as it serialises it, which varies by region."""
+    variants = [("raw", value)]
+    without_tz = re.sub(r"(?:Z|[+-]\d{2}:?\d{2})$", "", value)
+    if without_tz != value:
+        variants.append(("no_tz", without_tz))
+    for name, candidate in list(variants):
+        if "T" in candidate:
+            variants.append((f"{name}_space", candidate.replace("T", " ", 1)))
+    return variants
+
+
+def iter_hmac_candidates(obj: dict[str, Any]) -> Iterator[tuple[str, str]]:
+    """Yield (label, concat) pairs, documented spelling first."""
+    created = str(obj.get("created_at", "") or "")
+    for created_label, created_value in _created_at_variants(created):
+        for bool_style in ("lower", "python"):
+            label = f"created={created_label},bool={bool_style}"
+            yield label, build_transaction_hmac_concat(
+                obj, bool_style=bool_style, created_at=created_value
+            )
 
 
 def missing_transaction_hmac_fields(obj: dict[str, Any]) -> list[str]:
@@ -250,19 +280,32 @@ class MockPaymobClient:
             logger.warning("Paymob HMAC verification failed reason=signature_missing")
             return False
         obj = extract_transaction_obj(payload)
-        concat = build_transaction_hmac_concat(obj)
         received = str(signature).strip().lower()
-        calculated = hmac.new(
-            self.settings.paymob_hmac_secret.encode(),
-            concat.encode(),
-            hashlib.sha512,
-        ).hexdigest()
-        if hmac.compare_digest(calculated, received):
-            logger.info(
-                "Paymob HMAC verified | txn=%s integration_id=%s",
-                obj.get("id") or "-",
-                obj.get("integration_id") or "-",
-            )
+        secret = self.settings.paymob_hmac_secret.encode()
+
+        concat = ""
+        calculated = ""
+        tried = 0
+        for label, candidate in iter_hmac_candidates(obj):
+            digest = hmac.new(secret, candidate.encode(), hashlib.sha512).hexdigest()
+            if tried == 0:
+                concat, calculated = candidate, digest
+            tried += 1
+            if not hmac.compare_digest(digest, received):
+                continue
+            if tried == 1:
+                logger.info(
+                    "Paymob HMAC verified | txn=%s integration_id=%s",
+                    obj.get("id") or "-",
+                    obj.get("integration_id") or "-",
+                )
+            else:
+                logger.warning(
+                    "Paymob HMAC verified via non-standard field format | txn=%s "
+                    "variant=%s action=make_this_variant_the_default",
+                    obj.get("id") or "-",
+                    label,
+                )
             return True
 
         missing_fields = missing_transaction_hmac_fields(obj)
@@ -288,27 +331,35 @@ class MockPaymobClient:
         logger.warning(
             "Paymob HMAC verification failed | txn=%s reason=mismatch likely=%s "
             "shape=%s order_shape=%s source_shape=%s missing_fields=%s "
-            "signature_len=%s calculated=%s… received=%s… "
-            "secret_len=%s secret_fingerprint=%s concat_len=%s concat_sha256=%s",
+            "variants_tried=%s signature_len=%s calculated=%s… received=%s… "
+            "secret_len=%s secret_fingerprint=%s",
             obj.get("id") or "-",
             likely_cause,
             payload_shape,
             order_shape,
             source_shape,
             missing_fields or "none",
+            tried,
             len(received),
             calculated[:16],
             received[:16],
             len(self.settings.paymob_hmac_secret),
             secret_fingerprint,
-            len(concat),
-            hashlib.sha256(concat.encode()).hexdigest()[:16],
         )
-        logger.debug(
-            "Paymob HMAC transaction keys txn=%s keys=%s",
+        # No secret and only a masked PAN, so the signed string is safe to log.
+        logger.warning(
+            "Paymob HMAC signed string | txn=%s concat=%r keys=%s",
             obj.get("id") or "-",
+            concat,
             sorted(obj.keys()),
         )
+        if self.settings.log_paymob_payloads:
+            # Opt-in: contains customer billing details, so keep it off by default.
+            logger.warning(
+                "Paymob HMAC transaction dump | txn=%s transaction=%s",
+                obj.get("id") or "-",
+                json.dumps(obj, default=str)[:6000],
+            )
         return False
 
     def parse_successful_payment(self, payload: dict[str, Any]) -> PaymentWebhookData | None:
