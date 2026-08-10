@@ -219,6 +219,13 @@ class RealBitrixClient:
         result = payload.get("result", payload)
         return result if isinstance(result, dict) else {"result": result}
 
+    @staticmethod
+    def _scalar(result: dict[str, Any]) -> Any:
+        """_call wraps non-dict REST results as {"result": value}; unwrap them."""
+        if isinstance(result, dict) and set(result) == {"result"}:
+            return result["result"]
+        return result
+
     async def get_lead(self, lead_id: int) -> dict[str, Any]:
         return await self._call("crm.lead.get", {"id": lead_id})
 
@@ -247,7 +254,7 @@ class RealBitrixClient:
             "CATEGORY_ID": self.settings.bitrix_finance_pipeline_id or None,
         }
         result = await self._call("crm.deal.add", {"fields": {k: v for k, v in fields.items() if v is not None}})
-        return int(result)
+        return int(self._scalar(result))
 
     async def create_b2c_deal(self, lead_id: int, context: dict[str, Any]) -> int:
         lead = await self.get_lead(lead_id)
@@ -258,7 +265,7 @@ class RealBitrixClient:
             "CATEGORY_ID": self.settings.bitrix_b2c_pipeline_id or None,
         }
         result = await self._call("crm.deal.add", {"fields": {k: v for k, v in fields.items() if v is not None}})
-        return int(result)
+        return int(self._scalar(result))
 
     async def attach_invoice_reference(self, deal_id: int, invoice: InvoiceReference) -> None:
         fields = {
@@ -307,10 +314,14 @@ class RealBitrixClient:
                 }
             },
         )
-        comment_id = int(result) if result is not None else None
+        raw = self._scalar(result)
+        try:
+            comment_id = int(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            comment_id = None
         logger.info(
             "Added Bitrix timeline comment id=%s on %s %s",
-            comment_id,
+            comment_id if comment_id is not None else "-",
             entity_type,
             entity_id,
         )

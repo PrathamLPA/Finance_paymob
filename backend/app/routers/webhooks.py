@@ -446,23 +446,61 @@ async def paymob_webhook(
     request_id = uuid4().hex[:12]
     # Paymob sends the HMAC as a ?hmac= query param; the header is not always set.
     signature = hmac or request.query_params.get("hmac")
-    payload = await request.json()
-    orchestrator = WorkflowOrchestrator(db)
+    raw_body = await request.body()
 
-    obj = payload.get("obj") or payload
+    try:
+        payload = json.loads(raw_body) if raw_body else {}
+    except ValueError:
+        form = await request.form()
+        payload = _expand_bracket_keys(dict(form))
+
+    if not isinstance(payload, dict) or not payload:
+        logger.warning(
+            "Paymob webhook ignored request_id=%s reason=empty_body body=%s",
+            request_id,
+            raw_body[:500].decode("utf-8", "replace"),
+        )
+        return {"status": "ignored", "reason": "empty_body"}
+
+    obj = payload.get("obj") if isinstance(payload.get("obj"), dict) else payload
     logger.info(
-        "Paymob webhook received | txn=%s ref=%s amount=%s %s success=%s",
+        "Paymob webhook received | type=%s txn=%s ref=%s amount=%s %s success=%s hmac=%s",
+        payload.get("type") or "-",
         obj.get("id") or "-",
-        (obj.get("order") or {}).get("merchant_order_id") or "-",
+        (obj.get("order") or {}).get("merchant_order_id") if isinstance(obj.get("order"), dict) else "-",
         obj.get("amount_cents") or "-",
         obj.get("currency") or "-",
         obj.get("success"),
+        "yes" if signature else "MISSING",
     )
 
+    if obj.get("id") is None:
+        logger.warning(
+            "Paymob webhook ignored request_id=%s reason=not_a_transaction keys=%s body=%s",
+            request_id,
+            sorted(payload.keys()),
+            raw_body[:1000].decode("utf-8", "replace"),
+        )
+        return {"status": "ignored", "reason": "not_a_transaction"}
+
+    if not signature:
+        logger.warning(
+            "Paymob webhook rejected request_id=%s reason=missing_hmac "
+            "(expected ?hmac= query param or HMAC header)",
+            request_id,
+        )
+        raise HTTPException(status_code=401, detail="Missing Paymob HMAC")
+
+    orchestrator = WorkflowOrchestrator(db)
     try:
         workflow = await orchestrator.handle_paymob_payload(payload, signature)
     except ValueError as exc:
-        logger.warning("Paymob webhook rejected request_id=%s reason=%s", request_id, exc)
+        logger.warning(
+            "Paymob webhook rejected request_id=%s reason=%s txn=%s",
+            request_id,
+            exc,
+            obj.get("id") or "-",
+        )
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     if workflow is None:
