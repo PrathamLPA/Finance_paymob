@@ -51,10 +51,13 @@ async def _reminder_scheduler_loop() -> None:
 async def lifespan(_app: FastAPI):
     task: asyncio.Task | None = None
     logger.info(
-        "API starting environment=%s mock_integrations=%s reminder_scheduler=%s",
+        "API starting environment=%s commit=%s mock_integrations=%s reminder_scheduler=%s "
+        "paymob_hmac_fallback=%s",
         settings.app_env,
+        (settings.railway_git_commit_sha or "unknown")[:8],
         settings.use_mock_integrations,
         settings.reminder_enabled and settings.reminder_scheduler_enabled,
+        settings.paymob_hmac_fallback_to_inquiry,
     )
     if settings.reminder_enabled and settings.reminder_scheduler_enabled:
         task = asyncio.create_task(_reminder_scheduler_loop())

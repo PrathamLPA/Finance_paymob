@@ -370,6 +370,11 @@ class MockPaymobClient:
             return True
 
         if not self.settings.paymob_hmac_fallback_to_inquiry:
+            logger.warning(
+                "Paymob inquiry fallback disabled | txn=%s "
+                "action=set_PAYMOB_HMAC_FALLBACK_TO_INQUIRY_true",
+                extract_transaction_obj(payload).get("id") or "-",
+            )
             return False
 
         obj = extract_transaction_obj(payload)

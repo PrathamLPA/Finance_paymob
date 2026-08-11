@@ -26,6 +26,8 @@ class Settings(BaseSettings):
 
     app_name: str = "Finance Automation"
     app_env: str = "development"
+    # Set automatically by Railway; lets logs prove which commit is running.
+    railway_git_commit_sha: str = ""
     log_level: str = "INFO"
     # Public URL of this API service (webhooks, Paymob notification_url)
     public_base_url: str = "http://localhost:8001"
