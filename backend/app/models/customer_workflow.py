@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from app.models.payment_session import PaymentSession
     from app.models.payment_transaction import PaymentTransaction
 
+MINIMUM_PAYMENT = Decimal("1.00")
+
 STATUS_PENDING = "pending"
 STATUS_PARTIAL = "partial"
 STATUS_THRESHOLD_MET = "threshold_met"
@@ -76,6 +78,19 @@ class CustomerWorkflow(Base):
 
     def meets_required_percent(self, required_percent: float) -> bool:
         return self.payment_percentage() >= Decimal(str(required_percent))
+
+    def minimum_due(self, required_percent: float) -> Decimal:
+        """Smallest amount this customer may pay now to keep the workflow valid."""
+        remaining = self.remaining_balance
+        if remaining <= 0:
+            return Decimal("0.00")
+        required_total = (
+            self.total_amount * Decimal(str(required_percent)) / Decimal("100")
+        ).quantize(Decimal("0.01"))
+        shortfall = required_total - self.amount_paid
+        if shortfall < MINIMUM_PAYMENT:
+            shortfall = MINIMUM_PAYMENT
+        return min(shortfall, remaining)
 
     def derive_payment_status(self, required_percent: float) -> str:
         if self.total_amount > 0 and self.amount_paid >= self.total_amount:

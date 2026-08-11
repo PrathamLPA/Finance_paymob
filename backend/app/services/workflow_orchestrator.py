@@ -69,11 +69,18 @@ class WorkflowOrchestrator:
             return False
 
         payment_url = self.session_service.build_payment_url(session.token)
+        workflow = session.workflow
+        minimum = workflow.minimum_due(self.settings.payment_required_percent)
+        comment = (
+            f"Payment link: {payment_url}\n"
+            f"Outstanding: {workflow.remaining_balance:.2f} {workflow.currency}\n"
+            f"Minimum payable now: {minimum:.2f} {workflow.currency}"
+        )
         try:
             await self.bitrix.add_timeline_comment(
                 entity_type=entity_type,
                 entity_id=entity_id,
-                comment=f"Payment link: {payment_url}",
+                comment=comment,
             )
         except Exception:
             logger.exception(

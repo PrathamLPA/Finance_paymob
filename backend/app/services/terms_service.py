@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -85,6 +86,38 @@ class TermsService:
             return "Please enter your phone number."
         return None
 
+    def resolve_payment_amount(
+        self,
+        workflow: CustomerWorkflow,
+        requested: Decimal | None,
+    ) -> Decimal:
+        """Clamp the customer's chosen amount to the allowed range for this workflow."""
+        remaining = workflow.remaining_balance
+        if remaining <= 0:
+            raise HTTPException(status_code=400, detail="This balance is already settled.")
+
+        minimum = workflow.minimum_due(self.settings.payment_required_percent)
+        if requested is None:
+            return remaining
+
+        amount = Decimal(requested).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if amount < minimum:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"The minimum payment for this course is "
+                    f"{minimum:.2f} {workflow.currency}."
+                ),
+            )
+        if amount > remaining:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"The outstanding balance is only {remaining:.2f} {workflow.currency}."
+                ),
+            )
+        return amount
+
     def get_terms_context(self, **form_values: str | None) -> dict:
         markdown = self.load_terms_markdown()
         return {
@@ -149,6 +182,7 @@ class TermsService:
         registrant_name: str,
         registrant_email: str,
         registrant_phone: str,
+        payment_amount: Decimal | None = None,
     ) -> str:
         if not accepted:
             raise HTTPException(status_code=400, detail="You must accept the Terms and Conditions to continue")
@@ -166,8 +200,10 @@ class TermsService:
         if not session:
             raise HTTPException(status_code=404, detail="Payment session not found or expired")
 
+        amount = self.resolve_payment_amount(session.workflow, payment_amount)
+
         if session.status == SESSION_TERMS_ACCEPTED and session.paymob_checkout_url:
-            return await self.session_service.refresh_paymob_checkout(session)
+            return await self.session_service.refresh_paymob_checkout(session, amount=amount)
 
         pdf_path = self.generate_acceptance_pdf(
             session,
@@ -207,8 +243,8 @@ class TermsService:
                 terms_version=self.settings.terms_version,
             )
 
-        if not session.paymob_checkout_url:
-            raise HTTPException(status_code=500, detail="Payment checkout URL not available")
+        if amount != session.charge_amount or not session.paymob_checkout_url:
+            return await self.session_service.refresh_paymob_checkout(session, amount=amount)
 
         return session.paymob_checkout_url
 

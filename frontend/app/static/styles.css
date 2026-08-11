@@ -422,6 +422,85 @@ body.paymob-page {
     color: var(--paymob-blue);
 }
 
+/* ── Amount step ── */
+.amount-panel {
+    margin-top: 1.5rem;
+    padding: 1.5rem;
+    background: var(--surface-muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-soft);
+}
+
+.amount-summary {
+    margin: 0 0 1.25rem;
+    padding: 1rem 1.1rem;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.amount-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.35rem 0;
+}
+
+.amount-row dt {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.amount-row dd {
+    margin: 0;
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.amount-row-total {
+    margin-top: 0.35rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--border);
+}
+
+.amount-row-total dt {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.amount-row-total dd {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--paymob-blue);
+}
+
+.amount-choice {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.85rem;
+    margin-bottom: 1.1rem;
+}
+
+.amount-choice .toggle-btn {
+    padding: 0.9rem 0.75rem;
+    text-align: center;
+}
+
+.field-hint {
+    margin-top: 0.4rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.field-hint-error {
+    color: #c0392b;
+    font-weight: 600;
+}
+
 /* ── Form fields ── */
 .form-fields {
     display: grid;
@@ -736,8 +815,13 @@ body.paymob-page {
         padding: 1.15rem;
     }
 
-    .toggle-group {
+    .toggle-group,
+    .amount-choice {
         grid-template-columns: 1fr;
+    }
+
+    .amount-panel {
+        padding: 1.15rem;
     }
 
     .form-fields {

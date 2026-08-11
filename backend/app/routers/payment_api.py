@@ -1,5 +1,6 @@
 """JSON payment APIs consumed by the separate frontend service."""
 
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -19,6 +20,7 @@ class AcceptTermsBody(BaseModel):
     registrant_name: str = ""
     registrant_email: str = ""
     registrant_phone: str = ""
+    payment_amount: Decimal | None = None
 
 
 @router.get("/{token}")
@@ -30,12 +32,20 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
 
     terms_service = TermsService(db)
     context = terms_service.get_terms_context()
+    workflow = session.workflow
+    required_percent = session_service.settings.payment_required_percent
     return {
         "token": token,
         "status": session.status,
         "terms_version": context["terms_version"],
         "terms_html": context["terms_html"],
         "refund_policy_url": context["refund_policy_url"],
+        "currency": workflow.currency,
+        "total_amount": str(workflow.total_amount),
+        "amount_paid": str(workflow.amount_paid),
+        "remaining_balance": str(workflow.remaining_balance),
+        "minimum_amount": str(workflow.minimum_due(required_percent)),
+        "required_percent": str(required_percent),
     }
 
 
@@ -59,5 +69,6 @@ async def accept_payment_terms(
         registrant_name=body.registrant_name,
         registrant_email=body.registrant_email,
         registrant_phone=body.registrant_phone,
+        payment_amount=body.payment_amount,
     )
     return {"checkout_url": checkout_url}

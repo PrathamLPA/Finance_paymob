@@ -79,7 +79,9 @@ class PaymentSessionService:
             expected = workflow.total_amount
 
         existing = self.get_active_session_for_workflow(workflow)
-        if existing and existing.charge_amount == expected:
+        # A customer may have picked a partial amount, so any charge still within the
+        # outstanding balance keeps the existing link usable.
+        if existing and Decimal("0") < existing.charge_amount <= expected:
             return existing
         if existing:
             existing.status = SESSION_EXPIRED
@@ -130,8 +132,15 @@ class PaymentSessionService:
         self.db.refresh(session)
         return session
 
-    async def refresh_paymob_checkout(self, session: PaymentSession) -> str:
+    async def refresh_paymob_checkout(
+        self,
+        session: PaymentSession,
+        *,
+        amount: Decimal | None = None,
+    ) -> str:
         workflow = session.workflow
+        if amount is not None:
+            session.charge_amount = amount
         new_reference = f"WF-{workflow.id}-{uuid.uuid4().hex[:8]}"
         paymob_session = await self.paymob.create_payment_session(
             amount=session.charge_amount,

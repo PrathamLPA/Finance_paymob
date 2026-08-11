@@ -1,5 +1,6 @@
 """Customer-facing payment pages (proxies to backend API)."""
 
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
@@ -12,6 +13,13 @@ router = APIRouter(prefix="/payment", tags=["payment-ui"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
 
 
+def _amount(data: dict, key: str) -> Decimal:
+    try:
+        return Decimal(str(data.get(key) or "0"))
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
 def _form_context(
     request: Request,
     token: str,
@@ -22,7 +30,10 @@ def _form_context(
     registrant_name: str = "",
     registrant_email: str = "",
     registrant_phone: str = "",
+    payment_amount: str = "",
 ) -> dict:
+    remaining = _amount(data, "remaining_balance")
+    minimum = _amount(data, "minimum_amount")
     return {
         "request": request,
         "token": token,
@@ -33,6 +44,13 @@ def _form_context(
         "registrant_name": registrant_name or "",
         "registrant_email": registrant_email or "",
         "registrant_phone": registrant_phone or "",
+        "currency": data.get("currency", "AED"),
+        "total_amount": f"{_amount(data, 'total_amount'):.2f}",
+        "amount_paid": f"{_amount(data, 'amount_paid'):.2f}",
+        "remaining_balance": f"{remaining:.2f}",
+        "minimum_amount": f"{minimum:.2f}",
+        "allows_partial": minimum < remaining,
+        "payment_amount": payment_amount or f"{remaining:.2f}",
         "error": error,
     }
 
@@ -125,6 +143,7 @@ async def accept_terms_and_redirect(
     registrant_name: str | None = Form(default=None),
     registrant_email: str | None = Form(default=None),
     registrant_phone: str | None = Form(default=None),
+    payment_amount: str | None = Form(default=None),
 ) -> Response:
     try:
         data = await get_payment(token)
@@ -135,21 +154,32 @@ async def accept_terms_and_redirect(
             status_code=404,
         )
 
-    if accepted != "yes":
+    def _reject(message: str, status_code: int = 400) -> HTMLResponse:
         return templates.TemplateResponse(
             "terms.html",
             _form_context(
                 request,
                 token,
                 data,
-                error="You must accept the Terms and Conditions to continue.",
+                error=message,
                 course_for=course_for,
                 registrant_name=registrant_name or "",
                 registrant_email=registrant_email or "",
                 registrant_phone=registrant_phone or "",
+                payment_amount=payment_amount or "",
             ),
-            status_code=400,
+            status_code=status_code,
         )
+
+    if accepted != "yes":
+        return _reject("You must accept the Terms and Conditions to continue.")
+
+    chosen_amount: Decimal | None = None
+    if payment_amount and payment_amount.strip():
+        try:
+            chosen_amount = Decimal(payment_amount.strip())
+        except InvalidOperation:
+            return _reject("Please enter a valid payment amount.")
 
     try:
         result = await accept_payment(
@@ -160,22 +190,10 @@ async def accept_terms_and_redirect(
                 "registrant_name": registrant_name or "",
                 "registrant_email": registrant_email or "",
                 "registrant_phone": registrant_phone or "",
+                "payment_amount": str(chosen_amount) if chosen_amount is not None else None,
             },
         )
     except BackendApiError as exc:
-        return templates.TemplateResponse(
-            "terms.html",
-            _form_context(
-                request,
-                token,
-                data,
-                error=exc.detail,
-                course_for=course_for,
-                registrant_name=registrant_name or "",
-                registrant_email=registrant_email or "",
-                registrant_phone=registrant_phone or "",
-            ),
-            status_code=exc.status_code if 400 <= exc.status_code < 500 else 400,
-        )
+        return _reject(exc.detail, exc.status_code if 400 <= exc.status_code < 500 else 400)
 
     return RedirectResponse(url=result["checkout_url"], status_code=303)
