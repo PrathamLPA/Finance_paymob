@@ -84,6 +84,25 @@ def test_hmac_concat_matches_paymob_documented_example():
     )
 
 
+def test_callback_matches_remote_transaction():
+    callback = {
+        "id": 26757933,
+        "amount_cents": 105000,
+        "currency": "AED",
+        "integration_id": 45192,
+        "success": True,
+        "pending": False,
+    }
+    remote = dict(callback)
+    assert MockPaymobClient._callback_matches_remote_transaction(callback, remote) is True
+
+    pending = dict(remote, pending=True)
+    assert MockPaymobClient._callback_matches_remote_transaction(callback, pending) is False
+
+    wrong_amount = dict(remote, amount_cents=1)
+    assert MockPaymobClient._callback_matches_remote_transaction(callback, wrong_amount) is False
+
+
 def test_hmac_concat_accepts_uae_flattened_transaction_fields():
     obj = build_mock_paymob_payload(
         transaction_id=999,

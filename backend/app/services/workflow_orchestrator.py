@@ -355,7 +355,12 @@ class WorkflowOrchestrator:
                 )
 
     async def handle_paymob_payload(self, payload: dict, signature: str | None = None) -> CustomerWorkflow | None:
-        if not self.paymob.verify_webhook(payload, signature):
+        authenticate = getattr(self.paymob, "authenticate_webhook", None)
+        if authenticate is not None:
+            accepted = await authenticate(payload, signature)
+        else:
+            accepted = self.paymob.verify_webhook(payload, signature)
+        if not accepted:
             raise ValueError("Invalid Paymob webhook signature")
 
         data = self.paymob.parse_successful_payment(payload)

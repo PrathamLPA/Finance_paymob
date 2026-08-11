@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # Paymob
     # Temporary diagnostics: dumps the transaction object when HMAC verification fails.
     log_paymob_payloads: bool = False
+    # Temporary: if HMAC fails (UAE Intention body hmac undocumented), confirm via
+    # Paymob Transaction Inquiry using the API key. Turn off once Paymob documents
+    # the Intention HMAC formula and verification matches again.
+    paymob_hmac_fallback_to_inquiry: bool = True
     paymob_api_key: str = ""
     paymob_secret_key: str = ""
     paymob_public_key: str = ""

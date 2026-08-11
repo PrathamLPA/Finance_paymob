@@ -362,6 +362,129 @@ class MockPaymobClient:
             )
         return False
 
+    async def authenticate_webhook(
+        self, payload: dict[str, Any], signature: str | None
+    ) -> bool:
+        """Prefer documented HMAC; fall back to Transaction Inquiry when enabled."""
+        if self.verify_webhook(payload, signature):
+            return True
+
+        if not self.settings.paymob_hmac_fallback_to_inquiry:
+            return False
+
+        obj = extract_transaction_obj(payload)
+        txn_id = obj.get("id")
+        if txn_id is None:
+            logger.warning("Paymob inquiry fallback skipped reason=missing_transaction_id")
+            return False
+
+        try:
+            remote = await self.fetch_transaction(str(txn_id))
+        except Exception:
+            logger.exception(
+                "Paymob inquiry fallback failed | txn=%s", txn_id
+            )
+            return False
+
+        if not remote:
+            logger.warning(
+                "Paymob inquiry fallback rejected | txn=%s reason=not_found", txn_id
+            )
+            return False
+
+        if not self._callback_matches_remote_transaction(obj, remote):
+            logger.warning(
+                "Paymob inquiry fallback rejected | txn=%s reason=callback_mismatch",
+                txn_id,
+            )
+            return False
+
+        logger.warning(
+            "TEMPORARY Paymob HMAC bypassed via Transaction Inquiry | txn=%s "
+            "success=%s pending=%s action=restore_hmac_once_paymob_documents_intention_hmac",
+            txn_id,
+            remote.get("success"),
+            remote.get("pending"),
+        )
+        return True
+
+    async def fetch_transaction(self, transaction_id: str) -> dict[str, Any] | None:
+        """Look up a transaction on Paymob (API Key → auth token → inquiry)."""
+        if self.settings.use_mock_integrations:
+            return None
+        if not self.settings.paymob_api_key:
+            logger.error(
+                "Paymob inquiry unavailable reason=api_key_not_configured "
+                "action=set_PAYMOB_API_KEY"
+            )
+            return None
+
+        base = self.settings.paymob_base_url.rstrip("/")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            token_resp = await client.post(
+                f"{base}/api/auth/tokens",
+                json={"api_key": self.settings.paymob_api_key},
+            )
+            if token_resp.is_error:
+                logger.error(
+                    "Paymob auth token failed (%s): %s",
+                    token_resp.status_code,
+                    token_resp.text[:300],
+                )
+                return None
+            token = token_resp.json().get("token")
+            if not token:
+                logger.error("Paymob auth token response missing token field")
+                return None
+
+            txn_resp = await client.get(
+                f"{base}/api/acceptance/transactions/{transaction_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if txn_resp.is_error:
+                logger.error(
+                    "Paymob transaction inquiry failed (%s): %s",
+                    txn_resp.status_code,
+                    txn_resp.text[:300],
+                )
+                return None
+            data = txn_resp.json()
+            return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _callback_matches_remote_transaction(
+        callback: dict[str, Any], remote: dict[str, Any]
+    ) -> bool:
+        """Require Paymob's stored transaction to match the webhook's core fields."""
+        try:
+            same_id = str(callback.get("id")) == str(remote.get("id"))
+            same_amount = int(callback.get("amount_cents") or 0) == int(
+                remote.get("amount_cents") or 0
+            )
+            same_currency = str(callback.get("currency") or "") == str(
+                remote.get("currency") or ""
+            )
+            same_integration = str(callback.get("integration_id") or "") == str(
+                remote.get("integration_id") or ""
+            )
+            remote_success = remote.get("success") is True or str(
+                remote.get("success")
+            ).lower() == "true"
+            remote_pending = remote.get("pending") is True or str(
+                remote.get("pending")
+            ).lower() == "true"
+        except (TypeError, ValueError):
+            return False
+
+        return (
+            same_id
+            and same_amount
+            and same_currency
+            and same_integration
+            and remote_success
+            and not remote_pending
+        )
+
     def parse_successful_payment(self, payload: dict[str, Any]) -> PaymentWebhookData | None:
         obj = extract_transaction_obj(payload)
         success = obj.get("success")
