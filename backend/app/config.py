@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     bitrix_field_lead_amount: str = ""
     # When true: payment link is only sent after catalog price check + Estimate create
     bitrix_price_gate_enabled: bool = True
+    # Sender address for Bitrix mail.message.send (must exist in mail.mailbox.senders)
+    bitrix_mail_from: str = ""
+    # Used when the lead owner has no department manager email
+    bitrix_approval_fallback_email: str = ""
+    # How long a manager approval link stays valid
+    price_approval_ttl_hours: int = 72
     # Temporary diagnostics: logs fetched lead/deal fields (may contain customer PII).
     log_bitrix_payloads: bool = False
 

@@ -7,7 +7,13 @@ from sqlalchemy import engine_from_config, pool
 
 from app.config import get_settings
 from app.db.session import Base
-from app.models import customer_workflow, payment_session, payment_transaction, terms_acceptance  # noqa: F401
+from app.models import (  # noqa: F401
+    customer_workflow,
+    payment_session,
+    payment_transaction,
+    price_approval,
+    terms_acceptance,
+)
 
 config = context.config
 settings = get_settings()

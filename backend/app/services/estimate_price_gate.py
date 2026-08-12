@@ -54,6 +54,16 @@ class PriceGateResult:
     total_payable: Decimal = Decimal("0.00")
     tax_total: Decimal = Decimal("0.00")
 
+    @property
+    def catalog_minimum_total(self) -> Decimal:
+        total = Decimal("0.00")
+        for line in self.lines:
+            if line.catalog_min_price is None:
+                continue
+            qty = line.quantity if line.quantity > 0 else Decimal("1")
+            total += (line.catalog_min_price * qty).quantize(Decimal("0.01"))
+        return total
+
     def summary_comment(self, *, currency: str, amount_paid: Decimal = Decimal("0.00")) -> str:
         remaining = max(self.total_payable - amount_paid, Decimal("0.00"))
         lines = [

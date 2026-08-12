@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discount approval</title>
+    <link rel="stylesheet" href="/static/styles.css?v=5">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="paymob-page">
+    <div class="page-bg"></div>
+    <header class="site-header">
+        <div class="brand">
+            <div class="brand-icon" aria-hidden="true">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div>
+                <span class="brand-name">Finance Automation</span>
+                <span class="brand-tagline">Manager discount approval</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <article class="terms-card">
+            <div class="card-hero">
+                <div class="card-hero-text">
+                    <div class="card-header">
+                        <h1>Discount approval</h1>
+                        <span class="version-pill">{{ data.status }}</span>
+                    </div>
+                    <p class="card-subtitle">
+                        Review the proposed selling price against the catalog minimum, then approve or reject.
+                    </p>
+                </div>
+            </div>
+
+            {% if error %}
+            <div class="alert alert-error" role="alert">{{ error }}</div>
+            {% endif %}
+
+            {% if result and result.status == 'approved' %}
+            <div class="alert" role="status">
+                Approved. The payment link has been posted to Bitrix.
+                {% if result.payment_url %}
+                <div style="margin-top:0.75rem"><a href="{{ result.payment_url }}">Open payment link</a></div>
+                {% endif %}
+            </div>
+            {% elif result and result.status == 'rejected' %}
+            <div class="alert alert-error" role="status">Rejected. No payment link was sent.</div>
+            {% endif %}
+
+            <section class="amount-panel" aria-label="Approval summary">
+                <dl class="amount-summary">
+                    <div class="amount-row">
+                        <dt>Lead</dt>
+                        <dd>{{ data.lead_title }} (#{{ data.lead_id }})</dd>
+                    </div>
+                    <div class="amount-row">
+                        <dt>Lead owner</dt>
+                        <dd>{{ data.owner_name or '—' }}</dd>
+                    </div>
+                    <div class="amount-row">
+                        <dt>Proposed total</dt>
+                        <dd>{{ data.total_payable }} {{ data.currency }}</dd>
+                    </div>
+                    <div class="amount-row amount-row-total">
+                        <dt>Catalog minimum total</dt>
+                        <dd>{{ data.catalog_minimum_total }} {{ data.currency }}</dd>
+                    </div>
+                </dl>
+
+                <h2 class="section-heading">Courses</h2>
+                <div class="amount-summary">
+                    {% for line in data.lines %}
+                    <div class="amount-row">
+                        <dt>
+                            {{ line.product_name }} × {{ line.quantity }}
+                            {% if line.below_minimum %}<strong> · BELOW MIN</strong>{% endif %}
+                        </dt>
+                        <dd>
+                            sell {{ line.selling_price }} /
+                            min {{ line.catalog_min_price or '—' }}
+                        </dd>
+                    </div>
+                    {% else %}
+                    <p class="field-hint">No course lines on this request.</p>
+                    {% endfor %}
+                </div>
+
+                {% if data.status == 'pending' %}
+                <form method="post" action="/approvals/{{ token }}/decide" class="accept-form" style="margin-top:1.25rem">
+                    <label class="field field-full">
+                        <span class="field-label">Note (optional)</span>
+                        <textarea name="note" class="field-input" rows="3" placeholder="Reason for approve/reject"></textarea>
+                    </label>
+                    <div class="form-footer" style="display:flex;gap:0.75rem;flex-wrap:wrap">
+                        <button type="submit" name="decision" value="approve" class="btn-paymob">Approve &amp; send payment link</button>
+                        <button type="submit" name="decision" value="reject" class="btn-paymob" style="background:#b42318">Reject</button>
+                    </div>
+                </form>
+                {% else %}
+                <p class="field-hint" style="margin-top:1rem">
+                    This request is {{ data.status }}.
+                    {% if data.decision_note %}Note: {{ data.decision_note }}{% endif %}
+                </p>
+                {% endif %}
+            </section>
+        </article>
+    </main>
+</body>
+</html>

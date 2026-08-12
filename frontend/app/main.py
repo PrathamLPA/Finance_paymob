@@ -7,13 +7,14 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app.routers import payment
+from app.routers import approvals, payment
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level)
 
 app = FastAPI(title=settings.app_name)
 app.include_router(payment.router)
+app.include_router(approvals.router)
 
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
@@ -29,6 +30,7 @@ async def root() -> dict:
         "message": "Open a payment link: /payment/{token}",
         "health": "/health",
         "thank_you": "/payment/thank-you",
+        "approvals": "/approvals/{token}",
         "api_base_url": settings.api_base_url,
     }
 

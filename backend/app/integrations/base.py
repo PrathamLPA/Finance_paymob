@@ -126,6 +126,19 @@ class BitrixIntegration(Protocol):
         comments: str = "",
     ) -> int: ...
 
+    async def get_user(self, user_id: int) -> dict[str, Any] | None: ...
+
+    async def resolve_manager_for_user(self, user_id: int) -> dict[str, Any] | None: ...
+
+    async def send_mail(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        body: str,
+        from_email: str | None = None,
+    ) -> bool: ...
+
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal: ...
 
     def extract_customer_details(self, lead: dict[str, Any]) -> tuple[str | None, str | None]: ...

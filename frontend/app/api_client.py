@@ -38,6 +38,29 @@ async def accept_payment(token: str, payload: dict[str, Any]) -> dict[str, Any]:
     return response.json()
 
 
+async def get_approval(token: str) -> dict[str, Any]:
+    settings = get_settings()
+    url = f"{settings.api_base_url.rstrip('/')}/api/approvals/{token}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url)
+    if response.status_code >= 400:
+        detail = _extract_detail(response)
+        raise BackendApiError(response.status_code, detail)
+    return response.json()
+
+
+async def decide_approval(token: str, *, approve: bool, note: str = "") -> dict[str, Any]:
+    settings = get_settings()
+    action = "approve" if approve else "reject"
+    url = f"{settings.api_base_url.rstrip('/')}/api/approvals/{token}/{action}"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(url, json={"note": note})
+    if response.status_code >= 400:
+        detail = _extract_detail(response)
+        raise BackendApiError(response.status_code, detail)
+    return response.json()
+
+
 def _extract_detail(response: httpx.Response) -> str:
     try:
         data = response.json()

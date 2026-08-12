@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import dev, health, payment_api, webhooks
+from app.routers import approval_api, dev, health, payment_api, webhooks
 
 settings = get_settings()
 logging.basicConfig(
@@ -93,4 +93,5 @@ if origins:
 app.include_router(health.router)
 app.include_router(webhooks.router)
 app.include_router(payment_api.router)
+app.include_router(approval_api.router)
 app.include_router(dev.router)

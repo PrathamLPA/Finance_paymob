@@ -16,6 +16,8 @@ from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import SOURCE_FINANCE_DEAL, SOURCE_LEAD, PaymentSession
 from app.models.payment_transaction import PaymentTransaction
 from app.services.estimate_price_gate import (
+    PriceGateResult,
+    ProductLine,
     evaluate_price_gate,
     product_rows_for_estimate,
 )
@@ -23,8 +25,31 @@ from app.services.invoice_service import InvoiceService
 from app.services.paymob_mapper import apply_paymob_fields
 from app.services.payment_session_service import PaymentSessionService
 from app.services.payment_threshold_service import PaymentThresholdService
+from app.services.price_approval_service import PriceApprovalPending, PriceApprovalService
 
 logger = logging.getLogger(__name__)
+
+
+def _format_price_lines(gate: PriceGateResult) -> str:
+    if not gate.lines:
+        return "none"
+    parts = []
+    for line in gate.lines:
+        catalog = (
+            f"{line.catalog_min_price:.2f}"
+            if line.catalog_min_price is not None
+            else "missing"
+        )
+        if line.catalog_min_price is None:
+            status = "no_catalog"
+        elif line.is_below_minimum:
+            status = "below_min"
+        else:
+            status = "ok"
+        parts.append(
+            f"{line.product_name}[sell={line.selling_price:.2f} min={catalog} qty={line.quantity:g} {status}]"
+        )
+    return "; ".join(parts)
 
 
 class WorkflowOrchestrator:
@@ -37,6 +62,7 @@ class WorkflowOrchestrator:
         self.session_service = PaymentSessionService(db, self.settings)
         self.invoice_service = InvoiceService(db, self.settings)
         self.threshold_service = PaymentThresholdService(db, self.settings)
+        self.approval_service = PriceApprovalService(db, self.settings)
 
     def get_or_create_workflow(self, lead_id: int) -> CustomerWorkflow:
         workflow = self.db.scalar(
@@ -133,13 +159,33 @@ class WorkflowOrchestrator:
         *,
         lead: dict | None = None,
     ) -> None:
-        """Block underpriced leads; create a Bitrix Estimate when prices are valid."""
+        """On payment stage: compare catalog prices, create Estimate, then allow payment link."""
+        lead_id = workflow.bitrix_lead_id
         if not self.settings.bitrix_price_gate_enabled:
+            logger.info(
+                "SKIP price gate + estimate | lead_id=%s reason=BITRIX_PRICE_GATE_ENABLED_false",
+                lead_id,
+            )
             return
 
-        lead_id = workflow.bitrix_lead_id
         lead = lead or await self.bitrix.get_lead(lead_id)
+        title = str(lead.get("TITLE") or lead.get("title") or f"Lead {lead_id}")
+        currency = workflow.currency or self.settings.default_currency
+
+        logger.info(
+            "START payment-stage checks | lead_id=%s title=%s amount=%s %s gate=on",
+            lead_id,
+            title,
+            workflow.total_amount,
+            currency,
+        )
+
         rows = await self.bitrix.list_product_rows(owner_type="L", owner_id=lead_id)
+        logger.info(
+            "Products loaded | lead_id=%s count=%s",
+            lead_id,
+            len(rows),
+        )
 
         catalog_prices: dict[int, Decimal] = {}
         for row in rows:
@@ -151,14 +197,47 @@ class WorkflowOrchestrator:
             if product_id <= 0 or product_id in catalog_prices:
                 continue
             price = await self.bitrix.get_catalog_min_price(product_id)
+            name = (
+                row.get("productName")
+                or row.get("PRODUCT_NAME")
+                or f"product:{product_id}"
+            )
             if price is not None:
                 catalog_prices[product_id] = price
+                logger.info(
+                    "Catalog price | lead_id=%s product_id=%s name=%s min=%s %s",
+                    lead_id,
+                    product_id,
+                    name,
+                    f"{price:.2f}",
+                    currency,
+                )
+            else:
+                logger.warning(
+                    "Catalog price missing | lead_id=%s product_id=%s name=%s",
+                    lead_id,
+                    product_id,
+                    name,
+                )
 
         gate = evaluate_price_gate(rows, catalog_prices)
-        currency = workflow.currency or self.settings.default_currency
         comment = gate.summary_comment(currency=currency, amount_paid=workflow.amount_paid)
+        logger.info(
+            "Price comparison | lead_id=%s result=%s total=%s catalog_min_total=%s lines=%s",
+            lead_id,
+            "PASS" if gate.ok else "FAIL",
+            f"{gate.total_payable:.2f}",
+            f"{gate.catalog_minimum_total:.2f}",
+            _format_price_lines(gate),
+        )
+        if gate.reason and not gate.ok:
+            logger.info(
+                "Price comparison detail | lead_id=%s reason=%s",
+                lead_id,
+                gate.reason,
+            )
 
-        if not gate.ok:
+        if not gate.ok and (gate.missing_catalog or not gate.lines):
             try:
                 await self.bitrix.add_timeline_comment(
                     entity_type="LEAD",
@@ -170,23 +249,92 @@ class WorkflowOrchestrator:
                     "Failed to post price-gate block comment on lead %s", lead_id
                 )
             logger.warning(
-                "Price gate blocked payment link | lead_id=%s reason=%s",
+                "FAIL payment-stage | lead_id=%s step=products_or_catalog reason=%s",
                 lead_id,
                 gate.reason,
             )
             raise ValueError(gate.reason)
 
-        # Prefer product-derived total when the gate produced one.
+        # Prefer product-derived total whenever we have product lines.
         if gate.total_payable > 0:
             workflow.total_amount = gate.total_payable
             self.db.commit()
             self.db.refresh(workflow)
 
+        # Always create/reuse Estimate once products are present (pass or below-min).
+        await self._ensure_estimate_for_gate(
+            workflow,
+            lead=lead,
+            gate_total=gate.total_payable,
+            gate_tax=gate.tax_total,
+            product_rows=product_rows_for_estimate(gate.lines),
+            comment=comment,
+            awaiting_approval=not gate.ok,
+        )
+
+        if not gate.ok:
+            logger.info(
+                "Estimate ready — awaiting discount approval | lead_id=%s estimate_id=%s",
+                lead_id,
+                workflow.bitrix_estimate_id,
+            )
+            approval = await self.approval_service.request_manager_approval(
+                workflow, gate, lead=lead
+            )
+            approval_url = self.approval_service.build_approval_url(approval.token)
+            logger.warning(
+                "PENDING manager approval | lead_id=%s estimate_id=%s approval_id=%s "
+                "manager=%s selling=%s catalog_min=%s url=%s",
+                lead_id,
+                workflow.bitrix_estimate_id,
+                approval.id,
+                approval.manager_email,
+                approval.total_payable,
+                approval.catalog_minimum_total,
+                approval_url,
+            )
+            raise PriceApprovalPending(
+                (
+                    "Selling price is below the catalog minimum. "
+                    f"Manager approval requested ({approval.manager_email})."
+                ),
+                approval_url=approval_url,
+                approval_id=approval.id,
+            )
+
+        logger.info(
+            "OK payment-stage checks | lead_id=%s estimate_id=%s total=%s %s next=send_payment_link",
+            lead_id,
+            workflow.bitrix_estimate_id,
+            gate.total_payable,
+            currency,
+        )
+
+    async def _ensure_estimate_for_gate(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        lead: dict,
+        gate_total: Decimal,
+        gate_tax: Decimal,
+        product_rows: list[dict],
+        comment: str,
+        awaiting_approval: bool = False,
+    ) -> None:
+        lead_id = workflow.bitrix_lead_id
+        currency = workflow.currency or self.settings.default_currency
+        next_step = (
+            "awaiting manager approval"
+            if awaiting_approval
+            else "payment link will be sent"
+        )
+
         if workflow.bitrix_estimate_id:
             logger.info(
-                "Reusing Bitrix estimate %s for lead %s",
-                workflow.bitrix_estimate_id,
+                "SKIP new estimate | lead_id=%s estimate_id=%s reason=already_exists next=%s",
                 lead_id,
+                workflow.bitrix_estimate_id,
+                next_step,
             )
             try:
                 await self.bitrix.add_timeline_comment(
@@ -195,7 +343,7 @@ class WorkflowOrchestrator:
                     comment=(
                         f"{comment}\n\n"
                         f"Estimate already exists: #{workflow.bitrix_estimate_id}. "
-                        "Payment link will be sent."
+                        f"{next_step.capitalize()}."
                     ),
                 )
             except Exception:
@@ -211,14 +359,22 @@ class WorkflowOrchestrator:
             contact_id = None
 
         title = str(lead.get("TITLE") or lead.get("title") or f"Estimate for lead {lead_id}")
+        logger.info(
+            "Creating Bitrix estimate | lead_id=%s title=%s total=%s tax=%s products=%s",
+            lead_id,
+            title,
+            f"{gate_total:.2f}",
+            f"{gate_tax:.2f}",
+            len(product_rows),
+        )
         estimate_id = await self.bitrix.create_estimate(
             lead_id=lead_id,
             title=f"Estimate — {title}",
             currency=currency,
-            opportunity=gate.total_payable,
-            tax_value=gate.tax_total,
+            opportunity=gate_total,
+            tax_value=gate_tax,
             contact_id=contact_id,
-            product_rows=product_rows_for_estimate(gate.lines),
+            product_rows=product_rows,
             comments=comment,
         )
         workflow.bitrix_estimate_id = estimate_id
@@ -231,7 +387,7 @@ class WorkflowOrchestrator:
                 entity_id=lead_id,
                 comment=(
                     f"{comment}\n\n"
-                    f"Estimate #{estimate_id} created. Payment link will be sent."
+                    f"Estimate #{estimate_id} created. {next_step.capitalize()}."
                 ),
             )
         except Exception:
@@ -240,11 +396,12 @@ class WorkflowOrchestrator:
             )
 
         logger.info(
-            "Price gate passed | lead_id=%s estimate_id=%s total=%s %s",
+            "OK estimate created | lead_id=%s estimate_id=%s total=%s %s next=%s",
             lead_id,
             estimate_id,
-            gate.total_payable,
+            f"{gate_total:.2f}",
             currency,
+            next_step,
         )
 
     async def initiate_payment_from_lead(
@@ -255,6 +412,7 @@ class WorkflowOrchestrator:
         customer_name: str | None = None,
         total_amount: Decimal | None = None,
         lead_data: dict | None = None,
+        skip_price_gate: bool = False,
     ) -> PaymentSession:
         workflow = self.get_or_create_workflow(lead_id)
         explicit_override = (
@@ -271,9 +429,10 @@ class WorkflowOrchestrator:
             self.db.refresh(workflow)
         else:
             await self.sync_workflow_from_lead(workflow, lead_data)
-            await self._enforce_price_gate_and_create_estimate(
-                workflow, lead=lead_data
-            )
+            if not skip_price_gate:
+                await self._enforce_price_gate_and_create_estimate(
+                    workflow, lead=lead_data
+                )
 
         if workflow.total_amount <= 0:
             raise ValueError(
@@ -295,8 +454,87 @@ class WorkflowOrchestrator:
             workflow.last_reminder_at = datetime.now(timezone.utc)
             self.db.commit()
 
-        logger.info("Payment link created for lead %s — token %s...", lead_id, session.token[:8])
+        logger.info(
+            "Payment link created for lead %s — estimate_id=%s token %s...",
+            lead_id,
+            workflow.bitrix_estimate_id or "-",
+            session.token[:8],
+        )
         return session
+
+    async def complete_approved_payment(self, token: str, *, note: str | None = None) -> PaymentSession:
+        """Manager approved a below-min price — reuse Estimate and send payment link."""
+        logger.info("START manager approve | token=%s...", token[:8])
+        approval = await self.approval_service.decide(token, approve=True, note=note)
+        workflow = self.get_or_create_workflow(approval.bitrix_lead_id)
+        lead = await self.bitrix.get_lead(approval.bitrix_lead_id)
+        await self.sync_workflow_from_lead(workflow, lead)
+
+        workflow.total_amount = Decimal(approval.total_payable)
+        workflow.currency = approval.currency or self.settings.default_currency
+        self.db.commit()
+        self.db.refresh(workflow)
+
+        lines_raw = (approval.lines_payload or {}).get("lines") or []
+        product_lines: list[ProductLine] = []
+        for row in lines_raw:
+            catalog = row.get("catalog_min_price")
+            product_lines.append(
+                ProductLine(
+                    product_id=int(row.get("product_id") or 0),
+                    product_name=str(row.get("product_name") or "Course"),
+                    quantity=Decimal(str(row.get("quantity") or "1")),
+                    selling_price=Decimal(str(row.get("selling_price") or "0")),
+                    tax_rate=Decimal(str(row.get("tax_rate") or "0")),
+                    tax_included=bool(row.get("tax_included")),
+                    catalog_min_price=Decimal(str(catalog)) if catalog is not None else None,
+                )
+            )
+        tax_total = Decimal("0.00")
+        for line in product_lines:
+            if line.tax_included or line.tax_rate <= 0:
+                continue
+            qty = line.quantity if line.quantity > 0 else Decimal("1")
+            base = (line.selling_price * qty).quantize(Decimal("0.01"))
+            tax_total += (base * line.tax_rate / Decimal("100")).quantize(Decimal("0.01"))
+
+        comment = (
+            f"Manager-approved discount\n"
+            f"Total payable: {workflow.total_amount:.2f} {workflow.currency}\n"
+            f"Catalog minimum total: {approval.catalog_minimum_total} {workflow.currency}"
+        )
+        await self._ensure_estimate_for_gate(
+            workflow,
+            lead=lead,
+            gate_total=workflow.total_amount,
+            gate_tax=tax_total,
+            product_rows=product_rows_for_estimate(product_lines),
+            comment=comment,
+            awaiting_approval=False,
+        )
+        logger.info(
+            "OK manager approve | lead_id=%s estimate_id=%s approval_id=%s next=send_payment_link",
+            approval.bitrix_lead_id,
+            workflow.bitrix_estimate_id,
+            approval.id,
+        )
+        return await self.initiate_payment_from_lead(
+            approval.bitrix_lead_id,
+            lead_data=lead,
+            skip_price_gate=True,
+        )
+
+    async def reject_price_approval(self, token: str, *, note: str | None = None) -> None:
+        logger.info("START manager reject | token=%s...", token[:8])
+        approval = await self.approval_service.decide(token, approve=False, note=note)
+        workflow = self.get_or_create_workflow(approval.bitrix_lead_id)
+        logger.warning(
+            "OK manager reject | lead_id=%s approval_id=%s estimate_id=%s note=%s",
+            approval.bitrix_lead_id,
+            approval.id,
+            workflow.bitrix_estimate_id or "-",
+            (note or "")[:80],
+        )
 
     async def initiate_payment_from_finance_deal(self, finance_deal_id: int) -> PaymentSession:
         workflow = self.get_workflow_by_finance_deal(finance_deal_id)

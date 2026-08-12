@@ -46,6 +46,9 @@ class MockBitrixClient:
         self._mock_product_rows: dict[tuple[str, int], list[dict[str, Any]]] = {}
         self._mock_catalog_prices: dict[int, Decimal] = {}
         self._mock_estimates: dict[int, dict[str, Any]] = {}
+        self._mock_users: dict[int, dict[str, Any]] = {}
+        self._mock_department_managers: dict[int, list[int]] = {}
+        self._mock_mail_sent: list[dict[str, Any]] = []
         self._next_estimate_id = self.MOCK_ESTIMATE_BASE
 
     def seed_lead(self, lead_id: int, *, email: str, name: str, amount: Decimal) -> None:
@@ -59,6 +62,7 @@ class MockBitrixClient:
             "CURRENCY_ID": self.settings.default_currency,
             "STATUS_ID": self.settings.bitrix_lead_payment_stage_id,
             "CONTACT_ID": None,
+            "ASSIGNED_BY_ID": 101,
         }
 
     def seed_catalog_product(self, product_id: int, *, name: str, price: Decimal) -> None:
@@ -67,6 +71,29 @@ class MockBitrixClient:
 
     def seed_lead_products(self, lead_id: int, rows: list[dict[str, Any]]) -> None:
         self._mock_product_rows[("L", lead_id)] = [dict(row) for row in rows]
+
+    def seed_user(
+        self,
+        user_id: int,
+        *,
+        email: str,
+        name: str,
+        department_ids: list[int] | None = None,
+    ) -> None:
+        parts = name.split()
+        self._mock_users[user_id] = {
+            "ID": user_id,
+            "EMAIL": email,
+            "NAME": parts[0] if parts else name,
+            "LAST_NAME": " ".join(parts[1:]) if len(parts) > 1 else "",
+            "UF_DEPARTMENT": department_ids or [],
+            "ACTIVE": True,
+        }
+
+    def seed_department_manager(self, department_id: int, manager_user_id: int) -> None:
+        self._mock_department_managers.setdefault(department_id, [])
+        if manager_user_id not in self._mock_department_managers[department_id]:
+            self._mock_department_managers[department_id].append(manager_user_id)
 
     async def get_lead(self, lead_id: int) -> dict[str, Any]:
         if lead_id in self._mock_leads:
@@ -237,6 +264,44 @@ class MockBitrixClient:
             currency,
         )
         return estimate_id
+
+    async def get_user(self, user_id: int) -> dict[str, Any] | None:
+        return self._mock_users.get(user_id)
+
+    async def resolve_manager_for_user(self, user_id: int) -> dict[str, Any] | None:
+        user = await self.get_user(user_id)
+        if not user:
+            return None
+        departments = user.get("UF_DEPARTMENT") or []
+        if not isinstance(departments, list):
+            departments = [departments]
+        for dept in departments:
+            try:
+                dept_id = int(dept)
+            except (TypeError, ValueError):
+                continue
+            for manager_id in self._mock_department_managers.get(dept_id, []):
+                if manager_id == user_id:
+                    continue
+                manager = await self.get_user(manager_id)
+                if manager and manager.get("EMAIL"):
+                    return manager
+        return None
+
+    async def send_mail(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        body: str,
+        from_email: str | None = None,
+    ) -> bool:
+        sender = from_email or self.settings.bitrix_mail_from or "noreply@bitrix.local"
+        self._mock_mail_sent.append(
+            {"from": sender, "to": to_email, "subject": subject, "body": body}
+        )
+        logger.info("[MockBitrix] Mail '%s' to %s from %s", subject, to_email, sender)
+        return True
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
         return extract_amount(lead, self.settings.bitrix_field_lead_amount)
@@ -521,6 +586,137 @@ class RealBitrixClient:
             currency,
         )
         return estimate_id
+
+    async def get_user(self, user_id: int) -> dict[str, Any] | None:
+        result = await self._call("user.get", {"ID": user_id})
+        users = result.get("result") if isinstance(result, dict) and "result" in result else result
+        if isinstance(users, list) and users:
+            return users[0] if isinstance(users[0], dict) else None
+        if isinstance(users, dict) and users.get("ID"):
+            return users
+        # Some portals return the user object directly as the _call result.
+        if isinstance(result, dict) and (result.get("ID") or result.get("EMAIL")):
+            return result
+        return None
+
+    async def resolve_manager_for_user(self, user_id: int) -> dict[str, Any] | None:
+        user = await self.get_user(user_id)
+        if not user:
+            return None
+        departments = user.get("UF_DEPARTMENT") or []
+        if not isinstance(departments, list):
+            departments = [departments]
+        dept_ids = []
+        for dept in departments:
+            try:
+                dept_ids.append(int(dept))
+            except (TypeError, ValueError):
+                continue
+        if not dept_ids:
+            return None
+
+        try:
+            managers_by_dept = await self._call(
+                "im.department.managers.get",
+                {"ID": dept_ids, "USER_DATA": "Y"},
+            )
+        except Exception:
+            logger.exception("im.department.managers.get failed for user %s", user_id)
+            return None
+
+        raw = managers_by_dept.get("result") if isinstance(managers_by_dept, dict) else managers_by_dept
+        if not isinstance(raw, dict):
+            raw = managers_by_dept if isinstance(managers_by_dept, dict) else {}
+
+        for _dept, managers in raw.items():
+            if _dept in ("result", "time"):
+                continue
+            if not isinstance(managers, list):
+                continue
+            for manager in managers:
+                if isinstance(manager, dict):
+                    try:
+                        mid = int(manager.get("id") or manager.get("ID") or 0)
+                    except (TypeError, ValueError):
+                        mid = 0
+                    if mid == user_id:
+                        continue
+                    email = manager.get("email") or manager.get("EMAIL")
+                    if email:
+                        return {
+                            "ID": mid,
+                            "EMAIL": email,
+                            "NAME": manager.get("first_name") or manager.get("NAME") or "",
+                            "LAST_NAME": manager.get("last_name") or manager.get("LAST_NAME") or "",
+                        }
+                else:
+                    try:
+                        mid = int(manager)
+                    except (TypeError, ValueError):
+                        continue
+                    if mid == user_id:
+                        continue
+                    fetched = await self.get_user(mid)
+                    if fetched and fetched.get("EMAIL"):
+                        return fetched
+        return None
+
+    async def send_mail(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        body: str,
+        from_email: str | None = None,
+    ) -> bool:
+        sender = (from_email or self.settings.bitrix_mail_from or "").strip()
+        if not sender:
+            try:
+                senders = await self._call("mail.mailbox.senders", {})
+                items = senders.get("result") if isinstance(senders, dict) else senders
+                if isinstance(items, dict):
+                    items = items.get("senders") or items.get("result") or []
+                if isinstance(items, list) and items:
+                    first = items[0]
+                    if isinstance(first, dict):
+                        sender = str(first.get("email") or first.get("EMAIL") or "")
+                    else:
+                        sender = str(first)
+            except Exception:
+                logger.exception("mail.mailbox.senders failed")
+        if not sender:
+            logger.error(
+                "Bitrix mail send skipped reason=no_from_address "
+                "action=set_BITRIX_MAIL_FROM"
+            )
+            return False
+
+        try:
+            result = await self._call(
+                "mail.message.send",
+                {
+                    "from": sender,
+                    "to": [to_email],
+                    "subject": subject,
+                    "body": body,
+                },
+            )
+        except Exception:
+            logger.exception("mail.message.send failed to=%s", to_email)
+            return False
+
+        success = True
+        if isinstance(result, dict):
+            if "success" in result:
+                success = bool(result.get("success"))
+            nested = result.get("result")
+            if isinstance(nested, dict) and "success" in nested:
+                success = bool(nested.get("success"))
+        if success:
+            logger.info("Bitrix mail sent '%s' to %s from %s", subject, to_email, sender)
+        else:
+            logger.error("Bitrix mail rejected for %s: %s", to_email, result)
+        return success
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
         return extract_amount(lead, self.settings.bitrix_field_lead_amount)

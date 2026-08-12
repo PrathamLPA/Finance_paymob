@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db.session import get_db
 from app.integrations.paymob import extract_transaction_obj
+from app.services.price_approval_service import PriceApprovalPending
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -312,6 +313,16 @@ async def bitrix24_webhook(
                 "stage_id": stage_id or None,
             }
 
+        logger.info(
+            "START generate-payment-link | lead_id=%s title=%s stage=%s amount=%s %s email=%s",
+            lead_id,
+            summary["title"],
+            stage_id,
+            summary["opportunity"],
+            summary["currency"],
+            summary["email"],
+        )
+
         workflow = orchestrator.get_or_create_workflow(lead_id)
         # Re-announce the link when the lead re-enters the stage, not on every edit.
         entered_stage = (workflow.bitrix_lead_stage_id or "") != stage_id
@@ -326,9 +337,11 @@ async def bitrix24_webhook(
                 force=entered_stage,
             )
             logger.info(
-                "SKIP new link | lead_id=%s title=%s | reason=link_already_active commented=%s url=%s",
+                "SKIP new link | lead_id=%s title=%s | reason=link_already_active "
+                "estimate_id=%s commented=%s url=%s",
                 lead_id,
                 summary["title"],
+                workflow.bitrix_estimate_id or "-",
                 "yes" if commented else "already",
                 payment_url,
             )
@@ -341,6 +354,27 @@ async def bitrix24_webhook(
 
         try:
             session = await orchestrator.initiate_payment_from_lead(lead_id, lead_data=lead)
+        except PriceApprovalPending as exc:
+            workflow = orchestrator.get_or_create_workflow(lead_id)
+            logger.warning(
+                "PENDING manager approval | lead_id=%s title=%s amount=%s estimate_id=%s "
+                "approval_id=%s url=%s | %s",
+                lead_id,
+                summary["title"],
+                summary["opportunity"],
+                workflow.bitrix_estimate_id or "-",
+                exc.approval_id,
+                exc.approval_url,
+                exc,
+            )
+            return {
+                "status": "pending_approval",
+                "reason": str(exc),
+                "lead_id": lead_id,
+                "estimate_id": workflow.bitrix_estimate_id,
+                "approval_id": exc.approval_id,
+                "approval_url": exc.approval_url,
+            }
         except ValueError as exc:
             logger.warning(
                 "FAIL payment link | lead_id=%s title=%s amount=%s | reason=%s",
@@ -351,12 +385,15 @@ async def bitrix24_webhook(
             )
             return {"status": "error", "reason": str(exc), "lead_id": lead_id}
 
+        workflow = orchestrator.get_or_create_workflow(lead_id)
         payment_url = orchestrator.session_service.build_payment_url(session.token)
         logger.info(
-            "OK payment link created | lead_id=%s title=%s stage=%s amount=%s %s email=%s url=%s",
+            "OK payment link created | lead_id=%s title=%s stage=%s estimate_id=%s "
+            "amount=%s %s email=%s url=%s",
             lead_id,
             summary["title"],
             stage_id,
+            workflow.bitrix_estimate_id or "-",
             summary["opportunity"],
             summary["currency"],
             summary["email"],

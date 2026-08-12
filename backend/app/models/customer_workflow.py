@@ -14,6 +14,7 @@ from app.db.session import Base
 if TYPE_CHECKING:
     from app.models.payment_session import PaymentSession
     from app.models.payment_transaction import PaymentTransaction
+    from app.models.price_approval import PriceApproval
 
 MINIMUM_PAYMENT = Decimal("1.00")
 
@@ -60,6 +61,9 @@ class CustomerWorkflow(Base):
         back_populates="workflow", cascade="all, delete-orphan"
     )
     transactions: Mapped[list[PaymentTransaction]] = relationship(
+        back_populates="workflow", cascade="all, delete-orphan"
+    )
+    price_approvals: Mapped[list[PriceApproval]] = relationship(
         back_populates="workflow", cascade="all, delete-orphan"
     )
 
