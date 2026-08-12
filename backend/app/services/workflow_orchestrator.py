@@ -15,6 +15,10 @@ from app.integrations.factory import get_bitrix_client, get_email_client, get_pa
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import SOURCE_FINANCE_DEAL, SOURCE_LEAD, PaymentSession
 from app.models.payment_transaction import PaymentTransaction
+from app.services.estimate_price_gate import (
+    evaluate_price_gate,
+    product_rows_for_estimate,
+)
 from app.services.invoice_service import InvoiceService
 from app.services.paymob_mapper import apply_paymob_fields
 from app.services.payment_session_service import PaymentSessionService
@@ -123,6 +127,126 @@ class WorkflowOrchestrator:
         self.db.refresh(workflow)
         return workflow
 
+    async def _enforce_price_gate_and_create_estimate(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        lead: dict | None = None,
+    ) -> None:
+        """Block underpriced leads; create a Bitrix Estimate when prices are valid."""
+        if not self.settings.bitrix_price_gate_enabled:
+            return
+
+        lead_id = workflow.bitrix_lead_id
+        lead = lead or await self.bitrix.get_lead(lead_id)
+        rows = await self.bitrix.list_product_rows(owner_type="L", owner_id=lead_id)
+
+        catalog_prices: dict[int, Decimal] = {}
+        for row in rows:
+            raw_id = row.get("productId") if "productId" in row else row.get("PRODUCT_ID")
+            try:
+                product_id = int(raw_id or 0)
+            except (TypeError, ValueError):
+                product_id = 0
+            if product_id <= 0 or product_id in catalog_prices:
+                continue
+            price = await self.bitrix.get_catalog_min_price(product_id)
+            if price is not None:
+                catalog_prices[product_id] = price
+
+        gate = evaluate_price_gate(rows, catalog_prices)
+        currency = workflow.currency or self.settings.default_currency
+        comment = gate.summary_comment(currency=currency, amount_paid=workflow.amount_paid)
+
+        if not gate.ok:
+            try:
+                await self.bitrix.add_timeline_comment(
+                    entity_type="LEAD",
+                    entity_id=lead_id,
+                    comment=comment,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to post price-gate block comment on lead %s", lead_id
+                )
+            logger.warning(
+                "Price gate blocked payment link | lead_id=%s reason=%s",
+                lead_id,
+                gate.reason,
+            )
+            raise ValueError(gate.reason)
+
+        # Prefer product-derived total when the gate produced one.
+        if gate.total_payable > 0:
+            workflow.total_amount = gate.total_payable
+            self.db.commit()
+            self.db.refresh(workflow)
+
+        if workflow.bitrix_estimate_id:
+            logger.info(
+                "Reusing Bitrix estimate %s for lead %s",
+                workflow.bitrix_estimate_id,
+                lead_id,
+            )
+            try:
+                await self.bitrix.add_timeline_comment(
+                    entity_type="LEAD",
+                    entity_id=lead_id,
+                    comment=(
+                        f"{comment}\n\n"
+                        f"Estimate already exists: #{workflow.bitrix_estimate_id}. "
+                        "Payment link will be sent."
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to post estimate reuse comment on lead %s", lead_id
+                )
+            return
+
+        contact_raw = lead.get("CONTACT_ID") or lead.get("contactId")
+        try:
+            contact_id = int(contact_raw) if contact_raw not in (None, "", "0") else None
+        except (TypeError, ValueError):
+            contact_id = None
+
+        title = str(lead.get("TITLE") or lead.get("title") or f"Estimate for lead {lead_id}")
+        estimate_id = await self.bitrix.create_estimate(
+            lead_id=lead_id,
+            title=f"Estimate — {title}",
+            currency=currency,
+            opportunity=gate.total_payable,
+            tax_value=gate.tax_total,
+            contact_id=contact_id,
+            product_rows=product_rows_for_estimate(gate.lines),
+            comments=comment,
+        )
+        workflow.bitrix_estimate_id = estimate_id
+        self.db.commit()
+        self.db.refresh(workflow)
+
+        try:
+            await self.bitrix.add_timeline_comment(
+                entity_type="LEAD",
+                entity_id=lead_id,
+                comment=(
+                    f"{comment}\n\n"
+                    f"Estimate #{estimate_id} created. Payment link will be sent."
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to post estimate-created comment on lead %s", lead_id
+            )
+
+        logger.info(
+            "Price gate passed | lead_id=%s estimate_id=%s total=%s %s",
+            lead_id,
+            estimate_id,
+            gate.total_payable,
+            currency,
+        )
+
     async def initiate_payment_from_lead(
         self,
         lead_id: int,
@@ -133,7 +257,12 @@ class WorkflowOrchestrator:
         lead_data: dict | None = None,
     ) -> PaymentSession:
         workflow = self.get_or_create_workflow(lead_id)
-        if customer_email and customer_name and total_amount is not None:
+        explicit_override = (
+            customer_email is not None
+            and customer_name is not None
+            and total_amount is not None
+        )
+        if explicit_override:
             workflow.customer_email = customer_email
             workflow.customer_name = customer_name
             workflow.total_amount = total_amount
@@ -142,6 +271,9 @@ class WorkflowOrchestrator:
             self.db.refresh(workflow)
         else:
             await self.sync_workflow_from_lead(workflow, lead_data)
+            await self._enforce_price_gate_and_create_estimate(
+                workflow, lead=lead_data
+            )
 
         if workflow.total_amount <= 0:
             raise ValueError(

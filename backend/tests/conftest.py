@@ -19,6 +19,8 @@ os.environ["BITRIX_WEBHOOK_SECRET"] = ""
 os.environ["REMINDER_SCHEDULER_ENABLED"] = "false"
 os.environ["PAYMENT_REQUIRED_PERCENT"] = "50"
 os.environ["BITRIX_FINANCE_THRESHOLD_MET_STAGE_ID"] = "FINANCE_THRESHOLD_MET"
+# Existing fixtures seed amount-only leads; price gate is covered in dedicated tests.
+os.environ["BITRIX_PRICE_GATE_ENABLED"] = "false"
 
 from app.config import get_settings
 from app.db.session import Base, get_db

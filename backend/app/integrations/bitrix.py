@@ -36,12 +36,17 @@ class MockBitrixClient:
     MOCK_SALES_DEAL_BASE = 900001
     MOCK_FINANCE_DEAL_BASE = 900002
     MOCK_B2C_DEAL_BASE = 900003
+    MOCK_ESTIMATE_BASE = 700000
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
         self._mock_leads: dict[int, dict[str, Any]] = {}
         self._mock_deals: dict[int, dict[str, Any]] = {}
         self._mock_comments: dict[tuple[str, int], list[dict[str, Any]]] = {}
+        self._mock_product_rows: dict[tuple[str, int], list[dict[str, Any]]] = {}
+        self._mock_catalog_prices: dict[int, Decimal] = {}
+        self._mock_estimates: dict[int, dict[str, Any]] = {}
+        self._next_estimate_id = self.MOCK_ESTIMATE_BASE
 
     def seed_lead(self, lead_id: int, *, email: str, name: str, amount: Decimal) -> None:
         self._mock_leads[lead_id] = {
@@ -53,7 +58,15 @@ class MockBitrixClient:
             "OPPORTUNITY": str(amount),
             "CURRENCY_ID": self.settings.default_currency,
             "STATUS_ID": self.settings.bitrix_lead_payment_stage_id,
+            "CONTACT_ID": None,
         }
+
+    def seed_catalog_product(self, product_id: int, *, name: str, price: Decimal) -> None:
+        self._mock_catalog_prices[product_id] = Decimal(str(price))
+        setattr(self, f"_catalog_name_{product_id}", name)
+
+    def seed_lead_products(self, lead_id: int, rows: list[dict[str, Any]]) -> None:
+        self._mock_product_rows[("L", lead_id)] = [dict(row) for row in rows]
 
     async def get_lead(self, lead_id: int) -> dict[str, Any]:
         if lead_id in self._mock_leads:
@@ -182,6 +195,48 @@ class MockBitrixClient:
             deal[self.settings.bitrix_field_customer_phone] = phone
         self._mock_deals[deal_id] = deal
         logger.info("[MockBitrix] Synced customer details on deal %s", deal_id)
+
+    async def list_product_rows(self, *, owner_type: str, owner_id: int) -> list[dict[str, Any]]:
+        return list(self._mock_product_rows.get((owner_type.upper(), owner_id), []))
+
+    async def get_catalog_min_price(self, product_id: int) -> Decimal | None:
+        if product_id in self._mock_catalog_prices:
+            return self._mock_catalog_prices[product_id]
+        return None
+
+    async def create_estimate(
+        self,
+        *,
+        lead_id: int,
+        title: str,
+        currency: str,
+        opportunity: Decimal,
+        tax_value: Decimal,
+        contact_id: int | None,
+        product_rows: list[dict[str, Any]],
+        comments: str = "",
+    ) -> int:
+        self._next_estimate_id += 1
+        estimate_id = self._next_estimate_id
+        self._mock_estimates[estimate_id] = {
+            "id": estimate_id,
+            "title": title,
+            "leadId": lead_id,
+            "contactId": contact_id,
+            "currencyId": currency,
+            "opportunity": str(opportunity),
+            "taxValue": str(tax_value),
+            "comments": comments,
+        }
+        self._mock_product_rows[("Q", estimate_id)] = [dict(row) for row in product_rows]
+        logger.info(
+            "[MockBitrix] Created estimate %s for lead %s opportunity=%s %s",
+            estimate_id,
+            lead_id,
+            opportunity,
+            currency,
+        )
+        return estimate_id
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
         return extract_amount(lead, self.settings.bitrix_field_lead_amount)
@@ -349,6 +404,123 @@ class RealBitrixClient:
         if not fields:
             return
         await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
+
+    async def list_product_rows(self, *, owner_type: str, owner_id: int) -> list[dict[str, Any]]:
+        result = await self._call(
+            "crm.item.productrow.list",
+            {
+                "filter": {
+                    "=ownerType": owner_type.upper(),
+                    "=ownerId": owner_id,
+                }
+            },
+        )
+        rows = result.get("productRows") or result.get("result") or []
+        if isinstance(rows, dict):
+            rows = rows.get("productRows") or []
+        return list(rows) if isinstance(rows, list) else []
+
+    async def get_catalog_min_price(self, product_id: int) -> Decimal | None:
+        """Resolve the catalog list/minimum price for a product id."""
+        if product_id <= 0:
+            return None
+
+        # Prefer catalog.price.list (modern catalog module).
+        try:
+            listed = await self._call(
+                "catalog.price.list",
+                {
+                    "filter": {"productId": product_id},
+                    "select": ["id", "productId", "price", "currency", "catalogGroupId"],
+                },
+            )
+            prices = listed.get("prices") or listed.get("result") or []
+            if isinstance(prices, dict):
+                prices = prices.get("prices") or []
+            if isinstance(prices, list) and prices:
+                amounts = []
+                for item in prices:
+                    raw = item.get("price") if isinstance(item, dict) else None
+                    if raw is None:
+                        continue
+                    amounts.append(Decimal(str(raw).replace(",", "").strip()))
+                if amounts:
+                    return min(amounts)
+        except Exception:
+            logger.exception(
+                "catalog.price.list failed for product_id=%s; falling back to crm.product.get",
+                product_id,
+            )
+
+        # Fallback for portals still exposing the legacy CRM product API.
+        try:
+            product = await self._call("crm.product.get", {"id": product_id})
+            raw = product.get("PRICE") or product.get("price")
+            if raw is None or not str(raw).strip():
+                return None
+            return Decimal(str(raw).replace(",", "").strip())
+        except Exception:
+            logger.exception("crm.product.get failed for product_id=%s", product_id)
+            return None
+
+    async def create_estimate(
+        self,
+        *,
+        lead_id: int,
+        title: str,
+        currency: str,
+        opportunity: Decimal,
+        tax_value: Decimal,
+        contact_id: int | None,
+        product_rows: list[dict[str, Any]],
+        comments: str = "",
+    ) -> int:
+        fields: dict[str, Any] = {
+            "title": title,
+            "leadId": lead_id,
+            "currencyId": currency,
+            "opportunity": float(opportunity),
+            "taxValue": float(tax_value),
+            "isManualOpportunity": "Y",
+            "opened": "Y",
+            "comments": comments,
+        }
+        if contact_id:
+            fields["contactId"] = contact_id
+
+        created = await self._call(
+            "crm.item.add",
+            {
+                "entityTypeId": 7,  # Estimate
+                "fields": fields,
+            },
+        )
+        item = created.get("item") or created
+        estimate_id = int(item.get("id") or item.get("ID") or self._scalar(created))
+
+        cleaned_rows = []
+        for row in product_rows:
+            cleaned = {k: v for k, v in row.items() if v is not None}
+            cleaned_rows.append(cleaned)
+
+        if cleaned_rows:
+            await self._call(
+                "crm.item.productrow.set",
+                {
+                    "ownerType": "Q",
+                    "ownerId": estimate_id,
+                    "productRows": cleaned_rows,
+                },
+            )
+
+        logger.info(
+            "Created Bitrix estimate %s for lead %s opportunity=%s %s",
+            estimate_id,
+            lead_id,
+            opportunity,
+            currency,
+        )
+        return estimate_id
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
         return extract_amount(lead, self.settings.bitrix_field_lead_amount)

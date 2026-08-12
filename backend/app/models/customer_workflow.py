@@ -34,6 +34,7 @@ class CustomerWorkflow(Base):
     sales_deal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     finance_deal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     b2c_deal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    bitrix_estimate_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     customer_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     customer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     customer_phone: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)

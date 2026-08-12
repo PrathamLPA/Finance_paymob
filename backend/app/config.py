@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     bitrix_field_customer_name: str = "UF_CRM_CUSTOMER_NAME"
     # Optional custom field holding the amount when OPPORTUNITY is empty
     bitrix_field_lead_amount: str = ""
+    # When true: payment link is only sent after catalog price check + Estimate create
+    bitrix_price_gate_enabled: bool = True
     # Temporary diagnostics: logs fetched lead/deal fields (may contain customer PII).
     log_bitrix_payloads: bool = False
 

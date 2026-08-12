@@ -109,6 +109,23 @@ class BitrixIntegration(Protocol):
         phone: str | None,
     ) -> None: ...
 
+    async def list_product_rows(self, *, owner_type: str, owner_id: int) -> list[dict[str, Any]]: ...
+
+    async def get_catalog_min_price(self, product_id: int) -> Decimal | None: ...
+
+    async def create_estimate(
+        self,
+        *,
+        lead_id: int,
+        title: str,
+        currency: str,
+        opportunity: Decimal,
+        tax_value: Decimal,
+        contact_id: int | None,
+        product_rows: list[dict[str, Any]],
+        comments: str = "",
+    ) -> int: ...
+
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal: ...
 
     def extract_customer_details(self, lead: dict[str, Any]) -> tuple[str | None, str | None]: ...
