@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
-from app.integrations.factory import get_bitrix_client
+from app.integrations.factory import get_bitrix_client, get_email_client
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.price_approval import (
     STATUS_APPROVED,
@@ -61,16 +61,6 @@ def _lines_payload(lines: list[ProductLine]) -> dict[str, Any]:
             for line in lines
         ]
     }
-
-
-def _catalog_minimum_total(lines: list[ProductLine]) -> Decimal:
-    total = Decimal("0.00")
-    for line in lines:
-        qty = line.quantity if line.quantity > 0 else Decimal("1")
-        if line.catalog_min_price is None:
-            continue
-        total += (line.catalog_min_price * qty).quantize(Decimal("0.01"))
-    return total
 
 
 class PriceApprovalService:
@@ -199,37 +189,27 @@ class PriceApprovalService:
         self.db.refresh(approval)
 
         approval_url = self.build_approval_url(token)
-        body = self._email_body(approval, approval_url)
-        logger.info(
-            "Sending Bitrix approval mail | lead_id=%s to=%s approval_id=%s",
-            workflow.bitrix_lead_id,
-            manager_email,
-            approval.id,
-        )
-        sent = await self.bitrix.send_mail(
-            to_email=manager_email,
-            subject=f"Discount approval needed — {approval.lead_title}",
-            body=body,
-        )
-        if not sent:
-            logger.error(
-                "FAIL Bitrix approval mail | lead_id=%s to=%s approval_id=%s",
-                workflow.bitrix_lead_id,
-                manager_email,
-                approval.id,
-            )
-            raise ValueError(
-                "Could not send the approval email through Bitrix mail. "
-                "Check BITRIX_MAIL_FROM and that the webhook has mail permissions."
-            )
+        channels = await self._notify_manager(approval, approval_url)
 
+        # The timeline comment is the channel that always works with the crm scope,
+        # so the link reaches Bitrix even when mail and chat are unavailable.
+        delivery = (
+            f"Notified via: {', '.join(channels)}."
+            if channels
+            else (
+                "Could not email or notify the manager automatically "
+                "(Bitrix mail/chat not available to this webhook) — "
+                "share the link below with them."
+            )
+        )
         try:
             await self.bitrix.add_timeline_comment(
                 entity_type="LEAD",
                 entity_id=workflow.bitrix_lead_id,
                 comment=(
                     f"{gate.summary_comment(currency=approval.currency, amount_paid=workflow.amount_paid)}\n\n"
-                    f"Pending manager approval — emailed to {manager_email}.\n"
+                    f"Pending manager approval — {manager_email}.\n"
+                    f"{delivery}\n"
                     f"Approval link: {approval_url}"
                 ),
             )
@@ -238,14 +218,76 @@ class PriceApprovalService:
                 "Failed to post approval-pending comment on lead %s", workflow.bitrix_lead_id
             )
 
-        logger.info(
-            "OK approval mail sent | lead_id=%s approval_id=%s manager=%s url=%s",
-            workflow.bitrix_lead_id,
-            approval.id,
-            manager_email,
-            approval_url,
-        )
+        if channels:
+            logger.info(
+                "OK approval sent | lead_id=%s approval_id=%s manager=%s via=%s url=%s",
+                workflow.bitrix_lead_id,
+                approval.id,
+                manager_email,
+                "+".join(channels),
+                approval_url,
+            )
+        else:
+            logger.warning(
+                "Approval created but not delivered | lead_id=%s approval_id=%s manager=%s "
+                "reason=no_working_channel action=enable_mail_or_im_scope url=%s",
+                workflow.bitrix_lead_id,
+                approval.id,
+                manager_email,
+                approval_url,
+            )
         return approval
+
+    async def _notify_manager(self, approval: PriceApproval, approval_url: str) -> list[str]:
+        """Try Bitrix mail, then Bitrix chat, then the configured email client."""
+        subject = f"Discount approval needed — {approval.lead_title}"
+        body = self._email_body(approval, approval_url)
+        delivered: list[str] = []
+
+        if approval.manager_email:
+            logger.info(
+                "Sending Bitrix approval mail | lead_id=%s to=%s approval_id=%s",
+                approval.bitrix_lead_id,
+                approval.manager_email,
+                approval.id,
+            )
+            try:
+                if await self.bitrix.send_mail(
+                    to_email=approval.manager_email, subject=subject, body=body
+                ):
+                    delivered.append("bitrix_mail")
+            except Exception:
+                logger.exception(
+                    "Bitrix approval mail raised | approval_id=%s", approval.id
+                )
+
+        if not delivered and approval.manager_user_id:
+            try:
+                if await self.bitrix.notify_user(
+                    user_id=approval.manager_user_id,
+                    message=f"{subject}\n{approval_url}",
+                ):
+                    delivered.append("bitrix_chat")
+            except Exception:
+                logger.exception(
+                    "Bitrix approval notification raised | approval_id=%s", approval.id
+                )
+
+        if not delivered and approval.manager_email:
+            try:
+                email_client = get_email_client(self.settings)
+                email_client.send_payment_request(
+                    to_email=approval.manager_email,
+                    customer_name=approval.manager_name or "Manager",
+                    payment_url=approval_url,
+                )
+                delivered.append("email_client")
+            except Exception:
+                logger.exception(
+                    "Fallback email client failed | approval_id=%s", approval.id
+                )
+
+        return delivered
 
     def _email_body(self, approval: PriceApproval, approval_url: str) -> str:
         lines = [

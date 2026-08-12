@@ -13,6 +13,43 @@ from app.integrations.base import InvoiceReference, PaymentSummary
 
 logger = logging.getLogger(__name__)
 
+# Scopes an inbound webhook needs, per feature, for the error hints below.
+SCOPE_HINTS = {
+    "catalog.": "catalog",
+    "im.": "im",
+    "mail.": "mail",
+    "user.": "user",
+    "crm.": "crm",
+}
+
+
+class BitrixApiError(RuntimeError):
+    """A Bitrix REST call failed; carries the reason Bitrix put in the body."""
+
+    def __init__(self, method: str, *, status_code: int, code: str, description: str):
+        self.method = method
+        self.status_code = status_code
+        self.code = code
+        self.description = description
+        super().__init__(f"{method} failed ({status_code} {code}): {description}")
+
+    @property
+    def missing_scope(self) -> str | None:
+        """Best-guess scope to tick on the webhook, when this looks like a permission gap."""
+        permissionish = {
+            "insufficient_scope",
+            "access_denied",
+            "error_method_not_found",
+            "method_not_found",
+            "http_error",
+        }
+        if self.code.lower() not in permissionish and self.status_code not in (401, 403, 404):
+            return None
+        for prefix, scope in SCOPE_HINTS.items():
+            if self.method.startswith(prefix):
+                return scope
+        return None
+
 
 def extract_amount(entity: dict[str, Any], fallback_field: str = "") -> Decimal:
     """Read OPPORTUNITY, falling back to a configured custom amount field."""
@@ -49,6 +86,7 @@ class MockBitrixClient:
         self._mock_users: dict[int, dict[str, Any]] = {}
         self._mock_department_managers: dict[int, list[int]] = {}
         self._mock_mail_sent: list[dict[str, Any]] = []
+        self._mock_notifications: list[dict[str, Any]] = []
         self._next_estimate_id = self.MOCK_ESTIMATE_BASE
 
     def seed_lead(self, lead_id: int, *, email: str, name: str, amount: Decimal) -> None:
@@ -303,6 +341,11 @@ class MockBitrixClient:
         logger.info("[MockBitrix] Mail '%s' to %s from %s", subject, to_email, sender)
         return True
 
+    async def notify_user(self, *, user_id: int, message: str) -> bool:
+        self._mock_notifications.append({"user_id": user_id, "message": message})
+        logger.info("[MockBitrix] Notification to user %s", user_id)
+        return True
+
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
         return extract_amount(lead, self.settings.bitrix_field_lead_amount)
 
@@ -330,11 +373,28 @@ class RealBitrixClient:
         url = f"{self.base_url}{method}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, json=params or {})
-            response.raise_for_status()
-            payload = response.json()
 
-        if "error" in payload:
-            raise RuntimeError(f"Bitrix API error: {payload.get('error_description', payload['error'])}")
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+
+        # Bitrix returns the useful reason (insufficient_scope, ERROR_METHOD_NOT_FOUND…)
+        # in the body, so never surface a bare HTTP status.
+        if isinstance(payload, dict) and payload.get("error"):
+            raise BitrixApiError(
+                method,
+                status_code=response.status_code,
+                code=str(payload.get("error")),
+                description=str(payload.get("error_description") or ""),
+            )
+        if response.is_error:
+            raise BitrixApiError(
+                method,
+                status_code=response.status_code,
+                code="http_error",
+                description=response.text[:300],
+            )
 
         result = payload.get("result", payload)
         return result if isinstance(result, dict) else {"result": result}
@@ -511,6 +571,15 @@ class RealBitrixClient:
                     amounts.append(Decimal(str(raw).replace(",", "").strip()))
                 if amounts:
                     return min(amounts)
+        except BitrixApiError as exc:
+            scope = exc.missing_scope
+            logger.info(
+                "catalog.price.list unavailable | product_id=%s reason=%s%s "
+                "fallback=crm.product.get",
+                product_id,
+                exc.code,
+                f" add_scope={scope}" if scope else "",
+            )
         except Exception:
             logger.exception(
                 "catalog.price.list failed for product_id=%s; falling back to crm.product.get",
@@ -588,7 +657,17 @@ class RealBitrixClient:
         return estimate_id
 
     async def get_user(self, user_id: int) -> dict[str, Any] | None:
-        result = await self._call("user.get", {"ID": user_id})
+        try:
+            result = await self._call("user.get", {"ID": user_id})
+        except BitrixApiError as exc:
+            scope = exc.missing_scope
+            logger.warning(
+                "user.get unavailable | user_id=%s reason=%s%s",
+                user_id,
+                exc.code,
+                f" add_scope={scope}" if scope else "",
+            )
+            return None
         users = result.get("result") if isinstance(result, dict) and "result" in result else result
         if isinstance(users, list) and users:
             return users[0] if isinstance(users[0], dict) else None
@@ -620,6 +699,16 @@ class RealBitrixClient:
                 "im.department.managers.get",
                 {"ID": dept_ids, "USER_DATA": "Y"},
             )
+        except BitrixApiError as exc:
+            scope = exc.missing_scope
+            logger.warning(
+                "Manager lookup unavailable | user_id=%s departments=%s reason=%s%s",
+                user_id,
+                dept_ids,
+                exc.code,
+                f" add_scope={scope}" if scope else "",
+            )
+            return None
         except Exception:
             logger.exception("im.department.managers.get failed for user %s", user_id)
             return None
@@ -682,6 +771,13 @@ class RealBitrixClient:
                         sender = str(first.get("email") or first.get("EMAIL") or "")
                     else:
                         sender = str(first)
+            except BitrixApiError as exc:
+                scope = exc.missing_scope
+                logger.warning(
+                    "mail.mailbox.senders unavailable | reason=%s%s",
+                    exc.code,
+                    f" add_scope={scope}" if scope else "",
+                )
             except Exception:
                 logger.exception("mail.mailbox.senders failed")
         if not sender:
@@ -701,6 +797,16 @@ class RealBitrixClient:
                     "body": body,
                 },
             )
+        except BitrixApiError as exc:
+            scope = exc.missing_scope
+            logger.error(
+                "Bitrix mail unavailable | to=%s reason=%s%s detail=%s",
+                to_email,
+                exc.code,
+                f" add_scope={scope}" if scope else "",
+                exc.description[:200],
+            )
+            return False
         except Exception:
             logger.exception("mail.message.send failed to=%s", to_email)
             return False
@@ -717,6 +823,28 @@ class RealBitrixClient:
         else:
             logger.error("Bitrix mail rejected for %s: %s", to_email, result)
         return success
+
+    async def notify_user(self, *, user_id: int, message: str) -> bool:
+        """Bitrix chat notification — works when mail is not available to the webhook."""
+        try:
+            await self._call(
+                "im.notify.system.add",
+                {"USER_ID": user_id, "MESSAGE": message},
+            )
+        except BitrixApiError as exc:
+            scope = exc.missing_scope
+            logger.warning(
+                "Bitrix notification unavailable | user_id=%s reason=%s%s",
+                user_id,
+                exc.code,
+                f" add_scope={scope}" if scope else "",
+            )
+            return False
+        except Exception:
+            logger.exception("im.notify.system.add failed for user %s", user_id)
+            return False
+        logger.info("Bitrix notification sent | user_id=%s", user_id)
+        return True
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
         return extract_amount(lead, self.settings.bitrix_field_lead_amount)
