@@ -262,37 +262,76 @@ class PriceApprovalService:
         subject = f"Discount approval needed — {approval.lead_title}"
         body = self._email_body(approval, approval_url)
         delivered: list[str] = []
+        attempts: list[str] = []
 
         if approval.manager_email:
             logger.info(
-                "Sending Bitrix approval mail | lead_id=%s to=%s approval_id=%s",
+                "TRY approval delivery | channel=bitrix_mail lead_id=%s approval_id=%s to=%s",
                 approval.bitrix_lead_id,
-                approval.manager_email,
                 approval.id,
+                approval.manager_email,
             )
             try:
                 if await self.bitrix.send_mail(
                     to_email=approval.manager_email, subject=subject, body=body
                 ):
                     delivered.append("bitrix_mail")
+                    attempts.append("bitrix_mail=ok")
+                else:
+                    attempts.append("bitrix_mail=failed")
             except Exception:
+                attempts.append("bitrix_mail=exception")
                 logger.exception(
                     "Bitrix approval mail raised | approval_id=%s", approval.id
                 )
+        else:
+            attempts.append("bitrix_mail=skipped_no_manager_email")
+            logger.warning(
+                "SKIP Bitrix mail | lead_id=%s approval_id=%s reason=no_manager_email "
+                "fix=set_department_manager_or_BITRIX_APPROVAL_FALLBACK_EMAIL",
+                approval.bitrix_lead_id,
+                approval.id,
+            )
 
         if not delivered and approval.manager_user_id:
+            logger.info(
+                "TRY approval delivery | channel=bitrix_chat lead_id=%s approval_id=%s user_id=%s "
+                "reason=mail_unavailable",
+                approval.bitrix_lead_id,
+                approval.id,
+                approval.manager_user_id,
+            )
             try:
                 if await self.bitrix.notify_user(
                     user_id=approval.manager_user_id,
                     message=f"{subject}\n{approval_url}",
                 ):
                     delivered.append("bitrix_chat")
+                    attempts.append("bitrix_chat=ok")
+                else:
+                    attempts.append("bitrix_chat=failed")
             except Exception:
+                attempts.append("bitrix_chat=exception")
                 logger.exception(
                     "Bitrix approval notification raised | approval_id=%s", approval.id
                 )
+        elif not delivered:
+            attempts.append("bitrix_chat=skipped_no_manager_user_id")
+            logger.warning(
+                "SKIP Bitrix chat | lead_id=%s approval_id=%s reason=no_manager_user_id "
+                "fix=resolve_department_manager_or_add_im_scope",
+                approval.bitrix_lead_id,
+                approval.id,
+            )
 
         if not delivered and approval.manager_email:
+            logger.info(
+                "TRY approval delivery | channel=email_client lead_id=%s approval_id=%s to=%s "
+                "reason=bitrix_mail_and_chat_unavailable",
+                approval.bitrix_lead_id,
+                approval.id,
+                approval.manager_email,
+            )
             try:
                 email_client = get_email_client(self.settings)
                 email_client.send_payment_request(
@@ -301,11 +340,23 @@ class PriceApprovalService:
                     payment_url=approval_url,
                 )
                 delivered.append("email_client")
+                attempts.append("email_client=ok")
             except Exception:
+                attempts.append("email_client=exception")
                 logger.exception(
                     "Fallback email client failed | approval_id=%s", approval.id
                 )
 
+        logger.info(
+            "Approval delivery result | lead_id=%s approval_id=%s manager=%s "
+            "via=%s attempts=%s url=%s",
+            approval.bitrix_lead_id,
+            approval.id,
+            approval.manager_email or "-",
+            "+".join(delivered) if delivered else "none",
+            ",".join(attempts),
+            approval_url,
+        )
         return delivered
 
     def _email_body(self, approval: PriceApproval, approval_url: str) -> str:

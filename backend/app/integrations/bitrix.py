@@ -758,6 +758,7 @@ class RealBitrixClient:
         body: str,
         from_email: str | None = None,
     ) -> bool:
+        """Send via Bitrix Mail. Returns False and logs a clear diagnosis on failure."""
         sender = (from_email or self.settings.bitrix_mail_from or "").strip()
         if not sender:
             try:
@@ -772,18 +773,24 @@ class RealBitrixClient:
                     else:
                         sender = str(first)
             except BitrixApiError as exc:
-                scope = exc.missing_scope
                 logger.warning(
-                    "mail.mailbox.senders unavailable | reason=%s%s",
+                    "FAIL Bitrix mail | step=list_senders to=%s reason=%s fix=%s detail=%s",
+                    to_email,
                     exc.code,
-                    f" add_scope={scope}" if scope else "",
+                    _mail_fix_hint(exc),
+                    (exc.description or "")[:200] or "-",
                 )
             except Exception:
-                logger.exception("mail.mailbox.senders failed")
+                logger.exception(
+                    "FAIL Bitrix mail | step=list_senders to=%s reason=unexpected_error",
+                    to_email,
+                )
         if not sender:
             logger.error(
-                "Bitrix mail send skipped reason=no_from_address "
-                "action=set_BITRIX_MAIL_FROM"
+                "FAIL Bitrix mail | step=choose_from to=%s reason=no_from_address "
+                "fix=set_BITRIX_MAIL_FROM_or_connect_Bitrix_mailbox "
+                "detail=mail.mailbox.senders returned no sender and BITRIX_MAIL_FROM is empty",
+                to_email,
             )
             return False
 
@@ -798,17 +805,21 @@ class RealBitrixClient:
                 },
             )
         except BitrixApiError as exc:
-            scope = exc.missing_scope
             logger.error(
-                "Bitrix mail unavailable | to=%s reason=%s%s detail=%s",
+                "FAIL Bitrix mail | step=send to=%s from=%s reason=%s fix=%s detail=%s",
                 to_email,
+                sender,
                 exc.code,
-                f" add_scope={scope}" if scope else "",
-                exc.description[:200],
+                _mail_fix_hint(exc),
+                (exc.description or "")[:200] or "-",
             )
             return False
         except Exception:
-            logger.exception("mail.message.send failed to=%s", to_email)
+            logger.exception(
+                "FAIL Bitrix mail | step=send to=%s from=%s reason=unexpected_error",
+                to_email,
+                sender,
+            )
             return False
 
         success = True
@@ -819,9 +830,21 @@ class RealBitrixClient:
             if isinstance(nested, dict) and "success" in nested:
                 success = bool(nested.get("success"))
         if success:
-            logger.info("Bitrix mail sent '%s' to %s from %s", subject, to_email, sender)
+            logger.info(
+                "OK Bitrix mail | to=%s from=%s subject=%s",
+                to_email,
+                sender,
+                subject,
+            )
         else:
-            logger.error("Bitrix mail rejected for %s: %s", to_email, result)
+            logger.error(
+                "FAIL Bitrix mail | step=send to=%s from=%s reason=bitrix_rejected "
+                "fix=check_mailbox_connected_and_BITRIX_MAIL_FROM_matches_a_sender "
+                "detail=%s",
+                to_email,
+                sender,
+                str(result)[:300],
+            )
         return success
 
     async def notify_user(self, *, user_id: int, message: str) -> bool:
@@ -832,18 +855,22 @@ class RealBitrixClient:
                 {"USER_ID": user_id, "MESSAGE": message},
             )
         except BitrixApiError as exc:
-            scope = exc.missing_scope
             logger.warning(
-                "Bitrix notification unavailable | user_id=%s reason=%s%s",
+                "FAIL Bitrix chat | user_id=%s reason=%s fix=%s detail=%s",
                 user_id,
                 exc.code,
-                f" add_scope={scope}" if scope else "",
+                (
+                    f"add_scope={exc.missing_scope}"
+                    if exc.missing_scope
+                    else "check_im_scope_and_user_id"
+                ),
+                (exc.description or "")[:200] or "-",
             )
             return False
         except Exception:
-            logger.exception("im.notify.system.add failed for user %s", user_id)
+            logger.exception("FAIL Bitrix chat | user_id=%s reason=unexpected_error", user_id)
             return False
-        logger.info("Bitrix notification sent | user_id=%s", user_id)
+        logger.info("OK Bitrix chat | user_id=%s", user_id)
         return True
 
     def extract_lead_amount(self, lead: dict[str, Any]) -> Decimal:
@@ -855,3 +882,26 @@ class RealBitrixClient:
         name_parts = [lead.get("NAME"), lead.get("LAST_NAME")]
         name = " ".join(p for p in name_parts if p).strip() or None
         return (email, name)
+
+
+def _mail_fix_hint(exc: BitrixApiError) -> str:
+    """Human-readable next step for the common Bitrix mail failures."""
+    code = (exc.code or "").lower()
+    detail = (exc.description or "").lower()
+
+    if code in ("error_method_not_found", "method_not_found") or "method not found" in detail:
+        return (
+            "Bitrix portal does not expose mail.message.send — "
+            "connect a mailbox in Bitrix Mail (Mail → connect mailbox), "
+            "then set BITRIX_MAIL_FROM to that sender address; "
+            "scope alone is not enough"
+        )
+    if code == "insufficient_scope" or exc.missing_scope == "mail":
+        return "add_mail_scope_on_inbound_webhook_and_reconnect_token"
+    if code in ("access_denied", "forbidden"):
+        return "webhook_user_needs_mail_permission_or_mailbox_access"
+    if "sender" in detail or "from" in detail:
+        return "set_BITRIX_MAIL_FROM_to_an_address_returned_by_mail.mailbox.senders"
+    if exc.missing_scope:
+        return f"add_scope={exc.missing_scope}"
+    return "check_BITRIX_MAIL_FROM_and_connected_Bitrix_mailbox"
