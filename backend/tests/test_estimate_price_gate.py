@@ -7,7 +7,7 @@ import pytest
 from app.config import get_settings
 from app.integrations.factory import get_bitrix_client
 from app.services.estimate_price_gate import evaluate_price_gate
-from app.services.price_approval_service import PriceApprovalPending
+from app.services.price_approval_service import PriceApprovalPending, PriceApprovalService
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 
@@ -93,6 +93,61 @@ async def test_price_gate_requests_manager_approval(db_session, monkeypatch):
     assert comments
     assert any("Estimate #" in c["COMMENT"] or "Estimate already exists" in c["COMMENT"] for c in comments)
     assert any("Pending manager approval" in c["COMMENT"] for c in comments)
+
+
+@pytest.mark.asyncio
+async def test_failed_notification_is_retried_on_next_trigger(db_session, monkeypatch):
+    """A send that failed once (missing Bitrix scope) must not be abandoned forever."""
+    monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
+    monkeypatch.setenv("BITRIX_APPROVAL_FALLBACK_EMAIL", "")
+    get_settings.cache_clear()
+
+    bitrix = get_bitrix_client()
+    bitrix.seed_user(101, email="owner@test.com", name="Lead Owner", department_ids=[5])
+    bitrix.seed_user(202, email="manager@test.com", name="Sales Manager", department_ids=[5])
+    bitrix.seed_department_manager(5, 202)
+    bitrix.seed_lead(888, email="retry@test.com", name="Retry Test", amount=Decimal("1000"))
+    bitrix.seed_catalog_product(30, name="Course X", price=Decimal("5000"))
+    bitrix.seed_lead_products(
+        888,
+        [
+            {
+                "productId": 30,
+                "productName": "Course X",
+                "price": 1000,
+                "quantity": 1,
+                "taxRate": 0,
+                "taxIncluded": "Y",
+            }
+        ],
+    )
+
+    async def no_channel_available(self, approval, approval_url):
+        return []
+
+    monkeypatch.setattr(PriceApprovalService, "_notify_manager", no_channel_available)
+
+    orchestrator = WorkflowOrchestrator(db_session)
+    with pytest.raises(PriceApprovalPending):
+        await orchestrator.initiate_payment_from_lead(888)
+
+    approval = orchestrator.approval_service.get_pending_for_lead(888)
+    assert approval is not None
+    assert approval.notified_at is None
+
+    # Mail now works (scope granted); the next trigger must retry the delivery.
+    monkeypatch.undo()
+    monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
+    get_settings.cache_clear()
+    sent_before = len(bitrix._mock_mail_sent)
+
+    with pytest.raises(PriceApprovalPending):
+        await orchestrator.initiate_payment_from_lead(888)
+
+    assert len(bitrix._mock_mail_sent) == sent_before + 1
+    db_session.refresh(approval)
+    assert approval.notified_at is not None
+    assert approval.notified_via == "bitrix_mail"
 
 
 @pytest.mark.asyncio

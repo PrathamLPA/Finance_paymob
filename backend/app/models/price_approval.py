@@ -37,6 +37,9 @@ class PriceApproval(Base):
     manager_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     manager_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     manager_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Null until the manager was actually reached, so a failed send can be retried.
+    notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    notified_via: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     decision_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

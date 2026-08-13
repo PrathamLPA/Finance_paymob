@@ -106,6 +106,8 @@ class PriceApprovalService:
             "owner_name": approval.owner_name,
             "manager_email": approval.manager_email,
             "manager_name": approval.manager_name,
+            "notified_via": approval.notified_via,
+            "notified_at": approval.notified_at.isoformat() if approval.notified_at else None,
             "decision_note": approval.decision_note,
             "expires_at": approval.expires_at.isoformat() if approval.expires_at else None,
             "approval_url": self.build_approval_url(approval.token),
@@ -126,10 +128,15 @@ class PriceApprovalService:
                 expires = expires.replace(tzinfo=timezone.utc)
             if expires > datetime.now(timezone.utc):
                 logger.info(
-                    "Reusing pending price approval %s for lead %s",
+                    "Reusing pending price approval %s for lead %s | notified=%s",
                     existing.id,
                     workflow.bitrix_lead_id,
+                    existing.notified_via or "no",
                 )
+                # An earlier send may have failed (missing Bitrix scope, no mailbox).
+                # Retry until the manager has actually been reached at least once.
+                if not existing.notified_at:
+                    await self._deliver(existing)
                 return existing
 
         owner_id_raw = lead.get("ASSIGNED_BY_ID") or lead.get("assignedById")
@@ -189,7 +196,7 @@ class PriceApprovalService:
         self.db.refresh(approval)
 
         approval_url = self.build_approval_url(token)
-        channels = await self._notify_manager(approval, approval_url)
+        channels = await self._deliver(approval)
 
         # The timeline comment is the channel that always works with the crm scope,
         # so the link reaches Bitrix even when mail and chat are unavailable.
@@ -218,25 +225,37 @@ class PriceApprovalService:
                 "Failed to post approval-pending comment on lead %s", workflow.bitrix_lead_id
             )
 
+        return approval
+
+    async def _deliver(self, approval: PriceApproval) -> list[str]:
+        """Send the approval to the manager and remember whether it got through."""
+        approval_url = self.build_approval_url(approval.token)
+        channels = await self._notify_manager(approval, approval_url)
+
         if channels:
+            approval.notified_at = datetime.now(timezone.utc)
+            approval.notified_via = "+".join(channels)[:50]
+            self.db.commit()
+            self.db.refresh(approval)
             logger.info(
                 "OK approval sent | lead_id=%s approval_id=%s manager=%s via=%s url=%s",
-                workflow.bitrix_lead_id,
+                approval.bitrix_lead_id,
                 approval.id,
-                manager_email,
-                "+".join(channels),
+                approval.manager_email,
+                approval.notified_via,
                 approval_url,
             )
         else:
             logger.warning(
-                "Approval created but not delivered | lead_id=%s approval_id=%s manager=%s "
-                "reason=no_working_channel action=enable_mail_or_im_scope url=%s",
-                workflow.bitrix_lead_id,
+                "Approval not delivered | lead_id=%s approval_id=%s manager=%s "
+                "reason=no_working_channel action=enable_mail_or_im_scope "
+                "retry=next_stage_trigger url=%s",
+                approval.bitrix_lead_id,
                 approval.id,
-                manager_email,
+                approval.manager_email,
                 approval_url,
             )
-        return approval
+        return channels
 
     async def _notify_manager(self, approval: PriceApproval, approval_url: str) -> list[str]:
         """Try Bitrix mail, then Bitrix chat, then the configured email client."""
