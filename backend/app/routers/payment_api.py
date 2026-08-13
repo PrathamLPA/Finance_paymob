@@ -34,6 +34,12 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
     context = terms_service.get_terms_context()
     workflow = session.workflow
     required_percent = session_service.settings.payment_required_percent
+    locked = bool(getattr(session, "amount_locked", True))
+    charge_source = getattr(session, "charge_source", None) or "full"
+    charge_labels = {
+        "installment_1": "Installment 1",
+        "full": "Full payment",
+    }
     return {
         "token": token,
         "status": session.status,
@@ -44,7 +50,14 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
         "total_amount": str(workflow.total_amount),
         "amount_paid": str(workflow.amount_paid),
         "remaining_balance": str(workflow.remaining_balance),
-        "minimum_amount": str(workflow.minimum_due(required_percent)),
+        "minimum_amount": str(session.charge_amount if locked else workflow.minimum_due(required_percent)),
+        "payment_amount": str(session.charge_amount),
+        "allows_partial": False if locked else (
+            workflow.minimum_due(required_percent) < workflow.remaining_balance
+        ),
+        "amount_locked": locked,
+        "charge_source": charge_source,
+        "charge_label": charge_labels.get(charge_source, charge_source),
         "required_percent": str(required_percent),
     }
 

@@ -90,11 +90,23 @@ class TermsService:
         self,
         workflow: CustomerWorkflow,
         requested: Decimal | None,
+        *,
+        session: PaymentSession | None = None,
     ) -> Decimal:
-        """Clamp the customer's chosen amount to the allowed range for this workflow."""
+        """Use the locked session amount when Bitrix set Installment 1 / full charge."""
         remaining = workflow.remaining_balance
         if remaining <= 0:
             raise HTTPException(status_code=400, detail="This balance is already settled.")
+
+        if session is not None and session.amount_locked:
+            locked = Decimal(session.charge_amount).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            if locked <= 0:
+                raise HTTPException(status_code=400, detail="This payment link has no charge amount.")
+            if locked > remaining:
+                return remaining
+            return locked
 
         minimum = workflow.minimum_due(self.settings.payment_required_percent)
         if requested is None:
@@ -200,7 +212,9 @@ class TermsService:
         if not session:
             raise HTTPException(status_code=404, detail="Payment session not found or expired")
 
-        amount = self.resolve_payment_amount(session.workflow, payment_amount)
+        amount = self.resolve_payment_amount(
+            session.workflow, payment_amount, session=session
+        )
 
         if session.status == SESSION_TERMS_ACCEPTED and session.paymob_checkout_url:
             return await self.session_service.refresh_paymob_checkout(session, amount=amount)

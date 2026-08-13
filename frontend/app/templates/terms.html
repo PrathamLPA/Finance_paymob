@@ -227,7 +227,7 @@
                     {% endif %}
 
                     <label class="field field-full">
-                        <span class="field-label">Payment amount ({{ currency }})</span>
+                        <span class="field-label">{{ charge_label }} ({{ currency }})</span>
                         <span class="input-wrap">
                             <span class="input-icon" aria-hidden="true">
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
@@ -237,12 +237,17 @@
                             </span>
                             <input type="number" name="payment_amount" id="payment-amount" class="field-input"
                                 required step="0.01"
-                                min="{{ minimum_amount }}" max="{{ remaining_balance }}"
+                                min="{{ payment_amount if amount_locked else minimum_amount }}"
+                                max="{{ remaining_balance }}"
                                 value="{{ payment_amount }}"
-                                {% if not allows_partial %}readonly{% endif %}>
+                                {% if amount_locked or not allows_partial %}readonly{% endif %}>
                         </span>
                         <span class="field-hint" id="amount-hint">
+                            {% if amount_locked %}
+                            This amount comes from Bitrix ({{ charge_label }}) and cannot be changed.
+                            {% else %}
                             Minimum {{ minimum_amount }} {{ currency }}, maximum {{ remaining_balance }} {{ currency }}.
+                            {% endif %}
                         </span>
                     </label>
                 </section>

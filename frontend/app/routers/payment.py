@@ -34,6 +34,8 @@ def _form_context(
 ) -> dict:
     remaining = _amount(data, "remaining_balance")
     minimum = _amount(data, "minimum_amount")
+    payment_amount_value = _amount(data, "payment_amount") or remaining
+    allows_partial = bool(data.get("allows_partial", False)) and minimum < remaining
     return {
         "request": request,
         "token": token,
@@ -49,8 +51,10 @@ def _form_context(
         "amount_paid": f"{_amount(data, 'amount_paid'):.2f}",
         "remaining_balance": f"{remaining:.2f}",
         "minimum_amount": f"{minimum:.2f}",
-        "allows_partial": minimum < remaining,
-        "payment_amount": payment_amount or f"{remaining:.2f}",
+        "allows_partial": allows_partial,
+        "amount_locked": bool(data.get("amount_locked", True)),
+        "charge_label": data.get("charge_label") or "Payment amount",
+        "payment_amount": payment_amount or f"{payment_amount_value:.2f}",
         "error": error,
     }
 

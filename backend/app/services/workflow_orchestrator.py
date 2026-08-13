@@ -22,6 +22,7 @@ from app.services.estimate_price_gate import (
     evaluate_price_gate,
     product_rows_for_estimate,
 )
+from app.services.installment_charge import resolve_first_charge
 from app.services.invoice_service import InvoiceService
 from app.services.paymob_mapper import apply_paymob_fields
 from app.services.payment_session_service import PaymentSessionService
@@ -454,7 +455,36 @@ class WorkflowOrchestrator:
                 f"(or BITRIX_FIELD_LEAD_AMOUNT) in Bitrix before requesting payment"
             )
 
-        session = await self.session_service.get_or_create_reusable_session(workflow)
+        lead = lead_data or workflow.bitrix_lead_payload or {}
+        plan = resolve_first_charge(
+            lead,
+            remaining_balance=workflow.remaining_balance or workflow.total_amount,
+            installment_1_field=self.settings.bitrix_field_installment_1,
+            installment_count_field=self.settings.bitrix_field_installment_count,
+        )
+        if plan.amount <= 0:
+            raise ValueError(
+                f"Lead {lead_id} has no chargeable amount after installment resolution"
+            )
+
+        logger.info(
+            "Charge plan | lead_id=%s source=%s amount=%s %s installment_1=%s "
+            "installments=%s locked=%s",
+            lead_id,
+            plan.source,
+            f"{plan.amount:.2f}",
+            workflow.currency,
+            f"{plan.installment_1:.2f}" if plan.installment_1 is not None else "-",
+            plan.installment_count if plan.installment_count is not None else "-",
+            plan.locked,
+        )
+
+        session = await self.session_service.get_or_create_reusable_session(
+            workflow,
+            charge_amount=plan.amount,
+            charge_source=plan.source,
+            amount_locked=plan.locked,
+        )
         payment_url = self.session_service.build_payment_url(session.token)
 
         await self.announce_payment_link(session, entity_type="LEAD", entity_id=lead_id)

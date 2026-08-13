@@ -64,6 +64,17 @@ class Settings(BaseSettings):
     bitrix_field_customer_name: str = "UF_CRM_CUSTOMER_NAME"
     # Optional custom field holding the amount when OPPORTUNITY is empty
     bitrix_field_lead_amount: str = ""
+    # Lead Payment Section — first payment link uses Installment 1 when set
+    bitrix_field_installment_count: str = ""
+    bitrix_field_installment_1: str = ""
+    # Reserved for later scheduled installment links (not used yet)
+    bitrix_field_installment_2: str = ""
+    bitrix_field_installment_3: str = ""
+    bitrix_field_installment_4: str = ""
+    bitrix_field_installment_1_date: str = ""
+    bitrix_field_installment_2_due_date: str = ""
+    bitrix_field_installment_3_due_date: str = ""
+    bitrix_field_installment_4_due_date: str = ""
     # When true: payment link is only sent after catalog price check + Estimate create
     bitrix_price_gate_enabled: bool = True
     # Sender address for Bitrix mail.message.send (must exist in mail.mailbox.senders)

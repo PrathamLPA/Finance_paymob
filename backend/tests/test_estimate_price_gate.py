@@ -52,6 +52,111 @@ def test_evaluate_price_gate_requires_products():
     assert "no products" in result.reason.lower()
 
 
+def test_evaluate_price_gate_multiple_products_flags_only_below_min():
+    rows = [
+        {
+            "productId": 10,
+            "productName": "AWS Architect",
+            "price": 5000,
+            "quantity": 1,
+            "taxRate": 0,
+            "taxIncluded": "Y",
+        },
+        {
+            "productId": 20,
+            "productName": "PMP",
+            "price": 7000,
+            "quantity": 1,
+            "taxRate": 0,
+            "taxIncluded": "Y",
+        },
+        {
+            "productId": 30,
+            "productName": "RMP",
+            "price": 1000,
+            "quantity": 2,
+            "taxRate": 0,
+            "taxIncluded": "Y",
+        },
+    ]
+    catalog = {
+        10: Decimal("6000.00"),
+        20: Decimal("7000.00"),
+        30: Decimal("5500.00"),
+    }
+    result = evaluate_price_gate(rows, catalog)
+    assert result.ok is False
+    assert len(result.lines) == 3
+    assert len(result.blocked_lines) == 2
+    blocked_names = {line.product_name for line in result.blocked_lines}
+    assert blocked_names == {"AWS Architect", "RMP"}
+    assert "AWS Architect" in result.reason
+    assert "RMP" in result.reason
+    assert "PMP" not in result.reason
+    assert result.total_payable == Decimal("14000.00")
+    assert result.catalog_minimum_total == Decimal("24000.00")
+
+
+@pytest.mark.asyncio
+async def test_manager_approval_includes_all_products_with_below_flags(db_session, monkeypatch):
+    monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
+    monkeypatch.setenv("BITRIX_APPROVAL_FALLBACK_EMAIL", "")
+    get_settings.cache_clear()
+
+    bitrix = get_bitrix_client()
+    bitrix.seed_user(101, email="owner@test.com", name="Lead Owner", department_ids=[5])
+    bitrix.seed_user(202, email="manager@test.com", name="Sales Manager", department_ids=[5])
+    bitrix.seed_department_manager(5, 202)
+    bitrix.seed_lead(901, email="multi@test.com", name="Multi Course", amount=Decimal("12000"))
+    bitrix.seed_catalog_product(10, name="AWS", price=Decimal("6000"))
+    bitrix.seed_catalog_product(20, name="PMP", price=Decimal("7000"))
+    bitrix.seed_lead_products(
+        901,
+        [
+            {
+                "productId": 10,
+                "productName": "AWS",
+                "price": 5000,
+                "quantity": 1,
+                "taxRate": 0,
+                "taxIncluded": "Y",
+            },
+            {
+                "productId": 20,
+                "productName": "PMP",
+                "price": 7000,
+                "quantity": 1,
+                "taxRate": 0,
+                "taxIncluded": "Y",
+            },
+        ],
+    )
+
+    orchestrator = WorkflowOrchestrator(db_session)
+    with pytest.raises(PriceApprovalPending) as exc:
+        await orchestrator.initiate_payment_from_lead(901)
+
+    approval = orchestrator.approval_service.get_by_token(
+        exc.value.approval_url.rsplit("/", 1)[-1]
+    )
+    assert approval is not None
+    public = orchestrator.approval_service.to_public_dict(approval)
+    assert public["product_count"] == 2
+    assert public["below_minimum_count"] == 1
+    assert public["ok_count"] == 1
+    assert len(public["lines"]) == 2
+    assert len(public["below_minimum_lines"]) == 1
+    assert public["below_minimum_lines"][0]["product_name"] == "AWS"
+    assert public["below_minimum_lines"][0]["discount_amount"] == "1000.00"
+    assert public["ok_lines"][0]["product_name"] == "PMP"
+
+    body = orchestrator.approval_service._email_body(approval, public["approval_url"])
+    assert "Needs approval (1):" in body
+    assert "AWS" in body and "BELOW MIN" in body
+    assert "At / above minimum (1):" in body
+    assert "PMP" in body
+
+
 @pytest.mark.asyncio
 async def test_price_gate_requests_manager_approval(db_session, monkeypatch):
     monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")

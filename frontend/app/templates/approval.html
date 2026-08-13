@@ -4,10 +4,47 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Discount approval</title>
-    <link rel="stylesheet" href="/static/styles.css?v=5">
+    <link rel="stylesheet" href="/static/styles.css?v=6">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .status-pill {
+            display: inline-block;
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            padding: 0.15rem 0.5rem;
+            border-radius: 999px;
+            vertical-align: middle;
+            margin-left: 0.35rem;
+        }
+        .status-pill-bad {
+            background: #fef3f2;
+            color: #b42318;
+        }
+        .status-pill-ok {
+            background: #ecfdf3;
+            color: #027a48;
+        }
+        .section-heading {
+            margin-top: 1.25rem;
+            margin-bottom: 0.5rem;
+            font-size: 0.95rem;
+        }
+        .line-meta {
+            display: block;
+            font-size: 0.8rem;
+            color: #667085;
+            font-weight: 400;
+            margin-top: 0.15rem;
+        }
+        .summary-note {
+            margin: 0.75rem 0 0;
+            font-size: 0.9rem;
+            color: #475467;
+        }
+    </style>
 </head>
 <body class="paymob-page">
     <div class="page-bg"></div>
@@ -34,7 +71,7 @@
                         <span class="version-pill">{{ data.status }}</span>
                     </div>
                     <p class="card-subtitle">
-                        Review the proposed selling price against the catalog minimum, then approve or reject.
+                        Review every course on this lead. Approve only if the discounted prices are acceptable.
                     </p>
                 </div>
             </div>
@@ -45,7 +82,8 @@
 
             {% if result and result.status == 'approved' %}
             <div class="alert" role="status">
-                Approved. The payment link has been posted to Bitrix.
+                Approved. The payment link has been posted to Bitrix for the full lead
+                (all courses, including discounted ones).
                 {% if result.payment_url %}
                 <div style="margin-top:0.75rem"><a href="{{ result.payment_url }}">Open payment link</a></div>
                 {% endif %}
@@ -65,6 +103,14 @@
                         <dd>{{ data.owner_name or '—' }}</dd>
                     </div>
                     <div class="amount-row">
+                        <dt>Products</dt>
+                        <dd>
+                            {{ data.product_count or data.lines|length }} total ·
+                            {{ data.below_minimum_count or 0 }} need approval ·
+                            {{ data.ok_count or 0 }} OK
+                        </dd>
+                    </div>
+                    <div class="amount-row">
                         <dt>Proposed total</dt>
                         <dd>{{ data.total_payable }} {{ data.currency }}</dd>
                     </div>
@@ -74,23 +120,59 @@
                     </div>
                 </dl>
 
-                <h2 class="section-heading">Courses</h2>
+                <h2 class="section-heading">
+                    Needs approval
+                    <span class="status-pill status-pill-bad">{{ data.below_minimum_count or 0 }}</span>
+                </h2>
                 <div class="amount-summary">
-                    {% for line in data.lines %}
+                    {% set below = data.below_minimum_lines if data.below_minimum_lines is defined else [] %}
+                    {% if not below %}
+                        {% set below = data.lines | selectattr('below_minimum') | list %}
+                    {% endif %}
+                    {% for line in below %}
                     <div class="amount-row">
                         <dt>
                             {{ line.product_name }} × {{ line.quantity }}
-                            {% if line.below_minimum %}<strong> · BELOW MIN</strong>{% endif %}
+                            <span class="status-pill status-pill-bad">{{ line.status or 'BELOW MIN' }}</span>
+                            <span class="line-meta">
+                                selling {{ line.selling_price }} {{ data.currency }}
+                                {% if line.discount_amount %} · discount {{ line.discount_amount }} {{ data.currency }}{% endif %}
+                            </span>
                         </dt>
-                        <dd>
-                            sell {{ line.selling_price }} /
-                            min {{ line.catalog_min_price or '—' }}
-                        </dd>
+                        <dd>min {{ line.catalog_min_price or '—' }}</dd>
                     </div>
                     {% else %}
-                    <p class="field-hint">No course lines on this request.</p>
+                    <p class="field-hint">No courses below the catalog minimum.</p>
                     {% endfor %}
                 </div>
+
+                <h2 class="section-heading">
+                    At / above minimum
+                    <span class="status-pill status-pill-ok">{{ data.ok_count or 0 }}</span>
+                </h2>
+                <div class="amount-summary">
+                    {% set ok = data.ok_lines if data.ok_lines is defined else [] %}
+                    {% if not ok %}
+                        {% set ok = data.lines | rejectattr('below_minimum') | list %}
+                    {% endif %}
+                    {% for line in ok %}
+                    <div class="amount-row">
+                        <dt>
+                            {{ line.product_name }} × {{ line.quantity }}
+                            <span class="status-pill status-pill-ok">OK</span>
+                            <span class="line-meta">selling {{ line.selling_price }} {{ data.currency }}</span>
+                        </dt>
+                        <dd>min {{ line.catalog_min_price or '—' }}</dd>
+                    </div>
+                    {% else %}
+                    <p class="field-hint">No courses at or above the catalog minimum.</p>
+                    {% endfor %}
+                </div>
+
+                <p class="summary-note">
+                    Approving sends one payment link for the <strong>entire lead</strong>
+                    (all courses above). Rejecting blocks the payment link.
+                </p>
 
                 {% if data.status == 'pending' %}
                 <form method="post" action="/approvals/{{ token }}/decide" class="accept-form" style="margin-top:1.25rem">

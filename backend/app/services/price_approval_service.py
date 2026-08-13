@@ -43,8 +43,18 @@ def _user_display_name(user: dict[str, Any] | None) -> str | None:
 
 
 def _lines_payload(lines: list[ProductLine]) -> dict[str, Any]:
-    return {
-        "lines": [
+    payload_lines: list[dict[str, Any]] = []
+    below_count = 0
+    for line in lines:
+        below = line.is_below_minimum
+        if below:
+            below_count += 1
+        discount = None
+        if line.catalog_min_price is not None and below:
+            discount = str(
+                (line.catalog_min_price - line.selling_price).quantize(Decimal("0.01"))
+            )
+        payload_lines.append(
             {
                 "product_id": line.product_id,
                 "product_name": line.product_name,
@@ -56,10 +66,20 @@ def _lines_payload(lines: list[ProductLine]) -> dict[str, Any]:
                 "tax_rate": str(line.tax_rate),
                 "tax_included": line.tax_included,
                 "line_total": str(line.line_total),
-                "below_minimum": line.is_below_minimum,
+                "below_minimum": below,
+                "discount_amount": discount,
+                "status": (
+                    "BELOW MIN"
+                    if below and line.catalog_min_price is not None
+                    else ("NO CATALOG" if line.catalog_min_price is None else "OK")
+                ),
             }
-            for line in lines
-        ]
+        )
+    return {
+        "lines": payload_lines,
+        "below_minimum_count": below_count,
+        "ok_count": len(payload_lines) - below_count,
+        "product_count": len(payload_lines),
     }
 
 
@@ -92,6 +112,10 @@ class PriceApprovalService:
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=timezone.utc)
         expired = approval.status == STATUS_PENDING and expires <= now
+        payload = approval.lines_payload or {}
+        lines = payload.get("lines") or []
+        below_lines = [line for line in lines if line.get("below_minimum")]
+        ok_lines = [line for line in lines if not line.get("below_minimum")]
         return {
             "id": approval.id,
             "token": approval.token,
@@ -102,7 +126,12 @@ class PriceApprovalService:
             "total_payable": approval.total_payable,
             "catalog_minimum_total": approval.catalog_minimum_total,
             "reason": approval.reason,
-            "lines": (approval.lines_payload or {}).get("lines") or [],
+            "lines": lines,
+            "below_minimum_lines": below_lines,
+            "ok_lines": ok_lines,
+            "product_count": payload.get("product_count", len(lines)),
+            "below_minimum_count": payload.get("below_minimum_count", len(below_lines)),
+            "ok_count": payload.get("ok_count", len(ok_lines)),
             "owner_name": approval.owner_name,
             "manager_email": approval.manager_email,
             "manager_name": approval.manager_name,
@@ -360,32 +389,61 @@ class PriceApprovalService:
         return delivered
 
     def _email_body(self, approval: PriceApproval, approval_url: str) -> str:
+        payload = approval.lines_payload or {}
+        all_lines = payload.get("lines") or []
+        below = [line for line in all_lines if line.get("below_minimum")]
+        ok = [line for line in all_lines if not line.get("below_minimum")]
+        below_count = payload.get("below_minimum_count", len(below))
+        product_count = payload.get("product_count", len(all_lines))
+
         lines = [
             f"Hello {approval.manager_name or 'Manager'},",
             "",
-            "A payment link was requested at a selling price below the catalog minimum.",
-            "Please review and approve or reject it.",
+            "A payment link was requested with one or more courses below the catalog minimum.",
+            "Please review all products below, then approve or reject.",
             "",
             f"Lead: {approval.lead_title} (#{approval.bitrix_lead_id})",
             f"Owner: {approval.owner_name or approval.owner_user_id or '-'}",
+            f"Products: {product_count} total | {below_count} need approval | "
+            f"{product_count - below_count} at/above minimum",
             f"Proposed total: {approval.total_payable} {approval.currency}",
             f"Catalog minimum total: {approval.catalog_minimum_total} {approval.currency}",
             "",
-            "Courses:",
+            f"Needs approval ({below_count}):",
         ]
-        for line in (approval.lines_payload or {}).get("lines") or []:
-            catalog = line.get("catalog_min_price") or "missing"
-            lines.append(
-                f"- {line.get('product_name')} × {line.get('quantity')} | "
-                f"selling {line.get('selling_price')} | catalog min {catalog} | "
-                f"{'BELOW MIN' if line.get('below_minimum') else 'OK'}"
-            )
+        if below:
+            for line in below:
+                catalog = line.get("catalog_min_price") or "missing"
+                discount = line.get("discount_amount")
+                discount_txt = f" | discount {discount}" if discount else ""
+                lines.append(
+                    f"- {line.get('product_name')} × {line.get('quantity')} | "
+                    f"selling {line.get('selling_price')} | catalog min {catalog}"
+                    f"{discount_txt} | BELOW MIN"
+                )
+        else:
+            lines.append("- (none)")
+
+        lines.append("")
+        lines.append(f"At / above minimum ({len(ok)}):")
+        if ok:
+            for line in ok:
+                catalog = line.get("catalog_min_price") or "missing"
+                lines.append(
+                    f"- {line.get('product_name')} × {line.get('quantity')} | "
+                    f"selling {line.get('selling_price')} | catalog min {catalog} | OK"
+                )
+        else:
+            lines.append("- (none)")
+
         lines.extend(
             [
                 "",
                 f"Open approval page: {approval_url}",
                 "",
-                "If you approve, the system will create the Estimate and send the payment link in Bitrix.",
+                "If you APPROVE, the payment link is sent for the full lead "
+                "(all products above, including the discounted ones).",
+                "If you REJECT, no payment link is sent.",
             ]
         )
         return "\n".join(lines)

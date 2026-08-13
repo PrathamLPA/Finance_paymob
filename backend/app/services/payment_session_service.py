@@ -72,16 +72,28 @@ class PaymentSessionService:
         self.db.commit()
         return None
 
-    async def get_or_create_reusable_session(self, workflow: CustomerWorkflow) -> PaymentSession:
+    async def get_or_create_reusable_session(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        charge_amount: Decimal | None = None,
+        charge_source: str = "full",
+        amount_locked: bool = True,
+    ) -> PaymentSession:
         """Reuse a non-expired payment session when charge amount still matches."""
-        expected = workflow.remaining_balance if workflow.amount_paid > 0 else workflow.total_amount
+        expected = charge_amount
+        if expected is None:
+            expected = workflow.remaining_balance if workflow.amount_paid > 0 else workflow.total_amount
         if expected <= 0 and workflow.total_amount > 0:
             expected = workflow.total_amount
+        expected = Decimal(expected).quantize(Decimal("0.01"))
 
         existing = self.get_active_session_for_workflow(workflow)
-        # A customer may have picked a partial amount, so any charge still within the
-        # outstanding balance keeps the existing link usable.
-        if existing and Decimal("0") < existing.charge_amount <= expected:
+        if (
+            existing
+            and existing.charge_amount == expected
+            and (existing.charge_source or "full") == charge_source
+        ):
             return existing
         if existing:
             existing.status = SESSION_EXPIRED
@@ -91,7 +103,14 @@ class PaymentSessionService:
             source_type, source_id = self.source_finance_deal(workflow.finance_deal_id)
         else:
             source_type, source_id = self.source_lead(workflow.bitrix_lead_id)
-        return await self.create_session(workflow, source_type=source_type, source_id=source_id)
+        return await self.create_session(
+            workflow,
+            source_type=source_type,
+            source_id=source_id,
+            charge_amount=expected,
+            charge_source=charge_source,
+            amount_locked=amount_locked,
+        )
 
     async def create_session(
         self,
@@ -99,14 +118,20 @@ class PaymentSessionService:
         *,
         source_type: str,
         source_id: int,
+        charge_amount: Decimal | None = None,
+        charge_source: str = "full",
+        amount_locked: bool = True,
     ) -> PaymentSession:
-        charge_amount = workflow.remaining_balance if workflow.amount_paid > 0 else workflow.total_amount
-        if charge_amount <= 0 and workflow.total_amount > 0:
-            charge_amount = workflow.total_amount
+        amount = charge_amount
+        if amount is None:
+            amount = workflow.remaining_balance if workflow.amount_paid > 0 else workflow.total_amount
+        if amount <= 0 and workflow.total_amount > 0:
+            amount = workflow.total_amount
+        amount = Decimal(amount).quantize(Decimal("0.01"))
 
         merchant_reference = f"WF-{workflow.id}-{uuid.uuid4().hex[:8]}"
         paymob_session = await self.paymob.create_payment_session(
-            amount=charge_amount,
+            amount=amount,
             currency=workflow.currency,
             merchant_reference=merchant_reference,
             customer_email=workflow.customer_email,
@@ -119,7 +144,9 @@ class PaymentSessionService:
             token=token,
             source_type=source_type,
             source_id=source_id,
-            charge_amount=charge_amount,
+            charge_amount=amount,
+            charge_source=charge_source,
+            amount_locked=amount_locked,
             currency=workflow.currency,
             paymob_session_id=paymob_session.session_id,
             paymob_checkout_url=paymob_session.checkout_url,

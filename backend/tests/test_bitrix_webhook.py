@@ -241,6 +241,42 @@ def test_lead_amount_read_from_custom_field(client, seed_lead, monkeypatch):
     get_settings.cache_clear()
 
 
+def test_lead_payment_uses_installment_1_amount(client, seed_lead, db_session, monkeypatch):
+    monkeypatch.setenv("BITRIX_FIELD_INSTALLMENT_1", "UF_CRM_INSTALLMENT_1")
+    monkeypatch.setenv("BITRIX_FIELD_INSTALLMENT_COUNT", "UF_CRM_INSTALLMENT_COUNT")
+    monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "false")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+    seed_lead(411, email="installment@test.com", amount=Decimal("5500"))
+    bitrix = get_bitrix_client()
+    bitrix._mock_leads[411].update(
+        {
+            "STATUS_ID": settings.bitrix_lead_payment_stage_id,
+            "UF_CRM_INSTALLMENT_1": "1500",
+            "UF_CRM_INSTALLMENT_COUNT": "3",
+        }
+    )
+
+    response = client.post(
+        "/webhooks/bitrix24",
+        data={"event": "ONCRMLEADUPDATE", "data[FIELDS][ID]": "411"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "processed"
+
+    token = body["payment_url"].rstrip("/").rsplit("/", 1)[-1]
+    session = client.get(f"/api/payment/{token}").json()
+    assert session["payment_amount"] == "1500.00"
+    assert session["amount_locked"] is True
+    assert session["allows_partial"] is False
+    assert session["charge_source"] == "installment_1"
+    assert session["charge_label"] == "Installment 1"
+
+    get_settings.cache_clear()
+
+
 def test_lead_payment_link_posts_timeline_comment(client, seed_lead):
     settings = get_settings()
     seed_lead(410, email="comment@test.com", amount=Decimal("1500"))
