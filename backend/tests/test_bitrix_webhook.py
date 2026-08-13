@@ -152,6 +152,34 @@ def test_lead_update_fetches_and_stores_complete_lead(client, seed_lead, db_sess
     assert workflow.lead_synced_at is not None
 
 
+def test_automation_robot_payload_generates_link(client, seed_lead, db_session):
+    """CRM automation robots send document_id[] instead of event/data[FIELDS]."""
+    settings = get_settings()
+    seed_lead(407, email="robot@test.com", amount=Decimal("3000"))
+    bitrix = get_bitrix_client()
+    bitrix._mock_leads[407]["STATUS_ID"] = settings.bitrix_lead_payment_stage_id
+
+    response = client.post(
+        "/webhooks/bitrix24",
+        data={
+            "document_id[0]": "crm",
+            "document_id[1]": "CCrmDocumentLead",
+            "document_id[2]": "LEAD_407",
+            "code": "bitrix24.webhook",
+            "ts": "1754000000",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "processed", body
+    assert body["lead_id"] == 407
+    workflow = db_session.scalar(
+        select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 407)
+    )
+    assert workflow is not None
+
+
 def test_lead_update_outside_payment_stage_is_not_imported(client, seed_lead, db_session):
     seed_lead(406, email="ignored@test.com", amount=Decimal("1000"))
     bitrix = get_bitrix_client()

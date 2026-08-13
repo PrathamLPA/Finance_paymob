@@ -190,12 +190,44 @@ def _extract_entity_id(payload: dict[str, Any], *fallback_keys: str) -> int | No
     return None
 
 
+def _automation_document(payload: dict[str, Any]) -> tuple[str | None, int | None]:
+    """Read the record a CRM automation robot fired for.
+
+    Automation webhooks carry no `event`/`data[FIELDS]`; they identify the record as
+    document_id[] = ("crm", "CCrmDocumentLead", "LEAD_107").
+    """
+    raw = payload.get("document_id")
+    if isinstance(raw, dict):
+        parts = [raw[key] for key in sorted(raw, key=lambda k: str(k))]
+    elif isinstance(raw, (list, tuple)):
+        parts = list(raw)
+    else:
+        return None, None
+
+    for part in reversed([str(p) for p in parts if p]):
+        prefix, _, number = part.partition("_")
+        if not number.isdigit():
+            continue
+        kind = prefix.strip().upper()
+        if kind in ("LEAD", "DEAL"):
+            return kind, int(number)
+    return None, None
+
+
 def _extract_lead_id(payload: dict[str, Any]) -> int | None:
-    return _extract_entity_id(payload, "lead_id")
+    lead_id = _extract_entity_id(payload, "lead_id")
+    if lead_id:
+        return lead_id
+    kind, doc_id = _automation_document(payload)
+    return doc_id if kind == "LEAD" else None
 
 
 def _extract_deal_id(payload: dict[str, Any]) -> int | None:
-    return _extract_entity_id(payload, "deal_id")
+    deal_id = _extract_entity_id(payload, "deal_id")
+    if deal_id:
+        return deal_id
+    kind, doc_id = _automation_document(payload)
+    return doc_id if kind == "DEAL" else None
 
 
 def _extract_stage_id(payload: dict[str, Any]) -> str | None:
@@ -284,7 +316,20 @@ async def bitrix24_webhook(
             )
             return {"status": "error", "reason": str(exc)}
 
-    if "lead" in event.lower() or payload.get("entity_type") == "lead":
+    automation_kind, automation_id = _automation_document(payload)
+    if automation_kind:
+        logger.info(
+            "Bitrix automation webhook | request_id=%s document=%s_%s",
+            request_id,
+            automation_kind,
+            automation_id,
+        )
+
+    if (
+        "lead" in event.lower()
+        or payload.get("entity_type") == "lead"
+        or automation_kind == "LEAD"
+    ):
         lead_id = _extract_lead_id(payload)
         if not lead_id:
             logger.warning("Bitrix webhook ignored request_id=%s reason=missing_lead_id", request_id)
@@ -407,7 +452,11 @@ async def bitrix24_webhook(
             "payment_url": payment_url,
         }
 
-    if "deal" in event.lower() or payload.get("entity_type") == "deal":
+    if (
+        "deal" in event.lower()
+        or payload.get("entity_type") == "deal"
+        or automation_kind == "DEAL"
+    ):
         deal_id = _extract_deal_id(payload)
         if not deal_id:
             logger.warning("Bitrix webhook ignored request_id=%s reason=missing_deal_id", request_id)
@@ -474,10 +523,12 @@ async def bitrix24_webhook(
             )
             return {"status": "error", "reason": str(exc)}
 
-    logger.debug(
-        "Bitrix webhook ignored request_id=%s reason=unhandled_event event=%s",
+    # Logged loudly: an unrecognised shape means a configured trigger is doing nothing.
+    logger.warning(
+        "Bitrix webhook ignored | request_id=%s reason=unhandled_event event=%s keys=%s",
         request_id,
         event or "-",
+        sorted(payload.keys()),
     )
     return {"status": "ignored", "reason": "unhandled_event", "event": event}
 
