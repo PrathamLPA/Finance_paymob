@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -238,16 +239,9 @@ class WorkflowOrchestrator:
             )
 
         if not gate.ok and (gate.missing_catalog or not gate.lines):
-            try:
-                await self.bitrix.add_timeline_comment(
-                    entity_type="LEAD",
-                    entity_id=lead_id,
-                    comment=comment,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to post price-gate block comment on lead %s", lead_id
-                )
+            await self._post_gate_comment(
+                workflow, comment, state_key=f"blocked|{comment}"
+            )
             logger.warning(
                 "FAIL payment-stage | lead_id=%s step=products_or_catalog reason=%s",
                 lead_id,
@@ -310,6 +304,40 @@ class WorkflowOrchestrator:
             currency,
         )
 
+    async def _post_gate_comment(
+        self, workflow: CustomerWorkflow, body: str, *, state_key: str
+    ) -> bool:
+        """Post a price-gate comment unless the same gate outcome was already posted.
+
+        Each comment updates the lead, which fires ONCRMLEADUPDATE and re-runs this
+        stage, so re-posting an unchanged outcome loops forever. The key describes the
+        outcome rather than the wording, so the "created" and "already exists" variants
+        of one estimate count as the same comment.
+        """
+        lead_id = workflow.bitrix_lead_id
+        digest = hashlib.sha256(state_key.encode("utf-8")).hexdigest()
+        if workflow.last_gate_comment_hash == digest:
+            logger.info(
+                "SKIP gate comment | lead_id=%s reason=unchanged_since_last_run",
+                lead_id,
+            )
+            return False
+
+        try:
+            await self.bitrix.add_timeline_comment(
+                entity_type="LEAD",
+                entity_id=lead_id,
+                comment=body,
+            )
+        except Exception:
+            logger.exception("Failed to post price-gate comment on lead %s", lead_id)
+            return False
+
+        workflow.last_gate_comment_hash = digest
+        self.db.commit()
+        self.db.refresh(workflow)
+        return True
+
     async def _ensure_estimate_for_gate(
         self,
         workflow: CustomerWorkflow,
@@ -336,20 +364,15 @@ class WorkflowOrchestrator:
                 workflow.bitrix_estimate_id,
                 next_step,
             )
-            try:
-                await self.bitrix.add_timeline_comment(
-                    entity_type="LEAD",
-                    entity_id=lead_id,
-                    comment=(
-                        f"{comment}\n\n"
-                        f"Estimate already exists: #{workflow.bitrix_estimate_id}. "
-                        f"{next_step.capitalize()}."
-                    ),
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to post estimate reuse comment on lead %s", lead_id
-                )
+            await self._post_gate_comment(
+                workflow,
+                (
+                    f"{comment}\n\n"
+                    f"Estimate already exists: #{workflow.bitrix_estimate_id}. "
+                    f"{next_step.capitalize()}."
+                ),
+                state_key=f"{workflow.bitrix_estimate_id}|{next_step}|{comment}",
+            )
             return
 
         contact_raw = lead.get("CONTACT_ID") or lead.get("contactId")
@@ -381,20 +404,11 @@ class WorkflowOrchestrator:
         self.db.commit()
         self.db.refresh(workflow)
 
-        try:
-            await self.bitrix.add_timeline_comment(
-                entity_type="LEAD",
-                entity_id=lead_id,
-                comment=(
-                    f"{comment}\n\n"
-                    f"Estimate #{estimate_id} created. {next_step.capitalize()}."
-                ),
-            )
-        except Exception:
-            logger.exception(
-                "Failed to post estimate-created comment on lead %s", lead_id
-            )
-
+        await self._post_gate_comment(
+            workflow,
+            f"{comment}\n\nEstimate #{estimate_id} created. {next_step.capitalize()}.",
+            state_key=f"{estimate_id}|{next_step}|{comment}",
+        )
         logger.info(
             "OK estimate created | lead_id=%s estimate_id=%s total=%s %s next=%s",
             lead_id,

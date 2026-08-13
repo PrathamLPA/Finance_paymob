@@ -96,6 +96,49 @@ async def test_price_gate_requests_manager_approval(db_session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pending_approval_does_not_recomment_on_rerun(db_session, monkeypatch):
+    """Re-posting an identical comment retriggers the Bitrix webhook and loops."""
+    monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
+    monkeypatch.setenv("BITRIX_APPROVAL_FALLBACK_EMAIL", "")
+    get_settings.cache_clear()
+
+    bitrix = get_bitrix_client()
+    bitrix.seed_user(101, email="owner@test.com", name="Lead Owner", department_ids=[5])
+    bitrix.seed_user(202, email="manager@test.com", name="Sales Manager", department_ids=[5])
+    bitrix.seed_department_manager(5, 202)
+    bitrix.seed_lead(777, email="loop@test.com", name="Loop Test", amount=Decimal("0"))
+    bitrix.seed_catalog_product(20, name="RMP-PMI", price=Decimal("5500"))
+    bitrix.seed_lead_products(
+        777,
+        [
+            {
+                "productId": 20,
+                "productName": "RMP-PMI",
+                "price": 0,
+                "quantity": 1,
+                "taxRate": 0,
+                "taxIncluded": "Y",
+            }
+        ],
+    )
+
+    orchestrator = WorkflowOrchestrator(db_session)
+    for _ in range(3):
+        with pytest.raises(PriceApprovalPending):
+            await orchestrator.initiate_payment_from_lead(777)
+
+    comments = bitrix._mock_comments.get(("LEAD", 777), [])
+    estimate_comments = [
+        c
+        for c in comments
+        if "Estimate #" in c["COMMENT"] or "Estimate already exists" in c["COMMENT"]
+    ]
+    assert len(estimate_comments) == 1, (
+        f"expected one estimate comment across 3 runs, got {len(estimate_comments)}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_manager_approval_sends_payment_link(db_session, monkeypatch):
     monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
     get_settings.cache_clear()
