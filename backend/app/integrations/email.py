@@ -97,7 +97,7 @@ class MockEmailClient:
 
 
 class RealEmailClient(MockEmailClient):
-    """SendGrid email client — falls back to mock when API key not configured."""
+    """SendGrid email client."""
 
     def _sendgrid_ready(self) -> bool:
         return not self.settings.use_mock_integrations and bool(self.settings.sendgrid_api_key)
@@ -141,14 +141,46 @@ class RealEmailClient(MockEmailClient):
             attachment = self._build_attachment(attachment_path)
             if attachment:
                 message.attachment = attachment
-            SendGridAPIClient(self.settings.sendgrid_api_key).send(message)
-            logger.info("SendGrid sent '%s' to %s", subject, to_email)
-            return True
-        except ImportError:
-            logger.warning("sendgrid package not installed — falling back to mock email")
+            response = SendGridAPIClient(self.settings.sendgrid_api_key).send(message)
+            status = int(getattr(response, "status_code", 0) or 0)
+            headers = getattr(response, "headers", {}) or {}
+            message_id = headers.get("X-Message-Id") or headers.get("x-message-id") or "-"
+            if 200 <= status < 300:
+                logger.info(
+                    "OK SendGrid accepted | to=%s from=%s subject=%s status=%s message_id=%s",
+                    to_email,
+                    self.settings.sendgrid_from_email,
+                    subject,
+                    status,
+                    message_id,
+                )
+                return True
+            logger.error(
+                "FAIL SendGrid response | to=%s from=%s subject=%s status=%s "
+                "message_id=%s action=check_SendGrid_activity_and_sender_verification",
+                to_email,
+                self.settings.sendgrid_from_email,
+                subject,
+                status,
+                message_id,
+            )
             return False
-        except Exception:
-            logger.exception("SendGrid send failed for %s — falling back to mock", to_email)
+        except ImportError:
+            logger.error(
+                "FAIL SendGrid | reason=package_not_installed action=install_sendgrid"
+            )
+            return False
+        except Exception as exc:
+            response_body = getattr(exc, "body", None)
+            logger.exception(
+                "FAIL SendGrid exception | to=%s from=%s subject=%s error=%s "
+                "response=%s action=check_API_key_sender_verification_and_SendGrid_activity",
+                to_email,
+                self.settings.sendgrid_from_email,
+                subject,
+                type(exc).__name__,
+                response_body or "-",
+            )
             return False
 
     def send_payment_request(
@@ -184,20 +216,15 @@ class RealEmailClient(MockEmailClient):
         body: str,
     ) -> bool:
         if not self._sendgrid_ready():
-            return super().send_price_approval(
-                to_email=to_email,
-                manager_name=manager_name,
-                subject=subject,
-                body=body,
+            logger.error(
+                "SKIP SendGrid approval | to=%s reason=not_configured "
+                "mock_integrations=%s has_api_key=%s action=set_SENDGRID_API_KEY",
+                to_email,
+                self.settings.use_mock_integrations,
+                bool(self.settings.sendgrid_api_key),
             )
-        if self._send_mail(to_email=to_email, subject=subject, body=body):
-            return True
-        return super().send_price_approval(
-            to_email=to_email,
-            manager_name=manager_name,
-            subject=subject,
-            body=body,
-        )
+            return False
+        return self._send_mail(to_email=to_email, subject=subject, body=body)
 
     def send_terms_acceptance(
         self,

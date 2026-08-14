@@ -149,7 +149,7 @@ class PriceApprovalService:
         *,
         lead: dict[str, Any],
     ) -> PriceApproval:
-        """Create/reuse a pending approval and email the owner's manager via Bitrix mail."""
+        """Create/reuse a pending approval and email the owner's manager."""
         existing = self.get_pending_for_lead(workflow.bitrix_lead_id)
         if existing:
             expires = existing.expires_at
@@ -162,10 +162,10 @@ class PriceApprovalService:
                     workflow.bitrix_lead_id,
                     existing.notified_via or "no",
                 )
-                # An earlier send may have failed (missing Bitrix scope, no mailbox).
-                # Retry until the manager has actually been reached at least once.
                 if not existing.notified_at:
                     await self._deliver(existing)
+                elif "sendgrid" not in (existing.notified_via or "").split("+"):
+                    await self._retry_existing_via_sendgrid(existing)
                 return existing
 
         owner_id_raw = lead.get("ASSIGNED_BY_ID") or lead.get("assignedById")
@@ -286,6 +286,110 @@ class PriceApprovalService:
             )
         return channels
 
+    async def _retry_existing_via_sendgrid(self, approval: PriceApproval) -> bool:
+        """Upgrade an old chat-only approval to SendGrid without repeating chat."""
+        previous = [
+            channel
+            for channel in (approval.notified_via or "").split("+")
+            if channel
+        ]
+        logger.info(
+            "RETRY existing approval via SendGrid | lead_id=%s approval_id=%s "
+            "previous_via=%s to=%s reason=sendgrid_not_previously_delivered",
+            approval.bitrix_lead_id,
+            approval.id,
+            approval.notified_via or "none",
+            approval.manager_email or "-",
+        )
+        if not await self._try_sendgrid(approval):
+            logger.warning(
+                "RETRY SendGrid not delivered | lead_id=%s approval_id=%s "
+                "previous_via=%s action=check_SendGrid_logs_and_configuration",
+                approval.bitrix_lead_id,
+                approval.id,
+                approval.notified_via or "none",
+            )
+            return False
+
+        channels = list(dict.fromkeys([*previous, "sendgrid"]))
+        approval.notified_at = datetime.now(timezone.utc)
+        approval.notified_via = "+".join(channels)[:50]
+        self.db.commit()
+        self.db.refresh(approval)
+        logger.info(
+            "OK existing approval upgraded to SendGrid | lead_id=%s approval_id=%s "
+            "via=%s to=%s",
+            approval.bitrix_lead_id,
+            approval.id,
+            approval.notified_via,
+            approval.manager_email,
+        )
+        return True
+
+    async def _try_sendgrid(self, approval: PriceApproval) -> bool:
+        """Attempt one approval email and log enough detail to diagnose delivery."""
+        if not approval.manager_email:
+            logger.warning(
+                "SKIP SendGrid | lead_id=%s approval_id=%s reason=no_manager_email "
+                "action=set_department_manager_or_BITRIX_APPROVAL_FALLBACK_EMAIL",
+                approval.bitrix_lead_id,
+                approval.id,
+            )
+            return False
+        if not self.settings.use_mock_integrations and not self.settings.sendgrid_api_key:
+            logger.error(
+                "SKIP SendGrid | lead_id=%s approval_id=%s to=%s "
+                "reason=SENDGRID_API_KEY_missing action=set_Railway_SENDGRID_API_KEY",
+                approval.bitrix_lead_id,
+                approval.id,
+                approval.manager_email,
+            )
+            return False
+
+        subject = f"Discount approval needed — {approval.lead_title}"
+        body = self._email_body(approval, self.build_approval_url(approval.token))
+        logger.info(
+            "TRY approval delivery | channel=sendgrid lead_id=%s approval_id=%s "
+            "to=%s from=%s subject=%s",
+            approval.bitrix_lead_id,
+            approval.id,
+            approval.manager_email,
+            self.settings.sendgrid_from_email,
+            subject,
+        )
+        try:
+            sent = get_email_client(self.settings).send_price_approval(
+                to_email=approval.manager_email,
+                manager_name=approval.manager_name,
+                subject=subject,
+                body=body,
+            )
+        except Exception:
+            logger.exception(
+                "FAIL approval delivery | channel=sendgrid lead_id=%s approval_id=%s "
+                "to=%s action=check_SendGrid_activity",
+                approval.bitrix_lead_id,
+                approval.id,
+                approval.manager_email,
+            )
+            return False
+        if sent:
+            logger.info(
+                "OK approval delivery | channel=sendgrid lead_id=%s approval_id=%s to=%s",
+                approval.bitrix_lead_id,
+                approval.id,
+                approval.manager_email,
+            )
+            return True
+        logger.error(
+            "FAIL approval delivery | channel=sendgrid lead_id=%s approval_id=%s "
+            "to=%s action=check_previous_SendGrid_log",
+            approval.bitrix_lead_id,
+            approval.id,
+            approval.manager_email,
+        )
+        return False
+
     async def _notify_manager(self, approval: PriceApproval, approval_url: str) -> list[str]:
         """Prefer SendGrid, then Bitrix chat. Bitrix mail is skipped (portal often lacks it)."""
         subject = f"Discount approval needed — {approval.lead_title}"
@@ -293,38 +397,11 @@ class PriceApprovalService:
         delivered: list[str] = []
         attempts: list[str] = []
 
-        if approval.manager_email:
-            logger.info(
-                "TRY approval delivery | channel=sendgrid lead_id=%s approval_id=%s to=%s",
-                approval.bitrix_lead_id,
-                approval.id,
-                approval.manager_email,
-            )
-            try:
-                email_client = get_email_client(self.settings)
-                if email_client.send_price_approval(
-                    to_email=approval.manager_email,
-                    manager_name=approval.manager_name,
-                    subject=subject,
-                    body=body,
-                ):
-                    delivered.append("sendgrid")
-                    attempts.append("sendgrid=ok")
-                else:
-                    attempts.append("sendgrid=failed")
-            except Exception:
-                attempts.append("sendgrid=exception")
-                logger.exception(
-                    "SendGrid approval mail raised | approval_id=%s", approval.id
-                )
+        if await self._try_sendgrid(approval):
+            delivered.append("sendgrid")
+            attempts.append("sendgrid=ok")
         else:
-            attempts.append("sendgrid=skipped_no_manager_email")
-            logger.warning(
-                "SKIP SendGrid | lead_id=%s approval_id=%s reason=no_manager_email "
-                "fix=set_department_manager_or_BITRIX_APPROVAL_FALLBACK_EMAIL",
-                approval.bitrix_lead_id,
-                approval.id,
-            )
+            attempts.append("sendgrid=failed")
 
         if not delivered and approval.manager_user_id:
             logger.info(

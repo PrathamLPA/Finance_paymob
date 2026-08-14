@@ -262,6 +262,24 @@ async def test_failed_notification_is_retried_on_next_trigger(db_session, monkey
     assert approval.notified_at is not None
     assert approval.notified_via == "sendgrid"
 
+    # Approvals delivered by the old release only had Bitrix chat recorded.
+    # Reusing one must send SendGrid once without repeating chat.
+    approval.notified_via = "bitrix_chat"
+    db_session.commit()
+    sent_before = len(email_client.sent_emails)
+
+    with pytest.raises(PriceApprovalPending):
+        await orchestrator.initiate_payment_from_lead(888)
+
+    assert len(email_client.sent_emails) == sent_before + 1
+    db_session.refresh(approval)
+    assert approval.notified_via == "bitrix_chat+sendgrid"
+
+    # Once SendGrid is recorded, later automation triggers must not resend it.
+    with pytest.raises(PriceApprovalPending):
+        await orchestrator.initiate_payment_from_lead(888)
+    assert len(email_client.sent_emails) == sent_before + 1
+
 
 @pytest.mark.asyncio
 async def test_pending_approval_does_not_recomment_on_rerun(db_session, monkeypatch):
