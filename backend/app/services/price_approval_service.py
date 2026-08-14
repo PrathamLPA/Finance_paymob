@@ -277,7 +277,7 @@ class PriceApprovalService:
         else:
             logger.warning(
                 "Approval not delivered | lead_id=%s approval_id=%s manager=%s "
-                "reason=no_working_channel action=enable_mail_or_im_scope "
+                "reason=no_working_channel action=set_SENDGRID_API_KEY_or_enable_im_scope "
                 "retry=next_stage_trigger url=%s",
                 approval.bitrix_lead_id,
                 approval.id,
@@ -287,7 +287,7 @@ class PriceApprovalService:
         return channels
 
     async def _notify_manager(self, approval: PriceApproval, approval_url: str) -> list[str]:
-        """Try Bitrix mail, then Bitrix chat, then the configured email client."""
+        """Prefer SendGrid, then Bitrix chat. Bitrix mail is skipped (portal often lacks it)."""
         subject = f"Discount approval needed — {approval.lead_title}"
         body = self._email_body(approval, approval_url)
         delivered: list[str] = []
@@ -295,28 +295,32 @@ class PriceApprovalService:
 
         if approval.manager_email:
             logger.info(
-                "TRY approval delivery | channel=bitrix_mail lead_id=%s approval_id=%s to=%s",
+                "TRY approval delivery | channel=sendgrid lead_id=%s approval_id=%s to=%s",
                 approval.bitrix_lead_id,
                 approval.id,
                 approval.manager_email,
             )
             try:
-                if await self.bitrix.send_mail(
-                    to_email=approval.manager_email, subject=subject, body=body
+                email_client = get_email_client(self.settings)
+                if email_client.send_price_approval(
+                    to_email=approval.manager_email,
+                    manager_name=approval.manager_name,
+                    subject=subject,
+                    body=body,
                 ):
-                    delivered.append("bitrix_mail")
-                    attempts.append("bitrix_mail=ok")
+                    delivered.append("sendgrid")
+                    attempts.append("sendgrid=ok")
                 else:
-                    attempts.append("bitrix_mail=failed")
+                    attempts.append("sendgrid=failed")
             except Exception:
-                attempts.append("bitrix_mail=exception")
+                attempts.append("sendgrid=exception")
                 logger.exception(
-                    "Bitrix approval mail raised | approval_id=%s", approval.id
+                    "SendGrid approval mail raised | approval_id=%s", approval.id
                 )
         else:
-            attempts.append("bitrix_mail=skipped_no_manager_email")
+            attempts.append("sendgrid=skipped_no_manager_email")
             logger.warning(
-                "SKIP Bitrix mail | lead_id=%s approval_id=%s reason=no_manager_email "
+                "SKIP SendGrid | lead_id=%s approval_id=%s reason=no_manager_email "
                 "fix=set_department_manager_or_BITRIX_APPROVAL_FALLBACK_EMAIL",
                 approval.bitrix_lead_id,
                 approval.id,
@@ -325,7 +329,7 @@ class PriceApprovalService:
         if not delivered and approval.manager_user_id:
             logger.info(
                 "TRY approval delivery | channel=bitrix_chat lead_id=%s approval_id=%s user_id=%s "
-                "reason=mail_unavailable",
+                "reason=sendgrid_unavailable",
                 approval.bitrix_lead_id,
                 approval.id,
                 approval.manager_user_id,
@@ -352,29 +356,6 @@ class PriceApprovalService:
                 approval.bitrix_lead_id,
                 approval.id,
             )
-
-        if not delivered and approval.manager_email:
-            logger.info(
-                "TRY approval delivery | channel=email_client lead_id=%s approval_id=%s to=%s "
-                "reason=bitrix_mail_and_chat_unavailable",
-                approval.bitrix_lead_id,
-                approval.id,
-                approval.manager_email,
-            )
-            try:
-                email_client = get_email_client(self.settings)
-                email_client.send_payment_request(
-                    to_email=approval.manager_email,
-                    customer_name=approval.manager_name or "Manager",
-                    payment_url=approval_url,
-                )
-                delivered.append("email_client")
-                attempts.append("email_client=ok")
-            except Exception:
-                attempts.append("email_client=exception")
-                logger.exception(
-                    "Fallback email client failed | approval_id=%s", approval.id
-                )
 
         logger.info(
             "Approval delivery result | lead_id=%s approval_id=%s manager=%s "

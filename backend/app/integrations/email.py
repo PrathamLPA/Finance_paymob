@@ -47,6 +47,18 @@ class MockEmailClient:
         )
         self._write_email("Payment Request", to_email, body)
 
+    def send_price_approval(
+        self,
+        *,
+        to_email: str,
+        manager_name: str | None,
+        subject: str,
+        body: str,
+    ) -> bool:
+        # Body already includes greeting / approval URL from PriceApprovalService.
+        self._write_email(subject, to_email, body)
+        return True
+
     def send_terms_acceptance(
         self,
         *,
@@ -162,6 +174,30 @@ class RealEmailClient(MockEmailClient):
             super().send_payment_request(
                 to_email=to_email, customer_name=customer_name, payment_url=payment_url
             )
+
+    def send_price_approval(
+        self,
+        *,
+        to_email: str,
+        manager_name: str | None,
+        subject: str,
+        body: str,
+    ) -> bool:
+        if not self._sendgrid_ready():
+            return super().send_price_approval(
+                to_email=to_email,
+                manager_name=manager_name,
+                subject=subject,
+                body=body,
+            )
+        if self._send_mail(to_email=to_email, subject=subject, body=body):
+            return True
+        return super().send_price_approval(
+            to_email=to_email,
+            manager_name=manager_name,
+            subject=subject,
+            body=body,
+        )
 
     def send_terms_acceptance(
         self,

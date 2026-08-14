@@ -191,8 +191,12 @@ async def test_price_gate_requests_manager_approval(db_session, monkeypatch):
     assert workflow.bitrix_estimate_id is not None
     assert "manager@test.com" in str(exc.value)
     assert "/approvals/" in exc.value.approval_url
-    assert bitrix._mock_mail_sent
-    assert bitrix._mock_mail_sent[-1]["to"] == "manager@test.com"
+    from app.integrations.factory import get_email_client
+
+    email_client = get_email_client()
+    assert email_client.sent_emails
+    assert email_client.sent_emails[-1]["to"] == "manager@test.com"
+    assert "Discount approval needed" in email_client.sent_emails[-1]["subject"]
 
     comments = bitrix._mock_comments.get(("LEAD", 501), [])
     assert comments
@@ -202,7 +206,7 @@ async def test_price_gate_requests_manager_approval(db_session, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_notification_is_retried_on_next_trigger(db_session, monkeypatch):
-    """A send that failed once (missing Bitrix scope) must not be abandoned forever."""
+    """A send that failed once must not be abandoned forever."""
     monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
     monkeypatch.setenv("BITRIX_APPROVAL_FALLBACK_EMAIL", "")
     get_settings.cache_clear()
@@ -240,19 +244,23 @@ async def test_failed_notification_is_retried_on_next_trigger(db_session, monkey
     assert approval is not None
     assert approval.notified_at is None
 
-    # Mail now works (scope granted); the next trigger must retry the delivery.
+    # Channel is available again; the next trigger must retry the delivery via SendGrid.
     monkeypatch.undo()
     monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
     get_settings.cache_clear()
-    sent_before = len(bitrix._mock_mail_sent)
+    from app.integrations.factory import get_email_client
+
+    email_client = get_email_client()
+    sent_before = len(email_client.sent_emails)
 
     with pytest.raises(PriceApprovalPending):
         await orchestrator.initiate_payment_from_lead(888)
 
-    assert len(bitrix._mock_mail_sent) == sent_before + 1
+    assert len(email_client.sent_emails) == sent_before + 1
+    assert "Discount approval needed" in email_client.sent_emails[-1]["subject"]
     db_session.refresh(approval)
     assert approval.notified_at is not None
-    assert approval.notified_via == "bitrix_mail"
+    assert approval.notified_via == "sendgrid"
 
 
 @pytest.mark.asyncio

@@ -198,6 +198,15 @@ class EmailIntegration(Protocol):
         payment_url: str,
     ) -> None: ...
 
+    def send_price_approval(
+        self,
+        *,
+        to_email: str,
+        manager_name: str | None,
+        subject: str,
+        body: str,
+    ) -> bool: ...
+
     def send_terms_acceptance(
         self,
         *,
