@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, text
+from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -27,5 +27,6 @@ class TermsAcceptance(Base):
     registrant_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     registrant_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     registrant_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    participants_json: Mapped[Optional[list[dict]]] = mapped_column(JSON, nullable=True)
 
     payment_session: Mapped[PaymentSession] = relationship(back_populates="terms_acceptance")

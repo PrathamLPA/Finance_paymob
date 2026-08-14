@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment — Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=4">
+    <link rel="stylesheet" href="/static/styles.css?v=6">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -15,7 +15,7 @@
     <header class="site-header">
         <div class="brand">
             <div class="brand-icon" aria-hidden="true">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                     <path d="M8 12l3 3 5-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
@@ -30,37 +30,37 @@
                 <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
                 <path d="M8 11V8a4 4 0 118 0v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             </svg>
-            SSL Secured
+            <span>SSL Secured</span>
         </div>
     </header>
 
     <main class="main-content">
         <nav class="steps" aria-label="Payment progress">
             <div class="step active">
-                <span class="step-num">1</span>
-                <span class="step-label">Your Details</span>
+                <span class="step-num" id="nav-num-buyer">1</span>
+                <span class="step-label">Buyer</span>
+            </div>
+            <div class="step-line" aria-hidden="true" id="nav-line-candidates"></div>
+            <div class="step" id="nav-step-candidates">
+                <span class="step-num" id="nav-num-candidates">2</span>
+                <span class="step-label">Candidates</span>
             </div>
             <div class="step-line" aria-hidden="true"></div>
             <div class="step">
-                <span class="step-num">2</span>
+                <span class="step-num" id="nav-num-amount">3</span>
                 <span class="step-label">Amount</span>
             </div>
             <div class="step-line" aria-hidden="true"></div>
             <div class="step">
-                <span class="step-num">3</span>
-                <span class="step-label">Accept</span>
-            </div>
-            <div class="step-line" aria-hidden="true"></div>
-            <div class="step">
-                <span class="step-num">4</span>
-                <span class="step-label">Pay via Paymob</span>
+                <span class="step-num" id="nav-num-pay">4</span>
+                <span class="step-label">Accept &amp; Pay</span>
             </div>
         </nav>
 
         <article class="terms-card">
             <div class="card-hero">
                 <div class="card-hero-icon" aria-hidden="true">
-                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+                    <svg viewBox="0 0 24 24" fill="none">
                         <rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
                         <path d="M2 10h20" stroke="currentColor" stroke-width="1.5"/>
                         <path d="M6 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -72,14 +72,14 @@
                         <span class="version-pill">v{{ terms_version }}</span>
                     </div>
                     <p class="card-subtitle">
-                        Complete your details, review the payment terms below, then continue to Paymob.
+                        Confirm who this purchase is for, review the terms, then continue to Paymob.
                     </p>
                 </div>
             </div>
 
             {% if error %}
             <div class="alert alert-error" role="alert">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/>
                     <path d="M12 8v5M12 16h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
@@ -88,22 +88,23 @@
             {% endif %}
 
             <form method="post" action="/payment/{{ token }}/accept" class="accept-form" id="accept-form">
-                <section class="registrant-panel" aria-labelledby="registrant-heading">
+                <input type="hidden" name="participants_json" id="participants-json" value="{{ participants_json }}">
+
+                <section class="registrant-panel" aria-labelledby="buyer-heading">
                     <div class="panel-header">
-                        <span class="panel-step-badge">Step 1</span>
-                        <h2 class="section-heading" id="registrant-heading">Participant details</h2>
+                        <span class="panel-step-badge" id="badge-buyer">Step 1</span>
+                        <h2 class="section-heading" id="buyer-heading">Who is this purchase for?</h2>
                     </div>
 
                     <div class="details-warning" role="note">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                             <path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                             <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                         </svg>
                         <div>
-                            <strong>Please double-check your details before continuing.</strong>
-                            The information you enter here cannot be changed once submitted and will be used
-                            exactly as provided for your course certificate. Ensure your name, email, and
-                            phone number are accurate.
+                            <strong>Double-check the details before continuing.</strong>
+                            They cannot be changed after submitting and are used exactly as entered
+                            on the course certificate.
                         </div>
                     </div>
 
@@ -114,7 +115,7 @@
                                 <input type="radio" name="course_for" value="self" required
                                     {% if course_for == 'self' %}checked{% endif %}>
                                 <span class="toggle-icon" aria-hidden="true">
-                                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                                    <svg viewBox="0 0 24 24" fill="none">
                                         <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/>
                                         <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                     </svg>
@@ -126,7 +127,7 @@
                                 <input type="radio" name="course_for" value="someone_else" required
                                     {% if course_for == 'someone_else' %}checked{% endif %}>
                                 <span class="toggle-icon" aria-hidden="true">
-                                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                                    <svg viewBox="0 0 24 24" fill="none">
                                         <circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/>
                                         <circle cx="17" cy="9" r="2.5" stroke="currentColor" stroke-width="1.5"/>
                                         <path d="M3 20c0-2.761 2.686-5 6-5M14 20c0-2.21 1.79-4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -140,15 +141,15 @@
 
                     <div class="form-fields">
                         <label class="field field-full">
-                            <span class="field-label">Name</span>
+                            <span class="field-label" id="buyer-name-label">Name</span>
                             <span class="input-wrap">
                                 <span class="input-icon" aria-hidden="true">
-                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                                    <svg viewBox="0 0 24 24" fill="none">
                                         <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/>
                                         <path d="M4 20c0-3.314 3.582-6 8-6s8 2.686 8 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                     </svg>
                                 </span>
-                                <input type="text" name="registrant_name" class="field-input" required
+                                <input type="text" name="registrant_name" id="registrant-name" class="field-input" required
                                     autocomplete="name" placeholder="Full name"
                                     value="{{ registrant_name }}">
                             </span>
@@ -158,26 +159,26 @@
                             <span class="field-label">Email</span>
                             <span class="input-wrap">
                                 <span class="input-icon" aria-hidden="true">
-                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                                    <svg viewBox="0 0 24 24" fill="none">
                                         <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
                                         <path d="M3 7l9 6 9-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                     </svg>
                                 </span>
-                                <input type="email" name="registrant_email" class="field-input" required
+                                <input type="email" name="registrant_email" id="registrant-email" class="field-input" required
                                     autocomplete="email" placeholder="you@example.com"
                                     value="{{ registrant_email }}">
                             </span>
                         </label>
 
                         <label class="field">
-                            <span class="field-label">Phone Number</span>
+                            <span class="field-label">Phone number</span>
                             <span class="input-wrap">
                                 <span class="input-icon" aria-hidden="true">
-                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                                    <svg viewBox="0 0 24 24" fill="none">
                                         <path d="M6.5 4h3l1.5 4-2 1.5a11 11 0 005 5L17.5 13 21.5 14.5V18a2 2 0 01-2 2C10.5 20 4 13.5 4 5.5A2 2 0 016 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </span>
-                                <input type="tel" name="registrant_phone" class="field-input" required
+                                <input type="tel" name="registrant_phone" id="registrant-phone" class="field-input" required
                                     autocomplete="tel" placeholder="+971 50 000 0000"
                                     value="{{ registrant_phone }}">
                             </span>
@@ -185,9 +186,37 @@
                     </div>
                 </section>
 
+                {% if total_seats > 0 %}
+                <section class="participants-panel" aria-labelledby="candidates-heading" id="participants-section" hidden>
+                    <div class="panel-header">
+                        <span class="panel-step-badge" id="badge-candidates">Step 2</span>
+                        <div>
+                            <h2 class="section-heading" id="candidates-heading">Course candidates</h2>
+                            <p class="terms-divider-hint">
+                                Assign every seat on this order. Picking a course reduces the seats left.
+                            </p>
+                        </div>
+                    </div>
+
+                    <ul class="course-inventory" id="course-inventory" aria-label="Courses on this order">
+                        {% for course in courses %}
+                        <li class="course-chip" data-product-id="{{ course.product_id }}">
+                            <span class="course-chip-name">{{ course.product_name }}</span>
+                            <span class="course-chip-qty">
+                                <span data-remaining>{{ course.quantity }}</span> of {{ course.quantity }} left
+                            </span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+
+                    <div id="seat-cards" class="seat-cards"></div>
+                    <p class="field-hint" id="seats-hint"></p>
+                </section>
+                {% endif %}
+
                 <section class="amount-panel" aria-labelledby="amount-heading">
                     <div class="panel-header">
-                        <span class="panel-step-badge">Step 2</span>
+                        <span class="panel-step-badge" id="badge-amount">Step 3</span>
                         <h2 class="section-heading" id="amount-heading">Amount to pay</h2>
                     </div>
 
@@ -221,7 +250,7 @@
                         <label class="toggle-btn">
                             <input type="radio" name="amount_choice" value="custom">
                             <span class="toggle-label">Another amount</span>
-                            <span class="toggle-hint">Anything from {{ minimum_amount }} {{ currency }} upwards</span>
+                            <span class="toggle-hint">From {{ minimum_amount }} {{ currency }} upwards</span>
                         </label>
                     </div>
                     {% endif %}
@@ -230,7 +259,7 @@
                         <span class="field-label">{{ charge_label }} ({{ currency }})</span>
                         <span class="input-wrap">
                             <span class="input-icon" aria-hidden="true">
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                                <svg viewBox="0 0 24 24" fill="none">
                                     <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/>
                                     <path d="M12 7v10M9.5 9.5h4a1.75 1.75 0 010 3.5h-3a1.75 1.75 0 000 3.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                 </svg>
@@ -253,13 +282,11 @@
                 </section>
 
                 <section class="terms-panel" aria-labelledby="terms-heading">
-                    <div class="terms-divider">
-                        <div class="panel-header">
-                            <span class="panel-step-badge muted">Step 3</span>
-                            <div>
-                                <h2 class="terms-divider-title" id="terms-heading">Payment Terms &amp; Conditions</h2>
-                                <p class="terms-divider-hint">Scroll through and read carefully before accepting.</p>
-                            </div>
+                    <div class="panel-header">
+                        <span class="panel-step-badge muted" id="badge-terms">Step 4</span>
+                        <div>
+                            <h2 class="terms-divider-title" id="terms-heading">Payment terms &amp; conditions</h2>
+                            <p class="terms-divider-hint">Scroll through and read carefully before accepting.</p>
                         </div>
                     </div>
 
@@ -271,7 +298,7 @@
                         For the complete refund and data protection policy, see
                         <a href="{{ refund_policy_url }}" target="_blank" rel="noopener noreferrer">
                             Refund Policy
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                 <path d="M14 4h6v6M10 14L20 4M15 9h5v10H4V9h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
                         </a>.
@@ -289,12 +316,12 @@
                         </span>
                     </label>
                     <button type="submit" class="btn-paymob" id="submit-btn" disabled>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                             <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
                             <path d="M8 11V8a4 4 0 118 0v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                         </svg>
-                        <span>Accept &amp; Continue to Payment</span>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <span>Accept &amp; continue to payment</span>
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                             <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </button>
@@ -315,8 +342,30 @@
         const submitBtn = document.getElementById('submit-btn');
         const amountInput = document.getElementById('payment-amount');
         const amountHint = document.getElementById('amount-hint');
+        const amountLocked = {{ 'true' if amount_locked else 'false' }};
         const minAmount = parseFloat(amountInput.min || '0');
         const maxAmount = parseFloat(amountInput.max || '0');
+        const courses = {{ courses | tojson }};
+        const totalSeats = {{ total_seats }};
+        const participantsInput = document.getElementById('participants-json');
+        const participantsSection = document.getElementById('participants-section');
+        const seatCards = document.getElementById('seat-cards');
+        const seatsHint = document.getElementById('seats-hint');
+        const buyerNameLabel = document.getElementById('buyer-name-label');
+        const navStepCandidates = document.getElementById('nav-step-candidates');
+        const navLineCandidates = document.getElementById('nav-line-candidates');
+
+        let restored = [];
+        try { restored = JSON.parse(participantsInput.value || '[]') || []; } catch (e) { restored = []; }
+
+        function courseForValue() {
+            const checked = form.querySelector('input[name="course_for"]:checked');
+            return checked ? checked.value : '';
+        }
+
+        function seatsRequired() {
+            return totalSeats > 0 && courseForValue() === 'someone_else';
+        }
 
         function amountError() {
             const value = parseFloat(amountInput.value);
@@ -326,20 +375,173 @@
             return '';
         }
 
-        function updateSubmitState() {
-            const courseFor = form.querySelector('input[name="course_for"]:checked');
-            const name = form.querySelector('input[name="registrant_name"]').value.trim();
-            const email = form.querySelector('input[name="registrant_email"]').value.trim();
-            const phone = form.querySelector('input[name="registrant_phone"]').value.trim();
-            const problem = amountError();
-            amountHint.classList.toggle('field-hint-error', Boolean(problem));
-            if (problem) {
-                amountHint.textContent = problem;
-            } else {
-                amountHint.textContent =
-                    'Minimum ' + minAmount.toFixed(2) + ', maximum ' + maxAmount.toFixed(2) + '.';
+        function remainingExcluding(selectToIgnore) {
+            const remaining = {};
+            courses.forEach((c) => { remaining[String(c.product_id)] = Number(c.quantity); });
+            if (!seatCards) return remaining;
+            seatCards.querySelectorAll('.seat-course').forEach((select) => {
+                if (select === selectToIgnore) return;
+                const id = select.value;
+                if (id && remaining[id] !== undefined) remaining[id] -= 1;
+            });
+            return remaining;
+        }
+
+        function refreshCourseInventory() {
+            const remaining = remainingExcluding(null);
+            document.querySelectorAll('.course-chip').forEach((chip) => {
+                const id = chip.getAttribute('data-product-id');
+                const left = remaining[String(id)] ?? 0;
+                const el = chip.querySelector('[data-remaining]');
+                if (el) el.textContent = Math.max(0, left);
+                chip.classList.toggle('depleted', left <= 0);
+            });
+        }
+
+        function rebuildCourseOptions() {
+            if (!seatCards) return;
+            seatCards.querySelectorAll('.seat-course').forEach((select) => {
+                const current = select.value || select.getAttribute('data-prior') || '';
+                const remaining = remainingExcluding(select);
+                const options = ['<option value="">Select course</option>'];
+                courses.forEach((course) => {
+                    const id = String(course.product_id);
+                    const left = remaining[id] ?? 0;
+                    if (left <= 0 && current !== id) return;
+                    options.push(
+                        '<option value="' + id + '"' + (current === id ? ' selected' : '') + '>' +
+                        course.product_name + ' (' + Math.max(left, 0) + ' left)' +
+                        '</option>'
+                    );
+                });
+                select.innerHTML = options.join('');
+                select.value = Array.from(select.options).some((o) => o.value === current) ? current : '';
+                select.removeAttribute('data-prior');
+            });
+            refreshCourseInventory();
+        }
+
+        function collectParticipants() {
+            if (!seatCards || !seatsRequired()) return [];
+            const names = Object.fromEntries(courses.map((c) => [String(c.product_id), c.product_name]));
+            return Array.from(seatCards.querySelectorAll('.seat-card')).map((card) => {
+                const productId = card.querySelector('.seat-course').value;
+                return {
+                    name: card.querySelector('.seat-name').value.trim(),
+                    email: card.querySelector('.seat-email').value.trim(),
+                    product_id: productId ? Number(productId) : 0,
+                    product_name: names[productId] || '',
+                };
+            });
+        }
+
+        function seatsError() {
+            if (!seatsRequired()) return '';
+            const people = collectParticipants();
+            if (people.length !== totalSeats) return 'Please fill in all course seats.';
+            for (let i = 0; i < people.length; i++) {
+                const person = people[i];
+                if (!person.name) return 'Enter the name for candidate ' + (i + 1) + '.';
+                if (!person.email || !person.email.includes('@')) {
+                    return 'Enter a valid email for candidate ' + (i + 1) + '.';
+                }
+                if (!person.product_id) return 'Choose a course for candidate ' + (i + 1) + '.';
             }
-            submitBtn.disabled = !(checkbox.checked && courseFor && name && email && phone && !problem);
+            const remaining = remainingExcluding(null);
+            for (const course of courses) {
+                if ((remaining[String(course.product_id)] || 0) !== 0) {
+                    return '"' + course.product_name + '" still has seats left to assign.';
+                }
+            }
+            return '';
+        }
+
+        function syncParticipantsJson() {
+            participantsInput.value = JSON.stringify(collectParticipants());
+        }
+
+        function updateStepLabels() {
+            const showCandidates = seatsRequired();
+            let step = 1;
+            document.getElementById('badge-buyer').textContent = 'Step ' + step++;
+            if (showCandidates) {
+                document.getElementById('badge-candidates').textContent = 'Step ' + step;
+                document.getElementById('nav-num-candidates').textContent = step;
+                step++;
+            }
+            document.getElementById('badge-amount').textContent = 'Step ' + step;
+            document.getElementById('nav-num-amount').textContent = step;
+            step++;
+            document.getElementById('badge-terms').textContent = 'Step ' + step;
+            document.getElementById('nav-num-pay').textContent = step;
+
+            if (navStepCandidates) navStepCandidates.hidden = !showCandidates;
+            if (navLineCandidates) navLineCandidates.hidden = !showCandidates;
+        }
+
+        function updateVisibility() {
+            const forSomeoneElse = courseForValue() === 'someone_else';
+            if (participantsSection) participantsSection.hidden = !forSomeoneElse;
+            if (buyerNameLabel) {
+                buyerNameLabel.textContent = forSomeoneElse ? 'Your name (payer)' : 'Name';
+            }
+            updateStepLabels();
+        }
+
+        function updateSubmitState() {
+            const courseFor = courseForValue();
+            const name = document.getElementById('registrant-name').value.trim();
+            const email = document.getElementById('registrant-email').value.trim();
+            const phone = document.getElementById('registrant-phone').value.trim();
+            const problem = amountError();
+            const seatProblem = seatsError();
+
+            if (!amountLocked) {
+                amountHint.classList.toggle('field-hint-error', Boolean(problem));
+                amountHint.textContent = problem
+                    ? problem
+                    : 'Minimum ' + minAmount.toFixed(2) + ', maximum ' + maxAmount.toFixed(2) + '.';
+            }
+
+            if (seatsHint) {
+                seatsHint.textContent = seatProblem;
+                seatsHint.classList.toggle('field-hint-error', Boolean(seatProblem));
+            }
+
+            syncParticipantsJson();
+            submitBtn.disabled = !(
+                checkbox.checked && courseFor && name && email && phone && !problem && !seatProblem
+            );
+        }
+
+        function renderSeatCards() {
+            if (!seatCards || totalSeats <= 0) return;
+            const html = [];
+            for (let i = 0; i < totalSeats; i++) {
+                const prior = restored[i] || {};
+                const priorName = String(prior.name || '').replace(/"/g, '&quot;');
+                const priorEmail = String(prior.email || '').replace(/"/g, '&quot;');
+                html.push(
+                    '<article class="seat-card">' +
+                    '<div class="seat-card-header"><span class="seat-badge">Candidate ' + (i + 1) + '</span></div>' +
+                    '<div class="form-fields seat-fields">' +
+                    '<label class="field field-full"><span class="field-label">Candidate name</span>' +
+                    '<input type="text" class="field-input seat-name" placeholder="Full name" value="' + priorName + '"></label>' +
+                    '<label class="field"><span class="field-label">Candidate email</span>' +
+                    '<input type="email" class="field-input seat-email" placeholder="name@example.com" value="' + priorEmail + '"></label>' +
+                    '<label class="field"><span class="field-label">Course</span>' +
+                    '<select class="field-input seat-course" data-prior="' + String(prior.product_id || '') + '"></select></label>' +
+                    '</div></article>'
+                );
+            }
+            seatCards.innerHTML = html.join('');
+            seatCards.querySelectorAll('.seat-course').forEach((select) => {
+                select.addEventListener('change', () => {
+                    rebuildCourseOptions();
+                    updateSubmitState();
+                });
+            });
+            rebuildCourseOptions();
         }
 
         function bindToggleGroup(selector) {
@@ -348,6 +550,7 @@
                 btn.addEventListener('click', () => {
                     buttons.forEach((b) => b.classList.remove('selected'));
                     btn.classList.add('selected');
+                    updateVisibility();
                     updateSubmitState();
                 });
             });
@@ -374,8 +577,7 @@
             const custom = form.querySelector('input[name="amount_choice"][value="custom"]');
             if (!custom) return;
             const value = parseFloat(amountInput.value);
-            const matchesPreset = value === minAmount || value === maxAmount;
-            if (!matchesPreset && !custom.checked) {
+            if (value !== minAmount && value !== maxAmount && !custom.checked) {
                 custom.checked = true;
                 form.querySelectorAll('.amount-choice .toggle-btn').forEach((b) => b.classList.remove('selected'));
                 custom.closest('.toggle-btn').classList.add('selected');
@@ -384,6 +586,10 @@
 
         form.addEventListener('input', updateSubmitState);
         checkbox.addEventListener('change', updateSubmitState);
+        form.addEventListener('submit', syncParticipantsJson);
+
+        renderSeatCards();
+        updateVisibility();
         updateSubmitState();
     </script>
 </body>

@@ -1,5 +1,8 @@
 """Customer-facing payment pages (proxies to backend API)."""
 
+from __future__ import annotations
+
+import json
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -20,6 +23,30 @@ def _amount(data: dict, key: str) -> Decimal:
         return Decimal("0")
 
 
+def _parse_participants(raw: str | None) -> list[dict]:
+    if not raw or not raw.strip():
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    cleaned: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        cleaned.append(
+            {
+                "name": str(item.get("name") or ""),
+                "email": str(item.get("email") or ""),
+                "product_id": int(item.get("product_id") or 0),
+                "product_name": str(item.get("product_name") or ""),
+            }
+        )
+    return cleaned
+
+
 def _form_context(
     request: Request,
     token: str,
@@ -31,11 +58,13 @@ def _form_context(
     registrant_email: str = "",
     registrant_phone: str = "",
     payment_amount: str = "",
+    participants: list[dict] | None = None,
 ) -> dict:
     remaining = _amount(data, "remaining_balance")
     minimum = _amount(data, "minimum_amount")
     payment_amount_value = _amount(data, "payment_amount") or remaining
     allows_partial = bool(data.get("allows_partial", False)) and minimum < remaining
+    courses = data.get("courses") or []
     return {
         "request": request,
         "token": token,
@@ -55,6 +84,10 @@ def _form_context(
         "amount_locked": bool(data.get("amount_locked", True)),
         "charge_label": data.get("charge_label") or "Payment amount",
         "payment_amount": payment_amount or f"{payment_amount_value:.2f}",
+        "courses": courses,
+        "courses_json": json.dumps(courses),
+        "total_seats": int(data.get("total_seats") or 0),
+        "participants_json": json.dumps(participants or []),
         "error": error,
     }
 
@@ -148,6 +181,7 @@ async def accept_terms_and_redirect(
     registrant_email: str | None = Form(default=None),
     registrant_phone: str | None = Form(default=None),
     payment_amount: str | None = Form(default=None),
+    participants_json: str | None = Form(default=None),
 ) -> Response:
     try:
         data = await get_payment(token)
@@ -157,6 +191,8 @@ async def accept_terms_and_redirect(
             {"request": request, "message": exc.detail},
             status_code=404,
         )
+
+    participants = _parse_participants(participants_json)
 
     def _reject(message: str, status_code: int = 400) -> HTMLResponse:
         return templates.TemplateResponse(
@@ -171,6 +207,7 @@ async def accept_terms_and_redirect(
                 registrant_email=registrant_email or "",
                 registrant_phone=registrant_phone or "",
                 payment_amount=payment_amount or "",
+                participants=participants,
             ),
             status_code=status_code,
         )
@@ -195,6 +232,7 @@ async def accept_terms_and_redirect(
                 "registrant_email": registrant_email or "",
                 "registrant_phone": registrant_phone or "",
                 "payment_amount": str(chosen_amount) if chosen_amount is not None else None,
+                "participants": participants,
             },
         )
     except BackendApiError as exc:

@@ -18,6 +18,12 @@ from app.integrations.factory import get_bitrix_client, get_email_client
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import PaymentSession, SESSION_TERMS_ACCEPTED
 from app.models.terms_acceptance import TermsAcceptance
+from app.services.course_seats import (
+    load_lead_courses,
+    normalize_participants,
+    participants_for_buyer,
+    validate_participants,
+)
 from app.services.payment_session_service import PaymentSessionService
 
 logger = logging.getLogger(__name__)
@@ -150,6 +156,7 @@ class TermsService:
         registrant_name: str,
         registrant_email: str,
         registrant_phone: str,
+        participants: list[dict] | None = None,
     ) -> str:
         pdf_dir = Path(self.settings.storage_path) / "pdfs" / "terms"
         pdf_dir.mkdir(parents=True, exist_ok=True)
@@ -163,11 +170,27 @@ class TermsService:
         c.drawString(72, 710, f"Accepted at: {datetime.now(timezone.utc).isoformat()}")
         c.drawString(72, 690, f"Session token: {session.token[:16]}...")
         c.drawString(72, 670, f"Course registration: {course_label}")
-        c.drawString(72, 650, f"Name: {registrant_name[:70]}")
-        c.drawString(72, 630, f"Email: {registrant_email[:70]}")
-        c.drawString(72, 610, f"Phone: {registrant_phone[:70]}")
+        c.drawString(72, 650, f"Buyer name: {registrant_name[:70]}")
+        c.drawString(72, 630, f"Buyer email: {registrant_email[:70]}")
+        c.drawString(72, 610, f"Buyer phone: {registrant_phone[:70]}")
 
         y = 580
+        if participants:
+            c.drawString(72, y, "Course candidates:")
+            y -= 16
+            for index, person in enumerate(participants, start=1):
+                if y < 72:
+                    c.showPage()
+                    y = 750
+                label = (
+                    f"{index}. {str(person.get('name') or '')[:40]} | "
+                    f"{str(person.get('email') or '')[:40]} | "
+                    f"{str(person.get('product_name') or '')[:40]}"
+                )
+                c.drawString(72, y, label[:95])
+                y -= 14
+            y -= 10
+
         for line in markdown.split("\n"):
             if y < 72:
                 c.showPage()
@@ -195,6 +218,7 @@ class TermsService:
         registrant_email: str,
         registrant_phone: str,
         payment_amount: Decimal | None = None,
+        participants: list[dict] | None = None,
     ) -> str:
         if not accepted:
             raise HTTPException(status_code=400, detail="You must accept the Terms and Conditions to continue")
@@ -212,6 +236,19 @@ class TermsService:
         if not session:
             raise HTTPException(status_code=404, detail="Payment session not found or expired")
 
+        bitrix = get_bitrix_client(self.settings)
+        courses = await load_lead_courses(bitrix, session.workflow.bitrix_lead_id)
+        if course_for == "self" and not participants:
+            participants = participants_for_buyer(
+                courses,
+                name=registrant_name.strip(),
+                email=registrant_email.strip(),
+            )
+        participants_error = validate_participants(courses, participants)
+        if participants_error:
+            raise HTTPException(status_code=400, detail=participants_error)
+        cleaned_participants = normalize_participants(participants, courses)
+
         amount = self.resolve_payment_amount(
             session.workflow, payment_amount, session=session
         )
@@ -225,6 +262,7 @@ class TermsService:
             registrant_name=registrant_name.strip(),
             registrant_email=registrant_email.strip(),
             registrant_phone=registrant_phone.strip(),
+            participants=cleaned_participants,
         )
 
         acceptance = TermsAcceptance(
@@ -236,6 +274,7 @@ class TermsService:
             registrant_name=registrant_name.strip(),
             registrant_email=registrant_email.strip(),
             registrant_phone=registrant_phone.strip(),
+            participants_json=cleaned_participants or None,
         )
         self.db.add(acceptance)
         self.session_service.mark_terms_accepted(session)

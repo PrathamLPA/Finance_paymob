@@ -4,14 +4,23 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.integrations.factory import get_bitrix_client
+from app.services.course_seats import load_lead_courses, total_seats
 from app.services.payment_session_service import PaymentSessionService
 from app.services.terms_service import TermsService
 
 router = APIRouter(prefix="/api/payment", tags=["payment-api"])
+
+
+class ParticipantBody(BaseModel):
+    name: str = ""
+    email: str = ""
+    product_id: int = 0
+    product_name: str = ""
 
 
 class AcceptTermsBody(BaseModel):
@@ -21,6 +30,7 @@ class AcceptTermsBody(BaseModel):
     registrant_email: str = ""
     registrant_phone: str = ""
     payment_amount: Decimal | None = None
+    participants: list[ParticipantBody] = Field(default_factory=list)
 
 
 @router.get("/{token}")
@@ -40,6 +50,8 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
         "installment_1": "Installment 1",
         "full": "Full payment",
     }
+    bitrix = get_bitrix_client(session_service.settings)
+    courses = await load_lead_courses(bitrix, workflow.bitrix_lead_id)
     return {
         "token": token,
         "status": session.status,
@@ -59,6 +71,8 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
         "charge_source": charge_source,
         "charge_label": charge_labels.get(charge_source, charge_source),
         "required_percent": str(required_percent),
+        "courses": courses,
+        "total_seats": total_seats(courses),
     }
 
 
@@ -83,5 +97,6 @@ async def accept_payment_terms(
         registrant_email=body.registrant_email,
         registrant_phone=body.registrant_phone,
         payment_amount=body.payment_amount,
+        participants=[p.model_dump() for p in body.participants],
     )
     return {"checkout_url": checkout_url}

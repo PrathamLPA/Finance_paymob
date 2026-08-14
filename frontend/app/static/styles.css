@@ -1,111 +1,167 @@
+/* Design tokens follow the shadcn/ui "new-york" scale (neutral base). */
 :root {
-    --paymob-navy: #0b1a2e;
-    --paymob-navy-light: #132337;
-    --paymob-blue: #0066ff;
-    --paymob-blue-hover: #0052cc;
-    --paymob-blue-glow: rgba(0, 102, 255, 0.28);
-    --paymob-accent: #00c2ff;
-    --surface: #ffffff;
-    --surface-muted: #f8fafc;
-    --surface-elevated: #f1f5f9;
-    --border: #e2e8f0;
-    --border-strong: #cbd5e1;
-    --text-primary: #0f172a;
-    --text-secondary: #64748b;
-    --text-muted: #94a3b8;
-    --text-inverse: #e2e8f0;
-    --error-bg: #fef2f2;
-    --error-text: #dc2626;
-    --radius: 16px;
-    --radius-sm: 10px;
-    --shadow: 0 24px 60px rgba(0, 0, 0, 0.38);
-    --shadow-soft: 0 4px 16px rgba(15, 23, 42, 0.06);
+    --radius: 0.625rem;
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --destructive-foreground: oklch(0.985 0 0);
+    --success: oklch(0.63 0.16 152);
+    --warning: oklch(0.68 0.14 76);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --surface: oklch(0.98 0 0);
+
+    --ring-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+    --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --background: oklch(0.145 0 0);
+        --foreground: oklch(0.985 0 0);
+        --card: oklch(0.205 0 0);
+        --card-foreground: oklch(0.985 0 0);
+        --primary: oklch(0.922 0 0);
+        --primary-foreground: oklch(0.205 0 0);
+        --secondary: oklch(0.269 0 0);
+        --secondary-foreground: oklch(0.985 0 0);
+        --muted: oklch(0.269 0 0);
+        --muted-foreground: oklch(0.708 0 0);
+        --accent: oklch(0.371 0 0);
+        --accent-foreground: oklch(0.985 0 0);
+        --destructive: oklch(0.704 0.191 22.216);
+        --border: oklch(1 0 0 / 12%);
+        --input: oklch(1 0 0 / 18%);
+        --ring: oklch(0.556 0 0);
+        --surface: oklch(0.2 0 0);
+    }
 }
 
 * {
     box-sizing: border-box;
 }
 
-body.paymob-page {
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+[hidden] {
+    display: none !important;
+}
+
+body.paymob-page,
+body.error-page-body {
+    font-family: "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     margin: 0;
     min-height: 100vh;
-    color: var(--text-primary);
-    background: var(--paymob-navy);
+    color: var(--foreground);
+    background: var(--background);
+    font-size: 0.875rem;
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
 
 .page-bg {
     position: fixed;
     inset: 0;
-    background:
-        radial-gradient(ellipse 80% 60% at 50% -10%, rgba(0, 102, 255, 0.2), transparent),
-        radial-gradient(ellipse 50% 40% at 100% 100%, rgba(0, 194, 255, 0.1), transparent),
-        var(--paymob-navy);
+    background: linear-gradient(
+        to bottom,
+        var(--background) 0%,
+        color-mix(in oklab, var(--surface) 60%, var(--background)) 100%
+    );
     z-index: -1;
 }
 
+/* ── Header ── */
 .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 1.1rem 1.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(11, 26, 46, 0.88);
-    backdrop-filter: blur(14px);
+    gap: 1rem;
+    padding: 0.85rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in oklab, var(--background) 85%, transparent);
+    backdrop-filter: blur(12px);
 }
 
 .brand {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.65rem;
 }
 
 .brand-icon {
-    width: 44px;
-    height: 44px;
+    width: 36px;
+    height: 36px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, var(--paymob-blue), var(--paymob-accent));
-    border-radius: 12px;
-    color: #fff;
-    box-shadow: 0 4px 14px rgba(0, 102, 255, 0.35);
+    background: var(--primary);
+    color: var(--primary-foreground);
+    border-radius: var(--radius-md);
+}
+
+.brand-icon svg {
+    width: 20px;
+    height: 20px;
 }
 
 .brand-name {
     display: block;
-    font-weight: 700;
-    font-size: 1rem;
-    color: #fff;
-    letter-spacing: -0.02em;
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: var(--foreground);
+    letter-spacing: -0.01em;
+    line-height: 1.3;
 }
 
 .brand-tagline {
     display: block;
     font-size: 0.75rem;
-    color: var(--text-muted);
-    font-weight: 500;
+    color: var(--muted-foreground);
 }
 
 .secure-badge {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: #86efac;
-    background: rgba(34, 197, 94, 0.12);
-    border: 1px solid rgba(34, 197, 94, 0.28);
-    padding: 0.45rem 0.85rem;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    background: var(--muted);
+    border: 1px solid var(--border);
+    padding: 0.25rem 0.6rem;
     border-radius: 999px;
+    white-space: nowrap;
+}
+
+.secure-badge svg {
+    color: var(--success);
 }
 
 .main-content {
-    max-width: 720px;
+    max-width: 760px;
     margin: 0 auto;
-    padding: 2rem 1.25rem 3rem;
+    padding: 2rem 1.25rem 3.5rem;
 }
 
 /* ── Progress steps ── */
@@ -113,9 +169,7 @@ body.paymob-page {
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    gap: 0;
-    margin-bottom: 2rem;
-    padding: 0 0.5rem;
+    margin-bottom: 1.75rem;
 }
 
 .step {
@@ -123,84 +177,85 @@ body.paymob-page {
     flex-direction: column;
     align-items: center;
     gap: 0.5rem;
-    opacity: 0.4;
-    min-width: 72px;
-}
-
-.step.active {
-    opacity: 1;
+    min-width: 76px;
 }
 
 .step-num {
-    width: 36px;
-    height: 36px;
+    width: 28px;
+    height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text-inverse);
-    font-size: 0.82rem;
-    font-weight: 700;
-    border: 2px solid rgba(255, 255, 255, 0.14);
-    transition: all 0.25s ease;
+    border-radius: 999px;
+    background: var(--background);
+    border: 1px solid var(--border);
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .step.active .step-num {
-    background: linear-gradient(135deg, var(--paymob-blue), #0052cc);
-    border-color: transparent;
-    color: #fff;
-    box-shadow: 0 0 24px var(--paymob-blue-glow);
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--primary-foreground);
 }
 
 .step-label {
-    font-size: 0.68rem;
-    font-weight: 600;
-    color: var(--text-inverse);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
     text-align: center;
     line-height: 1.3;
 }
 
+.step.active .step-label {
+    color: var(--foreground);
+}
+
 .step-line {
     flex: 1;
-    max-width: 64px;
-    height: 2px;
-    background: rgba(255, 255, 255, 0.14);
-    margin-top: 17px;
-    border-radius: 1px;
+    max-width: 56px;
+    height: 1px;
+    background: var(--border);
+    margin-top: 14px;
 }
 
 /* ── Main card ── */
 .terms-card {
-    background: var(--surface);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--card);
+    color: var(--card-foreground);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-sm);
     overflow: hidden;
 }
 
 .card-hero {
     display: flex;
     align-items: flex-start;
-    gap: 1rem;
-    padding: 1.75rem 2rem 1.25rem;
-    background: linear-gradient(135deg, rgba(0, 102, 255, 0.06) 0%, rgba(0, 194, 255, 0.04) 100%);
+    gap: 0.9rem;
+    padding: 1.5rem;
     border-bottom: 1px solid var(--border);
 }
 
 .card-hero-icon {
     flex-shrink: 0;
-    width: 52px;
-    height: 52px;
+    width: 40px;
+    height: 40px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, var(--paymob-blue), #0052cc);
-    border-radius: 14px;
-    color: #fff;
-    box-shadow: 0 6px 18px rgba(0, 102, 255, 0.3);
+    background: var(--muted);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.card-hero-icon svg {
+    width: 20px;
+    height: 20px;
 }
 
 .card-hero-text {
@@ -212,50 +267,52 @@ body.paymob-page {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 0.35rem;
+    gap: 0.75rem;
+    margin-bottom: 0.3rem;
 }
 
 .card-header h1 {
     margin: 0;
-    font-size: 1.45rem;
-    font-weight: 700;
-    letter-spacing: -0.03em;
-    color: var(--text-primary);
+    font-size: 1.125rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.3;
+    color: var(--foreground);
 }
 
 .version-pill {
-    font-size: 0.68rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--paymob-blue);
-    background: rgba(0, 102, 255, 0.1);
-    padding: 0.3rem 0.7rem;
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--secondary-foreground);
+    background: var(--secondary);
+    padding: 0.1rem 0.5rem;
     border-radius: 999px;
     white-space: nowrap;
-    border: 1px solid rgba(0, 102, 255, 0.15);
 }
 
 .card-subtitle {
-    color: var(--text-secondary);
-    font-size: 0.9rem;
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
     margin: 0;
     line-height: 1.55;
 }
 
 .accept-form {
-    padding: 0 2rem 2rem;
+    padding: 0 1.5rem 1.5rem;
 }
 
 /* ── Panels ── */
-.registrant-panel {
+.registrant-panel,
+.participants-panel,
+.amount-panel {
     margin-top: 1.5rem;
-    padding: 1.5rem;
-    background: var(--surface-muted);
+    padding: 1.25rem;
+    background: var(--card);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-soft);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
 }
 
 .terms-panel {
@@ -265,113 +322,111 @@ body.paymob-page {
 .panel-header {
     display: flex;
     align-items: flex-start;
-    gap: 0.75rem;
-    margin-bottom: 1.25rem;
+    gap: 0.65rem;
+    margin-bottom: 1.15rem;
 }
 
 .panel-step-badge {
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
-    padding: 0.25rem 0.6rem;
-    font-size: 0.68rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--paymob-blue);
-    background: rgba(0, 102, 255, 0.1);
-    border-radius: 6px;
-    margin-top: 0.15rem;
+    padding: 0.1rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--primary-foreground);
+    background: var(--primary);
+    border-radius: 999px;
+    margin-top: 0.1rem;
+    white-space: nowrap;
 }
 
 .panel-step-badge.muted {
-    color: var(--text-secondary);
-    background: var(--surface-elevated);
+    color: var(--secondary-foreground);
+    background: var(--secondary);
 }
 
 .details-warning {
     display: flex;
     align-items: flex-start;
-    gap: 0.75rem;
-    padding: 0.95rem 1.1rem;
-    margin-bottom: 1.35rem;
-    background: #fffbeb;
-    border: 1.5px solid #fcd34d;
-    border-radius: var(--radius-sm);
-    font-size: 0.84rem;
-    color: #92400e;
-    line-height: 1.55;
+    gap: 0.65rem;
+    padding: 0.85rem 0.9rem;
+    margin-bottom: 1.15rem;
+    background: color-mix(in oklab, var(--warning) 10%, var(--card));
+    border: 1px solid color-mix(in oklab, var(--warning) 35%, var(--border));
+    border-radius: var(--radius-md);
+    font-size: 0.8125rem;
+    color: var(--foreground);
+    line-height: 1.5;
 }
 
 .details-warning svg {
     flex-shrink: 0;
-    margin-top: 0.1rem;
-    color: #d97706;
+    margin-top: 0.15rem;
+    color: var(--warning);
 }
 
 .details-warning strong {
     display: block;
-    margin-bottom: 0.2rem;
-    font-weight: 700;
-    color: #78350f;
+    margin-bottom: 0.15rem;
+    font-weight: 600;
 }
 
 .section-heading,
 .terms-divider-title {
     margin: 0;
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    letter-spacing: -0.02em;
-    line-height: 1.3;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--foreground);
+    letter-spacing: -0.01em;
+    line-height: 1.35;
 }
 
 .terms-divider-hint {
     margin: 0.2rem 0 0;
-    font-size: 0.84rem;
-    color: var(--text-secondary);
+    font-size: 0.8125rem;
+    color: var(--muted-foreground);
 }
 
-/* ── Course toggle buttons ── */
+/* ── Segmented toggle cards ── */
 .course-for-fieldset {
     border: none;
-    margin: 0 0 1.5rem;
+    margin: 0 0 1.25rem;
     padding: 0;
 }
 
 .field-label {
     display: block;
-    font-size: 0.84rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 0.65rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--foreground);
+    margin-bottom: 0.5rem;
+    line-height: 1.4;
 }
 
 .toggle-group {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 0.85rem;
+    gap: 0.65rem;
 }
 
 .toggle-btn {
     position: relative;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 1.1rem 0.85rem;
-    border: 2px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: #fff;
+    align-items: flex-start;
+    gap: 0.2rem;
+    padding: 0.85rem 0.9rem;
+    border: 1px solid var(--input);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    box-shadow: var(--shadow-xs);
     cursor: pointer;
-    transition: border-color 0.2s, background 0.2s, box-shadow 0.2s, transform 0.15s;
-    text-align: center;
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
 
 .toggle-btn:hover {
-    border-color: var(--border-strong);
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-soft);
+    background: var(--accent);
+    color: var(--accent-foreground);
 }
 
 .toggle-btn input {
@@ -380,64 +435,137 @@ body.paymob-page {
     pointer-events: none;
 }
 
+.toggle-btn input:focus-visible + .toggle-icon,
+.toggle-btn:has(input:focus-visible) {
+    border-color: var(--ring);
+    box-shadow: var(--ring-shadow);
+}
+
 .toggle-icon {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    background: var(--surface-elevated);
-    color: var(--text-secondary);
-    transition: background 0.2s, color 0.2s;
+    width: 28px;
+    height: 28px;
+    margin-bottom: 0.2rem;
+    border-radius: var(--radius-sm);
+    background: var(--muted);
+    color: var(--muted-foreground);
+    transition: background 0.15s, color 0.15s;
+}
+
+.toggle-icon svg {
+    width: 16px;
+    height: 16px;
 }
 
 .toggle-label {
-    font-size: 0.92rem;
-    font-weight: 700;
-    color: var(--text-primary);
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--foreground);
 }
 
 .toggle-hint {
     font-size: 0.75rem;
-    color: var(--text-muted);
-    line-height: 1.3;
+    color: var(--muted-foreground);
+    line-height: 1.4;
 }
 
 .toggle-btn.selected,
 .toggle-btn:has(input:checked) {
-    border-color: var(--paymob-blue);
-    background: rgba(0, 102, 255, 0.04);
-    box-shadow: 0 0 0 4px rgba(0, 102, 255, 0.1);
+    border-color: var(--foreground);
+    background: var(--accent);
+    box-shadow: var(--shadow-sm);
 }
 
 .toggle-btn.selected .toggle-icon,
 .toggle-btn:has(input:checked) .toggle-icon {
-    background: linear-gradient(135deg, var(--paymob-blue), #0052cc);
-    color: #fff;
+    background: var(--primary);
+    color: var(--primary-foreground);
 }
 
-.toggle-btn.selected .toggle-label,
-.toggle-btn:has(input:checked) .toggle-label {
-    color: var(--paymob-blue);
+/* ── Course candidates / seats ── */
+.course-inventory {
+    list-style: none;
+    margin: 0 0 1.15rem;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
 }
 
-/* ── Amount step ── */
-.amount-panel {
-    margin-top: 1.5rem;
-    padding: 1.5rem;
-    background: var(--surface-muted);
+.course-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.65rem;
+    background: var(--card);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-soft);
+    border-radius: 999px;
+    font-size: 0.75rem;
 }
 
+.course-chip-name {
+    font-weight: 500;
+    color: var(--foreground);
+}
+
+.course-chip-qty {
+    color: var(--muted-foreground);
+    font-variant-numeric: tabular-nums;
+}
+
+.course-chip.depleted {
+    color: var(--muted-foreground);
+    background: var(--muted);
+    border-style: dashed;
+}
+
+.course-chip.depleted .course-chip-name {
+    color: var(--muted-foreground);
+    text-decoration: line-through;
+}
+
+.seat-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.seat-card {
+    padding: 1rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-xs);
+}
+
+.seat-card-header {
+    margin-bottom: 0.85rem;
+}
+
+.seat-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.1rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--secondary-foreground);
+    background: var(--secondary);
+    border-radius: 999px;
+}
+
+.seat-fields {
+    margin: 0;
+}
+
+/* ── Amount ── */
 .amount-summary {
-    margin: 0 0 1.25rem;
-    padding: 1rem 1.1rem;
-    background: var(--surface-elevated);
+    margin: 0 0 1.15rem;
+    padding: 0.9rem 1rem;
+    background: var(--muted);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
 }
 
 .amount-row {
@@ -445,67 +573,82 @@ body.paymob-page {
     align-items: baseline;
     justify-content: space-between;
     gap: 1rem;
-    padding: 0.35rem 0;
+    padding: 0.3rem 0;
 }
 
 .amount-row dt {
-    font-size: 0.85rem;
-    color: var(--text-secondary);
+    font-size: 0.8125rem;
+    color: var(--muted-foreground);
 }
 
 .amount-row dd {
     margin: 0;
-    font-size: 0.92rem;
-    font-weight: 600;
-    color: var(--text-primary);
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--foreground);
     font-variant-numeric: tabular-nums;
+    text-align: right;
 }
 
 .amount-row-total {
-    margin-top: 0.35rem;
-    padding-top: 0.7rem;
+    margin-top: 0.3rem;
+    padding-top: 0.65rem;
     border-top: 1px solid var(--border);
 }
 
 .amount-row-total dt {
-    font-weight: 700;
-    color: var(--text-primary);
+    font-weight: 500;
+    color: var(--foreground);
 }
 
 .amount-row-total dd {
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: var(--paymob-blue);
+    font-size: 1.0625rem;
+    font-weight: 600;
+}
+
+.line-meta {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--muted-foreground);
+}
+
+.summary-note {
+    margin: 1rem 0 0;
+    font-size: 0.8125rem;
+    color: var(--muted-foreground);
 }
 
 .amount-choice {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 0.85rem;
-    margin-bottom: 1.1rem;
+    gap: 0.65rem;
+    margin-bottom: 1rem;
 }
 
 .amount-choice .toggle-btn {
-    padding: 0.9rem 0.75rem;
-    text-align: center;
+    align-items: flex-start;
 }
 
 .field-hint {
     margin-top: 0.4rem;
     font-size: 0.75rem;
-    color: var(--text-muted);
+    color: var(--muted-foreground);
+}
+
+.field-hint:empty {
+    display: none;
 }
 
 .field-hint-error {
-    color: #c0392b;
-    font-weight: 600;
+    color: var(--destructive);
 }
 
 /* ── Form fields ── */
 .form-fields {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1rem 1.1rem;
+    gap: 0.9rem 1rem;
 }
 
 .field {
@@ -526,65 +669,91 @@ body.paymob-page {
 
 .input-icon {
     position: absolute;
-    left: 0.9rem;
+    left: 0.7rem;
     top: 50%;
     transform: translateY(-50%);
-    color: var(--text-muted);
+    color: var(--muted-foreground);
     pointer-events: none;
     display: flex;
     align-items: center;
 }
 
+.input-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
 .field-input {
     display: block;
     width: 100%;
-    padding: 0.82rem 0.9rem 0.82rem 2.65rem;
-    border: 1.5px solid var(--border);
-    border-radius: var(--radius-sm);
-    font-size: 0.94rem;
+    height: 2.25rem;
+    padding: 0 0.75rem;
+    border: 1px solid var(--input);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
     font-family: inherit;
-    color: var(--text-primary);
-    background: #fff;
-    transition: border-color 0.2s, box-shadow 0.2s;
+    color: var(--foreground);
+    background: var(--card);
+    box-shadow: var(--shadow-xs);
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.input-wrap .field-input {
+    padding-left: 2.25rem;
 }
 
 .field-input::placeholder {
-    color: var(--text-muted);
+    color: var(--muted-foreground);
 }
 
-.field-input:hover {
-    border-color: var(--border-strong);
-}
-
-.field-input:focus {
+.field-input:focus-visible {
     outline: none;
-    border-color: var(--paymob-blue);
-    box-shadow: 0 0 0 4px rgba(0, 102, 255, 0.12);
+    border-color: var(--ring);
+    box-shadow: var(--ring-shadow);
 }
 
-.input-wrap:focus-within .input-icon {
-    color: var(--paymob-blue);
+.field-input:read-only:not(select):not(textarea) {
+    background: var(--muted);
+    color: var(--muted-foreground);
+    cursor: default;
+}
+
+textarea.field-input {
+    height: auto;
+    min-height: 5rem;
+    padding: 0.5rem 0.75rem;
+    resize: vertical;
+    line-height: 1.55;
+}
+
+select.field-input {
+    cursor: pointer;
+    appearance: none;
+    padding-right: 2rem;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 16px;
 }
 
 /* ── Terms scroll area ── */
 .terms-scroll {
-    border: 1.5px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 1.35rem 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 1.1rem 1.25rem;
     max-height: 300px;
     overflow-y: auto;
-    background: var(--surface-muted);
-    font-size: 0.875rem;
-    color: #334155;
+    background: var(--muted);
+    font-size: 0.8125rem;
+    color: var(--muted-foreground);
     line-height: 1.65;
-    box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 
 .terms-scroll h2 {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 1.25rem 0 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--foreground);
+    margin: 1.15rem 0 0.45rem;
 }
 
 .terms-scroll h2:first-child {
@@ -592,9 +761,9 @@ body.paymob-page {
 }
 
 .terms-scroll .terms-section-title {
-    margin: 1.1rem 0 0.45rem;
-    font-size: 0.88rem;
-    color: var(--text-primary);
+    margin: 1rem 0 0.4rem;
+    font-size: 0.8125rem;
+    color: var(--foreground);
 }
 
 .terms-scroll .terms-section-title:first-child,
@@ -603,26 +772,25 @@ body.paymob-page {
 }
 
 .terms-scroll .terms-version {
-    margin: 0 0 0.75rem;
-    font-size: 0.82rem;
-    color: var(--text-secondary);
+    margin: 0 0 0.7rem;
+    font-size: 0.8125rem;
 }
 
 .terms-scroll ul {
-    margin: 0 0 0.75rem;
-    padding-left: 1.2rem;
+    margin: 0 0 0.7rem;
+    padding-left: 1.15rem;
 }
 
 .terms-scroll li {
-    margin-bottom: 0.3rem;
+    margin-bottom: 0.25rem;
 }
 
 .terms-scroll p {
-    margin: 0 0 0.7rem;
+    margin: 0 0 0.65rem;
 }
 
 .terms-scroll::-webkit-scrollbar {
-    width: 7px;
+    width: 8px;
 }
 
 .terms-scroll::-webkit-scrollbar-track {
@@ -630,18 +798,18 @@ body.paymob-page {
 }
 
 .terms-scroll::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
-    border-radius: 4px;
+    background: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
+    border-radius: 999px;
 }
 
 .terms-scroll::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
+    background: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
 }
 
 .external-policy-link {
-    margin: 1rem 0 0;
-    font-size: 0.84rem;
-    color: var(--text-secondary);
+    margin: 0.85rem 0 0;
+    font-size: 0.8125rem;
+    color: var(--muted-foreground);
     line-height: 1.5;
 }
 
@@ -650,145 +818,152 @@ body.paymob-page {
     display: inline-flex;
     align-items: center;
     gap: 0.2rem;
-    color: var(--paymob-blue);
-    text-decoration: none;
-    font-weight: 600;
+    color: var(--foreground);
+    font-weight: 500;
+    text-decoration: underline;
+    text-underline-offset: 4px;
 }
 
 .external-policy-link a:hover,
 .consent-text a:hover {
-    text-decoration: underline;
-    color: var(--paymob-blue-hover);
+    text-decoration-thickness: 2px;
 }
 
 /* ── Footer / consent ── */
 .form-footer {
-    margin-top: 1.75rem;
-    padding-top: 1.5rem;
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
     border-top: 1px solid var(--border);
 }
 
 .consent-box {
     display: flex;
     align-items: flex-start;
-    gap: 0.85rem;
-    padding: 1.1rem 1.15rem;
-    background: var(--surface-muted);
-    border: 1.5px solid var(--border);
-    border-radius: var(--radius-sm);
+    gap: 0.7rem;
+    padding: 0.9rem 1rem;
+    background: var(--card);
+    border: 1px solid var(--input);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-xs);
     cursor: pointer;
-    margin-bottom: 1.1rem;
-    transition: border-color 0.2s, background 0.2s;
+    margin-bottom: 1rem;
+    transition: background 0.15s, border-color 0.15s;
 }
 
 .consent-box:hover {
-    border-color: var(--border-strong);
+    background: var(--accent);
 }
 
 .consent-box:has(input:checked) {
-    border-color: var(--paymob-blue);
-    background: rgba(0, 102, 255, 0.04);
+    border-color: var(--foreground);
+    background: var(--accent);
 }
 
 .consent-box input {
-    margin-top: 0.15rem;
-    width: 18px;
-    height: 18px;
-    accent-color: var(--paymob-blue);
+    margin: 0.15rem 0 0;
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
     flex-shrink: 0;
     cursor: pointer;
 }
 
 .consent-text {
-    font-size: 0.84rem;
-    color: #334155;
+    font-size: 0.8125rem;
+    color: var(--foreground);
     line-height: 1.55;
 }
 
 .btn-paymob {
     width: 100%;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.55rem;
-    background: linear-gradient(135deg, var(--paymob-blue) 0%, #0052cc 100%);
-    color: #fff;
-    border: none;
-    padding: 1.05rem 1.5rem;
-    font-size: 1rem;
-    font-weight: 600;
+    gap: 0.5rem;
+    height: 2.5rem;
+    padding: 0 1.25rem;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    border: 1px solid transparent;
+    font-size: 0.875rem;
+    font-weight: 500;
     font-family: inherit;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     cursor: pointer;
-    transition: transform 0.15s, box-shadow 0.2s, opacity 0.15s;
-    box-shadow: 0 6px 24px var(--paymob-blue-glow);
+    white-space: nowrap;
+    transition: opacity 0.15s, box-shadow 0.15s;
+    box-shadow: var(--shadow-xs);
+}
+
+.btn-paymob svg {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
 }
 
 .btn-paymob:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 32px var(--paymob-blue-glow);
+    opacity: 0.9;
 }
 
-.btn-paymob:active:not(:disabled) {
-    transform: translateY(0);
+.btn-paymob:focus-visible {
+    outline: none;
+    border-color: var(--ring);
+    box-shadow: var(--ring-shadow);
 }
 
 .btn-paymob:disabled {
-    opacity: 0.42;
+    opacity: 0.5;
     cursor: not-allowed;
-    box-shadow: none;
-    transform: none;
 }
 
 .form-footer-note {
-    margin: 0.85rem 0 0;
+    margin: 0.75rem 0 0;
     text-align: center;
-    font-size: 0.78rem;
-    color: var(--text-muted);
+    font-size: 0.75rem;
+    color: var(--muted-foreground);
 }
 
 .alert {
     display: flex;
     align-items: flex-start;
-    gap: 0.65rem;
+    gap: 0.6rem;
     padding: 0.85rem 1rem;
-    border-radius: var(--radius-sm);
-    font-size: 0.875rem;
-    margin: 0 2rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font-size: 0.8125rem;
+    background: var(--card);
+    margin: 0 1.5rem;
 }
 
 .alert svg {
     flex-shrink: 0;
-    margin-top: 0.1rem;
+    margin-top: 0.15rem;
 }
 
 .alert-error {
-    background: var(--error-bg);
-    color: var(--error-text);
-    border: 1px solid #fecaca;
+    background: color-mix(in oklab, var(--destructive) 8%, var(--card));
+    border-color: color-mix(in oklab, var(--destructive) 30%, var(--border));
+    color: var(--destructive);
 }
 
 .powered-by {
     text-align: center;
-    margin-top: 1.75rem;
-    font-size: 0.8rem;
-    color: rgba(255, 255, 255, 0.42);
+    margin-top: 1.5rem;
+    font-size: 0.75rem;
+    color: var(--muted-foreground);
 }
 
 .powered-by a {
-    color: var(--paymob-accent);
-    text-decoration: none;
-    font-weight: 600;
-}
-
-.powered-by a:hover {
+    color: var(--foreground);
+    font-weight: 500;
     text-decoration: underline;
+    text-underline-offset: 3px;
 }
 
 /* ── Responsive ── */
-@media (max-width: 600px) {
+@media (max-width: 640px) {
     .site-header {
-        padding: 1rem;
+        padding: 0.75rem 1rem;
     }
 
     .secure-badge span:not(:first-child) {
@@ -799,31 +974,24 @@ body.paymob-page {
         padding: 1.25rem 1rem 2.5rem;
     }
 
-    .card-hero {
-        padding: 1.25rem 1.25rem 1rem;
-    }
-
+    .card-hero,
     .accept-form {
-        padding: 0 1.25rem 1.5rem;
+        padding-left: 1.15rem;
+        padding-right: 1.15rem;
     }
 
     .alert {
-        margin: 0 1.25rem;
+        margin: 0 1.15rem;
     }
 
-    .registrant-panel {
-        padding: 1.15rem;
+    .registrant-panel,
+    .participants-panel,
+    .amount-panel {
+        padding: 1.1rem;
     }
 
     .toggle-group,
-    .amount-choice {
-        grid-template-columns: 1fr;
-    }
-
-    .amount-panel {
-        padding: 1.15rem;
-    }
-
+    .amount-choice,
     .form-fields {
         grid-template-columns: 1fr;
     }
@@ -832,43 +1000,55 @@ body.paymob-page {
         grid-column: auto;
     }
 
+    .step {
+        min-width: 56px;
+    }
+
     .step-line {
-        max-width: 32px;
+        max-width: 24px;
     }
 
     .step-label {
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
     }
 }
 
-/* Error page */
+/* ── Error / status pages ── */
 body.error-page-body {
-    font-family: "Inter", sans-serif;
-    background: var(--paymob-navy);
-    min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
-    margin: 0;
-    padding: 2rem;
+    padding: 2rem 1.25rem;
+    background: linear-gradient(
+        to bottom,
+        var(--background) 0%,
+        color-mix(in oklab, var(--surface) 60%, var(--background)) 100%
+    );
 }
 
 .error-card {
-    background: var(--surface);
-    border-radius: var(--radius);
-    padding: 2.5rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-sm);
+    padding: 2rem;
     text-align: center;
-    max-width: 420px;
-    box-shadow: var(--shadow);
+    max-width: 440px;
 }
 
 .error-card h1 {
-    color: var(--error-text);
-    font-size: 1.25rem;
-    margin: 0 0 0.75rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.5rem;
+    color: var(--foreground);
 }
 
 .error-card p {
-    color: var(--text-secondary);
-    margin: 0;
+    color: var(--muted-foreground);
+    margin: 0 0 0.5rem;
+}
+
+.error-card p:last-child {
+    margin-bottom: 0;
 }

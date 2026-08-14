@@ -5,3 +5,7 @@ __pycache__/
 .env
 storage/
 *.db
+
+# Local UI reference (shadcn/ui source), not part of the app
+_ui_ref/
+ui-main*.zip
