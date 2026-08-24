@@ -27,6 +27,20 @@ async def get_payment(token: str) -> dict[str, Any]:
     return response.json()
 
 
+async def lookup_payment_by_reference(merchant_reference: str) -> dict[str, Any]:
+    settings = get_settings()
+    url = (
+        f"{settings.api_base_url.rstrip('/')}/api/payment/lookup/"
+        f"{merchant_reference}"
+    )
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(url)
+    if response.status_code >= 400:
+        detail = _extract_detail(response)
+        raise BackendApiError(response.status_code, detail)
+    return response.json()
+
+
 async def accept_payment(token: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     url = f"{settings.api_base_url.rstrip('/')}/api/payment/{token}/accept"

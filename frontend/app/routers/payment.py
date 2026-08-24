@@ -10,7 +10,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from app.api_client import BackendApiError, accept_payment, get_payment
+from app.api_client import BackendApiError, accept_payment, get_payment, lookup_payment_by_reference
 
 router = APIRouter(prefix="/payment", tags=["payment-ui"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
@@ -115,6 +115,27 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
         or params.get("order")
         or ""
     )
+    # Paymob Intention often returns special_reference as merchant_order_id (WF-…).
+    special_reference = (
+        params.get("special_reference")
+        or params.get("merchant_reference")
+        or ""
+    )
+    lookup_ref = merchant_order_id if str(merchant_order_id).startswith("WF-") else special_reference
+    if not lookup_ref and merchant_order_id:
+        lookup_ref = str(merchant_order_id)
+
+    show_lms = False
+    lms_url = None
+    course_for = None
+    if lookup_ref and not failed:
+        try:
+            lookup = await lookup_payment_by_reference(str(lookup_ref))
+            course_for = lookup.get("course_for")
+            show_lms = bool(lookup.get("show_lms")) and (success or not failed)
+            lms_url = lookup.get("lms_url")
+        except BackendApiError:
+            show_lms = False
 
     if failed:
         heading = "Payment not completed"
@@ -152,7 +173,11 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
             "message": message,
             "footnote": footnote,
             "amount_display": amount_display,
-            "merchant_order_id": merchant_order_id,
+            "merchant_order_id": lookup_ref or merchant_order_id,
+            "show_lms": show_lms,
+            "lms_url": lms_url,
+            "course_for": course_for,
+            "auto_redirect_seconds": 5 if show_lms and success else 0,
         },
     )
 

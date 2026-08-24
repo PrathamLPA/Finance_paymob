@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ page_title }}</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css?v=7">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body class="error-page-body">
     <div class="error-card">
@@ -18,6 +18,40 @@
         <p class="form-footer-note">Reference: {{ merchant_order_id }}</p>
         {% endif %}
         <p class="form-footer-note">{{ footnote }}</p>
+
+        {% if show_lms and lms_url %}
+        <div class="lms-cta">
+            <p class="lms-cta-copy">
+                Your course is ready. Continue to Learners Point Academy to open your classroom.
+            </p>
+            <a class="btn-paymob" id="lms-button" href="{{ lms_url }}">
+                Go to My Classroom
+            </a>
+            {% if auto_redirect_seconds and auto_redirect_seconds > 0 %}
+            <p class="form-footer-note" id="lms-redirect-note">
+                Redirecting in <span id="lms-countdown">{{ auto_redirect_seconds }}</span>s…
+            </p>
+            {% endif %}
+        </div>
+        {% endif %}
     </div>
+
+    {% if show_lms and lms_url and auto_redirect_seconds and auto_redirect_seconds > 0 %}
+    <script>
+        (function () {
+            var seconds = {{ auto_redirect_seconds }};
+            var url = {{ lms_url | tojson }};
+            var note = document.getElementById('lms-countdown');
+            var timer = setInterval(function () {
+                seconds -= 1;
+                if (note) note.textContent = String(Math.max(seconds, 0));
+                if (seconds <= 0) {
+                    clearInterval(timer);
+                    window.location.href = url;
+                }
+            }, 1000);
+        })();
+    </script>
+    {% endif %}
 </body>
 </html>

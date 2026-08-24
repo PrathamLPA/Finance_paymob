@@ -124,6 +124,11 @@ class Settings(BaseSettings):
     # Workflow
     terms_version: str = "1.0"
     refund_policy_url: str = "https://learnerspoint.org/refund-policy"
+    # After a successful "for myself" payment, thank-you page links here
+    lms_login_url: str = (
+        "https://learn.learnerspoint.org/auth/login"
+        "?redirect=https%3A%2F%2Flearn.learnerspoint.org%2Fmy-classroom"
+    )
     payment_session_ttl_hours: int = 72
     default_currency: str = "AED"
     storage_path: str = "storage"

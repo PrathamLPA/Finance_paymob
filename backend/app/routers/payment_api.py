@@ -5,10 +5,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
 
+from app.config import get_settings
 from app.db.session import get_db
 from app.integrations.factory import get_bitrix_client
+from app.models.payment_session import PaymentSession
 from app.services.course_seats import load_lead_courses, total_seats
 from app.services.payment_session_service import PaymentSessionService
 from app.services.terms_service import TermsService
@@ -31,6 +34,37 @@ class AcceptTermsBody(BaseModel):
     registrant_phone: str = ""
     payment_amount: Decimal | None = None
     participants: list[ParticipantBody] = Field(default_factory=list)
+
+
+@router.get("/lookup/{merchant_reference}")
+async def lookup_payment_by_reference(
+    merchant_reference: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Public thank-you helper: who the course is for + LMS link when self."""
+    ref = (merchant_reference or "").strip()
+    if not ref:
+        raise HTTPException(status_code=404, detail="Payment reference not found.")
+
+    session = db.scalar(
+        select(PaymentSession)
+        .options(joinedload(PaymentSession.terms_acceptance))
+        .where(PaymentSession.merchant_reference == ref)
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Payment reference not found.")
+
+    settings = get_settings()
+    course_for = None
+    if session.terms_acceptance:
+        course_for = session.terms_acceptance.course_for
+    show_lms = course_for == "self"
+    return {
+        "merchant_reference": session.merchant_reference,
+        "course_for": course_for,
+        "show_lms": show_lms,
+        "lms_url": settings.lms_login_url if show_lms else None,
+    }
 
 
 @router.get("/{token}")

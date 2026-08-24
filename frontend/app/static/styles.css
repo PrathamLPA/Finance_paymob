@@ -1052,3 +1052,26 @@ body.error-page-body {
 .error-card p:last-child {
     margin-bottom: 0;
 }
+
+.lms-cta {
+    margin-top: 1.35rem;
+    padding-top: 1.15rem;
+    border-top: 1px solid var(--border);
+    text-align: center;
+}
+
+.lms-cta-copy {
+    margin: 0 0 0.9rem !important;
+    font-size: 0.875rem;
+    color: var(--foreground) !important;
+}
+
+.lms-cta .btn-paymob {
+    text-decoration: none;
+    display: inline-flex;
+    width: 100%;
+}
+
+.lms-cta .form-footer-note {
+    margin-top: 0.75rem;
+}

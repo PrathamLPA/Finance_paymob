@@ -42,6 +42,12 @@ def test_first_payment_creates_three_deals_and_invoice(client, seed_lead, db_ses
         json={"accepted": True, **SAMPLE_REGISTRANT},
     )
 
+    lookup = client.get(f"/api/payment/lookup/{merchant_reference}")
+    assert lookup.status_code == 200
+    assert lookup.json()["course_for"] == "self"
+    assert lookup.json()["show_lms"] is True
+    assert "learn.learnerspoint.org" in (lookup.json()["lms_url"] or "")
+
     payment = client.post(
         "/api/dev/simulate-paymob-webhook",
         json={"merchant_reference": merchant_reference, "amount": "3000"},
