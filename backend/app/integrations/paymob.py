@@ -175,15 +175,17 @@ def build_mock_paymob_payload(
     order_id: int,
     integration_id: int = 123456,
     email: str = "customer@example.com",
+    success: bool = True,
+    pending: bool = False,
 ) -> dict[str, Any]:
     """Build a realistic Paymob webhook payload for mock/dev use."""
     return {
         "type": "TRANSACTION",
         "obj": {
             "id": transaction_id,
-            "pending": False,
+            "pending": pending,
             "amount_cents": amount_cents,
-            "success": True,
+            "success": success,
             "is_auth": False,
             "is_capture": False,
             "is_standalone_payment": True,
@@ -490,10 +492,11 @@ class MockPaymobClient:
             and not remote_pending
         )
 
-    def parse_successful_payment(self, payload: dict[str, Any]) -> PaymentWebhookData | None:
+    def parse_payment_callback(self, payload: dict[str, Any]) -> PaymentWebhookData | None:
+        """Parse a settled Paymob callback (success or failure). Pending stays None."""
         obj = extract_transaction_obj(payload)
-        success = obj.get("success")
-        if success is False or str(success).lower() == "false":
+        pending = obj.get("pending")
+        if pending is True or str(pending).lower() == "true":
             return None
 
         order = obj.get("order") or {}
@@ -512,6 +515,8 @@ class MockPaymobClient:
         if not merchant_reference:
             return None
 
+        raw_success = obj.get("success")
+        success = not (raw_success is False or str(raw_success).lower() == "false")
         transaction_id = str(obj.get("id") or payload.get("transaction_id") or uuid.uuid4().hex)
 
         return PaymentWebhookData(
@@ -534,12 +539,18 @@ class MockPaymobClient:
             is_voided=bool(obj.get("is_voided", False)),
             paymob_order_id=str(order.get("id") or ""),
             owner=int(obj["owner"]) if obj.get("owner") is not None else None,
-            pending=bool(obj.get("pending", False)),
+            pending=False,
             source_pan=str(source.get("pan") or "") or None,
             source_sub_type=str(source.get("sub_type") or "") or None,
             source_type=str(source.get("type") or "") or None,
-            success=True,
+            success=success,
         )
+
+    def parse_successful_payment(self, payload: dict[str, Any]) -> PaymentWebhookData | None:
+        data = self.parse_payment_callback(payload)
+        if not data or not data.success:
+            return None
+        return data
 
 
 class RealPaymobClient(MockPaymobClient):

@@ -72,7 +72,22 @@ Or: `.\start.ps1`
 | GET | `/api/payment/{token}` | Terms payload for frontend |
 | POST | `/api/payment/{token}/accept` | Accept T&C → `{ checkout_url }` |
 | POST | `/api/dev/send-payment-link` | Dev: create link |
-| POST | `/api/dev/simulate-paymob-webhook` | Dev: simulate payment |
+| POST | `/api/dev/simulate-paymob-webhook` | Dev: simulate payment (pass `"success": false` to simulate a decline) |
+
+### Simulating a failed payment
+
+No need for a real Paymob decline card — `/api/dev/simulate-paymob-webhook` builds
+a synthetic Paymob callback directly, so it works the same in mock or live mode:
+
+```json
+POST /api/dev/simulate-paymob-webhook
+{ "token": "<payment session token>", "success": false, "decline_reason": "Insufficient Funds" }
+```
+
+This exercises the same code path as a real decline: a `❌ PAYMENT FAILED` timeline
+comment on the lead/finance deal, plus a Bitrix chat + mail notification to the
+lead owner (`BITRIX_NOTIFY_OWNER_ON_PAYMENT_FAILURE`). Omit `"success"` (or set it
+to `true`) to simulate a normal successful payment instead.
 
 ## Tests
 

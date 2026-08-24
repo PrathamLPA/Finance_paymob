@@ -32,6 +32,20 @@ from app.services.price_approval_service import PriceApprovalPending, PriceAppro
 logger = logging.getLogger(__name__)
 
 
+def _bitrix_user_email_name(user: dict) -> tuple[str | None, str | None]:
+    raw_email = user.get("EMAIL")
+    email = None
+    if isinstance(raw_email, str) and raw_email:
+        email = raw_email
+    elif isinstance(raw_email, list) and raw_email:
+        first = raw_email[0]
+        email = first.get("VALUE") if isinstance(first, dict) else str(first)
+    name = " ".join(
+        part for part in (user.get("NAME"), user.get("LAST_NAME")) if part
+    ).strip() or None
+    return (email or None, name)
+
+
 def _format_price_lines(gate: PriceGateResult) -> str:
     if not gate.lines:
         return "none"
@@ -693,11 +707,10 @@ class WorkflowOrchestrator:
         self.session_service.mark_completed(session)
         self.db.flush()
 
-        # Money is recorded; tell Bitrix before anything else can fail.
+        # Money is recorded; create Sales deal before commenting so the lead can show CONVERTED.
         first_payment = workflow.is_first_payment_pending
         self.threshold_service.refresh_status(workflow)
         self.db.commit()
-        await self._comment_payment_received(workflow, data.amount, data.currency)
 
         if first_payment:
             try:
@@ -710,6 +723,14 @@ class WorkflowOrchestrator:
                     "Failed to create Bitrix deals after first payment for lead %s",
                     workflow.bitrix_lead_id,
                 )
+
+        comment = self._payment_success_message(workflow, data.amount, data.currency)
+        await self._comment_on_workflow_entities(workflow, comment)
+        await self._notify_assigned_agent(
+            workflow,
+            subject=f"Payment successful — Lead {workflow.bitrix_lead_id}",
+            body=comment,
+        )
 
         if dev_simulate:
             logger.info("Dev simulate — skipping Zoho invoice sync")
@@ -735,28 +756,34 @@ class WorkflowOrchestrator:
         self.db.refresh(workflow)
         return workflow
 
-    async def _comment_payment_received(
+    def _payment_success_message(
         self,
         workflow: CustomerWorkflow,
         amount: Decimal,
         currency: str,
-    ) -> None:
-        """Notify Bitrix with a timeline comment after a successful payment."""
-        status = workflow.payment_status
+    ) -> str:
         pct = workflow.payment_percentage()
-        comment = (
-            f"Payment received: {amount} {currency}\n"
+        return (
+            f"Payment successful\n"
+            f"Amount: {amount} {currency}\n"
             f"Paid: {workflow.amount_paid} / {workflow.total_amount} {workflow.currency} "
             f"({pct:.0f}%)\n"
             f"Remaining: {workflow.remaining_balance} {workflow.currency}\n"
-            f"Status: {status}"
+            f"Status: {workflow.payment_status}"
         )
 
+    async def _comment_on_workflow_entities(self, workflow: CustomerWorkflow, comment: str) -> None:
         targets: list[tuple[str, int]] = [("LEAD", workflow.bitrix_lead_id)]
-        if workflow.finance_deal_id:
-            targets.append(("DEAL", workflow.finance_deal_id))
+        for deal_id in (workflow.sales_deal_id, workflow.finance_deal_id, workflow.b2c_deal_id):
+            if deal_id:
+                targets.append(("DEAL", deal_id))
 
+        seen: set[tuple[str, int]] = set()
         for entity_type, entity_id in targets:
+            key = (entity_type, entity_id)
+            if key in seen:
+                continue
+            seen.add(key)
             try:
                 await self.bitrix.add_timeline_comment(
                     entity_type=entity_type,
@@ -764,7 +791,7 @@ class WorkflowOrchestrator:
                     comment=comment,
                 )
                 logger.info(
-                    "Payment received comment posted on Bitrix %s %s",
+                    "Payment comment posted on Bitrix %s %s",
                     entity_type.lower(),
                     entity_id,
                 )
@@ -775,6 +802,121 @@ class WorkflowOrchestrator:
                     entity_id,
                 )
 
+    async def _notify_assigned_agent(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        subject: str,
+        body: str,
+    ) -> None:
+        try:
+            lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
+        except Exception:
+            logger.exception(
+                "Could not load lead %s to notify assigned agent",
+                workflow.bitrix_lead_id,
+            )
+            return
+
+        owner_raw = lead.get("ASSIGNED_BY_ID") or lead.get("assignedById")
+        try:
+            owner_id = int(owner_raw or 0)
+        except (TypeError, ValueError):
+            owner_id = 0
+        if owner_id <= 0:
+            logger.info("No assigned agent on lead %s — skip chat/email notice", workflow.bitrix_lead_id)
+            return
+
+        chat_text = f"{subject}\n\n{body}"
+        try:
+            await self.bitrix.notify_user(user_id=owner_id, message=chat_text)
+        except Exception:
+            logger.exception("Failed Bitrix chat notice to user %s for lead %s", owner_id, workflow.bitrix_lead_id)
+
+        agent_email = None
+        agent_name = None
+        try:
+            user = await self.bitrix.get_user(owner_id)
+        except Exception:
+            logger.exception("Failed to load Bitrix user %s for agent email", owner_id)
+            user = None
+        if user:
+            agent_email, agent_name = _bitrix_user_email_name(user)
+        if not agent_email:
+            logger.info(
+                "Assigned agent %s has no email — chat only | lead_id=%s",
+                owner_id,
+                workflow.bitrix_lead_id,
+            )
+            return
+        try:
+            sent = self.email.send_agent_payment_notice(
+                to_email=agent_email,
+                agent_name=agent_name,
+                subject=subject,
+                body=body,
+            )
+            if sent:
+                logger.info(
+                    "Agent payment notice emailed | to=%s lead_id=%s",
+                    agent_email,
+                    workflow.bitrix_lead_id,
+                )
+        except Exception:
+            logger.exception(
+                "Failed SendGrid agent notice | to=%s lead_id=%s",
+                agent_email,
+                workflow.bitrix_lead_id,
+            )
+
+    async def handle_failed_payment(self, data: PaymentWebhookData) -> CustomerWorkflow | None:
+        existing = self.db.scalar(
+            select(PaymentTransaction).where(PaymentTransaction.transaction_id == data.transaction_id)
+        )
+        if existing:
+            logger.info("Duplicate failed transaction ignored: %s", data.transaction_id)
+            return None
+
+        session = self.db.scalar(
+            select(PaymentSession).where(PaymentSession.merchant_reference == data.merchant_reference)
+        )
+        if not session:
+            logger.warning("No payment session for failed merchant reference %s", data.merchant_reference)
+            return None
+
+        workflow = session.workflow
+        transaction = PaymentTransaction(
+            workflow_id=workflow.id,
+            payment_session_id=session.id,
+            transaction_id=data.transaction_id,
+            order_id=data.order_id,
+            amount=data.amount,
+            currency=data.currency,
+            remaining_balance=workflow.remaining_balance,
+            status="failed",
+            raw_payload=data.raw_payload,
+        )
+        apply_paymob_fields(transaction, data)
+        transaction.success = False
+        self.db.add(transaction)
+        self.db.commit()
+
+        comment = (
+            f"Payment failed\n"
+            f"Attempted: {data.amount} {data.currency}\n"
+            f"Paid so far: {workflow.amount_paid} / {workflow.total_amount} {workflow.currency}\n"
+            f"Remaining: {workflow.remaining_balance} {workflow.currency}\n"
+            f"Transaction: {data.transaction_id}"
+        )
+        await self._comment_on_workflow_entities(workflow, comment)
+        await self._notify_assigned_agent(
+            workflow,
+            subject=f"Payment failed — Lead {workflow.bitrix_lead_id}",
+            body=comment,
+        )
+        self.db.refresh(workflow)
+        return workflow
+
     async def handle_paymob_payload(self, payload: dict, signature: str | None = None) -> CustomerWorkflow | None:
         authenticate = getattr(self.paymob, "authenticate_webhook", None)
         if authenticate is not None:
@@ -784,9 +926,12 @@ class WorkflowOrchestrator:
         if not accepted:
             raise ValueError("Invalid Paymob webhook signature")
 
-        data = self.paymob.parse_successful_payment(payload)
+        parse_callback = getattr(self.paymob, "parse_payment_callback", None)
+        data = parse_callback(payload) if parse_callback is not None else self.paymob.parse_successful_payment(payload)
         if not data:
             return None
+        if not data.success:
+            return await self.handle_failed_payment(data)
 
         return await self.handle_paymob_webhook(data)
 

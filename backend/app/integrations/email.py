@@ -59,6 +59,17 @@ class MockEmailClient:
         self._write_email(subject, to_email, body)
         return True
 
+    def send_agent_payment_notice(
+        self,
+        *,
+        to_email: str,
+        agent_name: str | None,
+        subject: str,
+        body: str,
+    ) -> bool:
+        self._write_email(subject, to_email, body)
+        return True
+
     def send_terms_acceptance(
         self,
         *,
@@ -222,6 +233,22 @@ class RealEmailClient(MockEmailClient):
                 to_email,
                 self.settings.use_mock_integrations,
                 bool(self.settings.sendgrid_api_key),
+            )
+            return False
+        return self._send_mail(to_email=to_email, subject=subject, body=body)
+
+    def send_agent_payment_notice(
+        self,
+        *,
+        to_email: str,
+        agent_name: str | None,
+        subject: str,
+        body: str,
+    ) -> bool:
+        if not self._sendgrid_ready():
+            logger.error(
+                "SKIP SendGrid agent notice | to=%s reason=not_configured action=set_SENDGRID_API_KEY",
+                to_email,
             )
             return False
         return self._send_mail(to_email=to_email, subject=subject, body=body)

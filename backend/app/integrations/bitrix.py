@@ -88,6 +88,7 @@ class MockBitrixClient:
         self._mock_mail_sent: list[dict[str, Any]] = []
         self._mock_notifications: list[dict[str, Any]] = []
         self._next_estimate_id = self.MOCK_ESTIMATE_BASE
+        self.seed_user(101, email="agent@test.com", name="Sales Agent")
 
     def seed_lead(self, lead_id: int, *, email: str, name: str, amount: Decimal) -> None:
         self._mock_leads[lead_id] = {
@@ -152,14 +153,25 @@ class MockBitrixClient:
     async def convert_lead_to_sales_deal(self, lead_id: int, context: dict[str, Any]) -> int:
         deal_id = self.MOCK_SALES_DEAL_BASE + lead_id
         lead = await self.get_lead(lead_id)
+        pipeline_id = str(self.settings.bitrix_sales_pipeline_id or "16")
         self._mock_deals[deal_id] = {
             "ID": deal_id,
             "TITLE": f"Sales Deal - {lead.get('TITLE', lead_id)}",
             "STAGE_ID": "NEW",
+            "CATEGORY_ID": pipeline_id,
             "OPPORTUNITY": lead.get("OPPORTUNITY"),
             "CURRENCY_ID": lead.get("CURRENCY_ID"),
+            "ASSIGNED_BY_ID": lead.get("ASSIGNED_BY_ID"),
+            "LEAD_ID": lead_id,
         }
-        logger.info("[MockBitrix] Converted lead %s to sales deal %s", lead_id, deal_id)
+        lead["STATUS_ID"] = "CONVERTED"
+        self._mock_leads[lead_id] = lead
+        logger.info(
+            "[MockBitrix] Converted lead %s to Sales pipeline %s deal %s",
+            lead_id,
+            pipeline_id,
+            deal_id,
+        )
         return deal_id
 
     async def create_finance_deal(self, lead_id: int, context: dict[str, Any]) -> int:
@@ -413,17 +425,87 @@ class RealBitrixClient:
         return await self._call("crm.deal.get", {"id": deal_id})
 
     async def convert_lead_to_sales_deal(self, lead_id: int, context: dict[str, Any]) -> int:
+        """Convert the lead into a deal on the Sales pipeline (CATEGORY_ID=16)."""
+        pipeline_id = self._sales_pipeline_id()
+        try:
+            result = await self._call(
+                "crm.lead.convert",
+                {
+                    "id": lead_id,
+                    "params": {"DEAL": {"CATEGORY_ID": pipeline_id}},
+                },
+            )
+            deal_ids = result.get("DEAL") or []
+            if deal_ids:
+                deal_id = int(deal_ids[0] if isinstance(deal_ids, list) else deal_ids)
+                logger.info(
+                    "Converted lead %s via crm.lead.convert to Sales deal %s pipeline=%s",
+                    lead_id,
+                    deal_id,
+                    pipeline_id,
+                )
+                return deal_id
+        except BitrixApiError as exc:
+            if not self._is_missing_method(exc):
+                raise
+            logger.warning(
+                "crm.lead.convert unavailable (%s) — creating Sales deal with crm.deal.add | lead_id=%s",
+                exc.code,
+                lead_id,
+            )
+
+        return await self._create_sales_deal_from_lead(lead_id, pipeline_id)
+
+    def _sales_pipeline_id(self) -> int:
+        raw = str(self.settings.bitrix_sales_pipeline_id or "16").strip()
+        try:
+            return int(raw)
+        except ValueError:
+            logger.warning("Invalid BITRIX_SALES_PIPELINE_ID=%r — using 16 (Sales)", raw)
+            return 16
+
+    @staticmethod
+    def _is_missing_method(exc: BitrixApiError) -> bool:
+        blob = f"{exc.code} {exc.description}".lower()
+        return "not_found" in blob or "method not found" in blob
+
+    async def _create_sales_deal_from_lead(self, lead_id: int, pipeline_id: int) -> int:
+        lead = await self.get_lead(lead_id)
+        fields: dict[str, Any] = {
+            "TITLE": lead.get("TITLE") or f"Sales - Lead {lead_id}",
+            "CATEGORY_ID": pipeline_id,
+            "OPPORTUNITY": lead.get("OPPORTUNITY"),
+            "CURRENCY_ID": lead.get("CURRENCY_ID") or self.settings.default_currency,
+            "ASSIGNED_BY_ID": lead.get("ASSIGNED_BY_ID"),
+            "LEAD_ID": lead_id,
+        }
+        contact_id = lead.get("CONTACT_ID")
+        if contact_id not in (None, "", "0", 0):
+            fields["CONTACT_ID"] = contact_id
+        company_id = lead.get("COMPANY_ID")
+        if company_id not in (None, "", "0", 0):
+            fields["COMPANY_ID"] = company_id
+
         result = await self._call(
-            "crm.lead.convert",
-            {
-                "id": lead_id,
-                "params": {"DEAL": {"CATEGORY_ID": self.settings.bitrix_sales_pipeline_id or 0}},
-            },
+            "crm.deal.add",
+            {"fields": {key: value for key, value in fields.items() if value not in (None, "")}},
         )
-        deal_ids = result.get("DEAL") or []
-        if deal_ids:
-            return int(deal_ids[0])
-        raise RuntimeError(f"Lead conversion did not return deal ID for lead {lead_id}")
+        deal_id = int(self._scalar(result))
+        try:
+            await self._call("crm.lead.update", {"id": lead_id, "fields": {"STATUS_ID": "CONVERTED"}})
+        except Exception:
+            logger.exception(
+                "Sales deal %s created but lead %s could not be moved to CONVERTED (Complete lead)",
+                deal_id,
+                lead_id,
+            )
+        logger.info(
+            "Created Sales deal %s from lead %s pipeline=%s (crm.deal.add fallback)",
+            deal_id,
+            lead_id,
+            pipeline_id,
+        )
+        return deal_id
 
     async def create_finance_deal(self, lead_id: int, context: dict[str, Any]) -> int:
         lead = await self.get_lead(lead_id)

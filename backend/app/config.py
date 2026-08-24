@@ -45,7 +45,8 @@ class Settings(BaseSettings):
     bitrix_webhook_secret: str = ""
     bitrix_lead_payment_stage_id: str = "LEAD_PAYMENT"
     bitrix_finance_generate_link_stage_id: str = "FINANCE_GENERATE_LINK"
-    bitrix_sales_pipeline_id: str = ""
+    # Bitrix deal CATEGORY_ID for "Sales" (the convert-to-deal picker)
+    bitrix_sales_pipeline_id: str = "16"
     bitrix_finance_pipeline_id: str = ""
     bitrix_b2c_pipeline_id: str = ""
     bitrix_field_invoice_reference: str = "UF_CRM_INVOICE_REFERENCE"

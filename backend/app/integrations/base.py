@@ -161,6 +161,8 @@ class PaymobIntegration(Protocol):
 
     def parse_successful_payment(self, payload: dict[str, Any]) -> PaymentWebhookData | None: ...
 
+    def parse_payment_callback(self, payload: dict[str, Any]) -> PaymentWebhookData | None: ...
+
 
 class ZohoBooksIntegration(Protocol):
     async def create_invoice(
@@ -203,6 +205,15 @@ class EmailIntegration(Protocol):
         *,
         to_email: str,
         manager_name: str | None,
+        subject: str,
+        body: str,
+    ) -> bool: ...
+
+    def send_agent_payment_notice(
+        self,
+        *,
+        to_email: str,
+        agent_name: str | None,
         subject: str,
         body: str,
     ) -> bool: ...

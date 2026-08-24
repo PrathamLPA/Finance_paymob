@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from app.integrations.factory import get_email_client
@@ -81,3 +82,75 @@ def test_duplicate_transaction_is_ignored(client, seed_lead):
 
     assert first.json()["status"] == "ok"
     assert second.json()["status"] == "duplicate"
+
+
+def test_first_payment_uses_sales_pipeline_and_notifies_agent(client, seed_lead, db_session):
+    seed_lead(204, email="sales@test.com", amount=Decimal("10000"))
+    link = client.post(
+        "/api/dev/send-payment-link",
+        json={"lead_id": 204, "customer_email": "sales@test.com", "total_amount": "10000"},
+    )
+    merchant_reference = link.json()["merchant_reference"]
+    token = link.json()["token"]
+    client.post(f"/api/payment/{token}/accept", json={"accepted": True, **SAMPLE_REGISTRANT})
+
+    payment = client.post(
+        "/api/dev/simulate-paymob-webhook",
+        json={"merchant_reference": merchant_reference, "amount": "3000"},
+    )
+    assert payment.status_code == 200
+
+    from app.integrations.factory import get_bitrix_client, get_email_client
+
+    bitrix = get_bitrix_client()
+    workflow = db_session.scalar(select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 204))
+    assert workflow is not None
+    deal = bitrix._mock_deals[workflow.sales_deal_id]
+    assert str(deal["CATEGORY_ID"]) == "16"
+    lead = bitrix._mock_leads[204]
+    assert lead["STATUS_ID"] == "CONVERTED"
+
+    comments = bitrix._mock_comments[("LEAD", 204)]
+    assert any("Payment successful" in item["COMMENT"] for item in comments)
+    assert any("Payment successful" in note["message"] for note in bitrix._mock_notifications)
+    emails = get_email_client().sent_emails
+    assert any("successful" in email["subject"].lower() and email["to"] == "agent@test.com" for email in emails)
+
+
+@pytest.mark.asyncio
+async def test_failed_payment_comments_and_emails_agent_without_converting(
+    client, seed_lead, db_session
+):
+    seed_lead(205, email="fail@test.com", amount=Decimal("10000"))
+    link = client.post(
+        "/api/dev/send-payment-link",
+        json={"lead_id": 205, "customer_email": "fail@test.com", "total_amount": "10000"},
+    )
+    merchant_reference = link.json()["merchant_reference"]
+
+    from app.integrations.factory import get_bitrix_client, get_email_client
+    from app.integrations.paymob import build_mock_paymob_payload
+    from app.services.workflow_orchestrator import WorkflowOrchestrator
+
+    payload = build_mock_paymob_payload(
+        transaction_id=555001,
+        amount_cents=300000,
+        currency="AED",
+        merchant_order_id=merchant_reference,
+        order_id=777,
+        success=False,
+    )
+    orchestrator = WorkflowOrchestrator(db_session)
+    workflow = await orchestrator.handle_paymob_payload(payload)
+
+    assert workflow is not None
+    assert workflow.amount_paid == Decimal("0.00")
+    assert workflow.sales_deal_id is None
+    assert all(not txn.success for txn in workflow.transactions)
+
+    bitrix = get_bitrix_client()
+    comments = bitrix._mock_comments[("LEAD", 205)]
+    assert any("Payment failed" in item["COMMENT"] for item in comments)
+    assert any("Payment failed" in note["message"] for note in bitrix._mock_notifications)
+    emails = get_email_client().sent_emails
+    assert any("failed" in email["subject"].lower() and email["to"] == "agent@test.com" for email in emails)
