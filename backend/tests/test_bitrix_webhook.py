@@ -250,11 +250,11 @@ def test_lead_payment_uses_installment_1_amount(client, seed_lead, db_session, m
     settings = get_settings()
     seed_lead(411, email="installment@test.com", amount=Decimal("5500"))
     bitrix = get_bitrix_client()
+    # Installment 1 alone at/above 50% still locks the first charge without approval.
     bitrix._mock_leads[411].update(
         {
             "STATUS_ID": settings.bitrix_lead_payment_stage_id,
-            "UF_CRM_INSTALLMENT_1": "1500",
-            "UF_CRM_INSTALLMENT_COUNT": "3",
+            "UF_CRM_INSTALLMENT_1": "3000",
         }
     )
 
@@ -268,11 +268,58 @@ def test_lead_payment_uses_installment_1_amount(client, seed_lead, db_session, m
 
     token = body["payment_url"].rstrip("/").rsplit("/", 1)[-1]
     session = client.get(f"/api/payment/{token}").json()
-    assert session["payment_amount"] == "1500.00"
+    assert session["payment_amount"] == "3000.00"
     assert session["amount_locked"] is True
     assert session["allows_partial"] is False
     assert session["charge_source"] == "installment_1"
-    assert session["charge_label"] == "Installment 1"
+    assert session["charge_label"].startswith("Installment 1")
+    assert session["balance_after_payment"] == "2500.00"
+    assert "subtotal" in session
+
+    get_settings.cache_clear()
+
+
+def test_lead_payment_persists_full_installment_plan(client, seed_lead, monkeypatch):
+    monkeypatch.setenv("BITRIX_FIELD_INSTALLMENT_1", "UF_I1")
+    monkeypatch.setenv("BITRIX_FIELD_INSTALLMENT_2", "UF_I2")
+    monkeypatch.setenv("BITRIX_FIELD_INSTALLMENT_3", "UF_I3")
+    monkeypatch.setenv("BITRIX_FIELD_INSTALLMENT_COUNT", "UF_COUNT")
+    monkeypatch.setenv("BITRIX_FIELD_INSTALLMENT_1_DATE", "UF_D1")
+    monkeypatch.setenv("BITRIX_FIELD_INSTALLMENT_2_DUE_DATE", "UF_D2")
+    monkeypatch.setenv("BITRIX_FIELD_INSTALLMENT_3_DUE_DATE", "UF_D3")
+    monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "false")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+    seed_lead(412, email="plan@test.com", amount=Decimal("3000"))
+    bitrix = get_bitrix_client()
+    bitrix._mock_leads[412].update(
+        {
+            "STATUS_ID": settings.bitrix_lead_payment_stage_id,
+            "UF_COUNT": "2",
+            "UF_I1": "1500",
+            "UF_D1": "2026-01-01",
+            "UF_I2": "1500",
+            "UF_D2": "2026-01-20",
+        }
+    )
+
+    response = client.post(
+        "/webhooks/bitrix24",
+        data={"event": "ONCRMLEADUPDATE", "data[FIELDS][ID]": "412"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "processed"
+
+    token = body["payment_url"].rstrip("/").rsplit("/", 1)[-1]
+    session = client.get(f"/api/payment/{token}").json()
+    assert session["payment_amount"] == "1500.00"
+    assert session["installment_number"] == 1
+    assert session["installment_count"] == 2
+    assert session["installment_due_date"] == "2026-01-01"
+    assert len(session["installment_schedule"]) == 2
+    assert session["charge_label"] == "Installment 1 of 2"
 
     get_settings.cache_clear()
 

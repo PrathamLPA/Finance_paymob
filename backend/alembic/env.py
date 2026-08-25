@@ -13,6 +13,7 @@ from app.models import (  # noqa: F401
     payment_transaction,
     price_approval,
     terms_acceptance,
+    workflow_installment,
 )
 
 config = context.config

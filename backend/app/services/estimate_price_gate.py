@@ -16,6 +16,24 @@ def _money(value: Any) -> Decimal:
         return Decimal("0.00")
 
 
+def line_money_breakdown(line: "ProductLine") -> tuple[Decimal, Decimal, Decimal]:
+    """Return (subtotal_ex_vat, vat, line_payable) for one product line."""
+    qty = line.quantity if line.quantity > 0 else Decimal("1")
+    gross = (line.selling_price * qty).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if line.tax_rate <= 0:
+        return gross, Decimal("0.00"), gross
+    if line.tax_included:
+        vat = (gross * line.tax_rate / (Decimal("100") + line.tax_rate)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        subtotal = (gross - vat).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return subtotal, vat, gross
+    vat = (gross * line.tax_rate / Decimal("100")).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    return gross, vat, (gross + vat).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 @dataclass(frozen=True)
 class ProductLine:
     product_id: int
@@ -28,14 +46,7 @@ class ProductLine:
 
     @property
     def line_total(self) -> Decimal:
-        qty = self.quantity if self.quantity > 0 else Decimal("1")
-        base = (self.selling_price * qty).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        if self.tax_included or self.tax_rate <= 0:
-            return base
-        tax = (base * self.tax_rate / Decimal("100")).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
-        )
-        return base + tax
+        return line_money_breakdown(self)[2]
 
     @property
     def is_below_minimum(self) -> bool:
@@ -52,7 +63,11 @@ class PriceGateResult:
     missing_catalog: list[ProductLine] = field(default_factory=list)
     reason: str = ""
     total_payable: Decimal = Decimal("0.00")
+    # VAT added on top of selling price (Bitrix estimate tax_value). Inclusive VAT is excluded.
     tax_total: Decimal = Decimal("0.00")
+    # Full VAT for UI (inclusive extracted + exclusive added).
+    vat_total: Decimal = Decimal("0.00")
+    subtotal: Decimal = Decimal("0.00")
 
     @property
     def catalog_minimum_total(self) -> Decimal:
@@ -136,7 +151,9 @@ def evaluate_price_gate(
     blocked: list[ProductLine] = []
     missing: list[ProductLine] = []
     total = Decimal("0.00")
-    tax_total = Decimal("0.00")
+    tax_added = Decimal("0.00")
+    vat_total = Decimal("0.00")
+    subtotal = Decimal("0.00")
 
     for raw in rows:
         base = parse_product_row(raw)
@@ -151,15 +168,12 @@ def evaluate_price_gate(
             catalog_min_price=catalog_min,
         )
         lines.append(line)
-        total += line.line_total
+        line_subtotal, line_vat, line_payable = line_money_breakdown(line)
+        total += line_payable
+        subtotal += line_subtotal
+        vat_total += line_vat
         if not line.tax_included and line.tax_rate > 0:
-            qty = line.quantity if line.quantity > 0 else Decimal("1")
-            base_amount = (line.selling_price * qty).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
-            tax_total += (base_amount * line.tax_rate / Decimal("100")).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
+            tax_added += line_vat
 
         if line.product_id <= 0:
             missing.append(line)
@@ -201,7 +215,9 @@ def evaluate_price_gate(
         missing_catalog=missing,
         reason=reason,
         total_payable=total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-        tax_total=tax_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        tax_total=tax_added.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        vat_total=vat_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        subtotal=subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
     )
 
 
@@ -220,3 +236,70 @@ def product_rows_for_estimate(lines: list[ProductLine]) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def serialize_pricing_snapshot(
+    lines: list[ProductLine],
+    *,
+    currency: str,
+    total_payable: Decimal | None = None,
+) -> dict[str, Any]:
+    """Immutable estimate breakdown for the payment page and later finance work."""
+    payload_lines: list[dict[str, Any]] = []
+    subtotal = Decimal("0.00")
+    vat_total = Decimal("0.00")
+    payable = Decimal("0.00")
+    for line in lines:
+        line_subtotal, line_vat, line_payable = line_money_breakdown(line)
+        subtotal += line_subtotal
+        vat_total += line_vat
+        payable += line_payable
+        qty = line.quantity if line.quantity > 0 else Decimal("1")
+        payload_lines.append(
+            {
+                "product_id": line.product_id,
+                "product_name": line.product_name,
+                "quantity": str(qty.quantize(Decimal("0.01"))),
+                "unit_price": str(line.selling_price.quantize(Decimal("0.01"))),
+                "tax_rate": str(line.tax_rate.quantize(Decimal("0.01"))),
+                "tax_included": line.tax_included,
+                "subtotal": str(line_subtotal),
+                "vat": str(line_vat),
+                "line_total": str(line_payable),
+                "catalog_min_price": (
+                    str(line.catalog_min_price.quantize(Decimal("0.01")))
+                    if line.catalog_min_price is not None
+                    else None
+                ),
+            }
+        )
+    if total_payable is not None:
+        payable = total_payable.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return {
+        "currency": currency,
+        "subtotal": str(subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "vat_total": str(vat_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "tax_total": str(vat_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "total_payable": str(payable.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "lines": payload_lines,
+    }
+
+
+def pricing_snapshot_from_gate(gate: PriceGateResult, *, currency: str) -> dict[str, Any]:
+    return serialize_pricing_snapshot(
+        gate.lines,
+        currency=currency,
+        total_payable=gate.total_payable,
+    )
+
+
+def minimal_pricing_snapshot(*, currency: str, total_payable: Decimal) -> dict[str, Any]:
+    total = total_payable.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return {
+        "currency": currency,
+        "subtotal": str(total),
+        "vat_total": "0.00",
+        "tax_total": "0.00",
+        "total_payable": str(total),
+        "lines": [],
+    }

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from app.models.payment_session import PaymentSession
     from app.models.payment_transaction import PaymentTransaction
     from app.models.price_approval import PriceApproval
+    from app.models.workflow_installment import WorkflowInstallment
 
 MINIMUM_PAYMENT = Decimal("1.00")
 
@@ -54,6 +55,8 @@ class CustomerWorkflow(Base):
     reminder_count: Mapped[int] = mapped_column(Integer, default=0)
     # Installment numbers already emailed on their due date, e.g. {"2": "2026-08-24"}
     installment_notices_sent: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # Exact estimate breakdown frozen at first payment-link creation.
+    pricing_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     first_payment_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("(CURRENT_TIMESTAMP)"))
     updated_at: Mapped[datetime] = mapped_column(
@@ -70,6 +73,11 @@ class CustomerWorkflow(Base):
     )
     price_approvals: Mapped[list[PriceApproval]] = relationship(
         back_populates="workflow", cascade="all, delete-orphan"
+    )
+    installments: Mapped[list[WorkflowInstallment]] = relationship(
+        back_populates="workflow",
+        cascade="all, delete-orphan",
+        order_by="WorkflowInstallment.installment_number",
     )
 
     @property

@@ -65,6 +65,7 @@ def _form_context(
     payment_amount_value = _amount(data, "payment_amount") or remaining
     allows_partial = bool(data.get("allows_partial", False)) and minimum < remaining
     courses = data.get("courses") or []
+    schedule = data.get("installment_schedule") or []
     return {
         "request": request,
         "token": token,
@@ -80,9 +81,19 @@ def _form_context(
         "amount_paid": f"{_amount(data, 'amount_paid'):.2f}",
         "remaining_balance": f"{remaining:.2f}",
         "minimum_amount": f"{minimum:.2f}",
+        "subtotal": f"{(_amount(data, 'subtotal') or _amount(data, 'total_amount')):.2f}",
+        "vat_total": f"{_amount(data, 'vat_total'):.2f}",
+        "tax_total": f"{_amount(data, 'tax_total'):.2f}",
+        "balance_after_payment": f"{(_amount(data, 'balance_after_payment') if data.get('balance_after_payment') is not None else max(remaining - payment_amount_value, Decimal('0.00'))):.2f}",
         "allows_partial": allows_partial,
         "amount_locked": bool(data.get("amount_locked", True)),
         "charge_label": data.get("charge_label") or "Payment amount",
+        "charge_source": data.get("charge_source") or "full",
+        "installment_number": data.get("installment_number"),
+        "installment_count": data.get("installment_count"),
+        "installment_due_date": data.get("installment_due_date") or "",
+        "installment_schedule": schedule,
+        "pricing_lines": data.get("pricing_lines") or [],
         "payment_amount": payment_amount or f"{payment_amount_value:.2f}",
         "courses": courses,
         "courses_json": json.dumps(courses),

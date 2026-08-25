@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -37,6 +37,8 @@ class PaymentSession(Base):
     charge_source: Mapped[str] = mapped_column(String(40), default="full")
     # When true the customer cannot change the amount on the payment page
     amount_locked: Mapped[bool] = mapped_column(default=True)
+    # Set when this session charges a specific installment from the persisted plan
+    installment_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     currency: Mapped[str] = mapped_column(String(10), default="AED")
     paymob_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     paymob_checkout_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

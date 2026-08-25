@@ -606,6 +606,101 @@ body.error-page-body {
     font-weight: 600;
 }
 
+.installment-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem 1rem;
+    margin: 0 0 1rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--primary) 8%, var(--background));
+}
+
+.installment-banner strong {
+    font-size: 0.9375rem;
+}
+
+.installment-banner span {
+    font-size: 0.8125rem;
+    color: var(--muted-foreground);
+}
+
+.installment-schedule {
+    margin: 0 0 1.15rem;
+}
+
+.schedule-heading {
+    margin: 0 0 0.65rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.schedule-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.schedule-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto auto;
+    gap: 0.5rem 0.75rem;
+    align-items: center;
+    padding: 0.7rem 0.9rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.8125rem;
+}
+
+.schedule-item:first-child {
+    border-top: 0;
+}
+
+.schedule-item.current {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.schedule-label {
+    font-weight: 600;
+}
+
+.schedule-meta,
+.schedule-status {
+    color: var(--muted-foreground);
+    text-transform: capitalize;
+}
+
+.schedule-amount {
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.schedule-paid .schedule-status {
+    color: #15803d;
+}
+
+.schedule-due .schedule-status,
+.schedule-partial .schedule-status {
+    color: #b45309;
+}
+
+@media (max-width: 640px) {
+    .schedule-item {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .schedule-amount,
+    .schedule-status {
+        text-align: left;
+    }
+}
+
 .line-meta {
     display: block;
     font-size: 0.75rem;

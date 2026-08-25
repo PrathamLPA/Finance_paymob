@@ -116,6 +116,12 @@ class PriceApprovalService:
         lines = payload.get("lines") or []
         below_lines = [line for line in lines if line.get("below_minimum")]
         ok_lines = [line for line in lines if not line.get("below_minimum")]
+        installment = payload.get("installment_policy") or {}
+        kinds = payload.get("approval_kinds") or (
+            ["price"] if below_lines else []
+        )
+        if installment.get("needs_approval") and "installment" not in kinds:
+            kinds = [*kinds, "installment"]
         return {
             "id": approval.id,
             "token": approval.token,
@@ -132,6 +138,8 @@ class PriceApprovalService:
             "product_count": payload.get("product_count", len(lines)),
             "below_minimum_count": payload.get("below_minimum_count", len(below_lines)),
             "ok_count": payload.get("ok_count", len(ok_lines)),
+            "approval_kinds": kinds,
+            "installment_policy": installment,
             "owner_name": approval.owner_name,
             "manager_email": approval.manager_email,
             "manager_name": approval.manager_name,
@@ -145,9 +153,10 @@ class PriceApprovalService:
     async def request_manager_approval(
         self,
         workflow: CustomerWorkflow,
-        gate: PriceGateResult,
+        gate: PriceGateResult | None,
         *,
         lead: dict[str, Any],
+        installment_policy: dict[str, Any] | None = None,
     ) -> PriceApproval:
         """Create/reuse a pending approval and email the owner's manager."""
         existing = self.get_pending_for_lead(workflow.bitrix_lead_id)
@@ -156,6 +165,23 @@ class PriceApprovalService:
             if expires.tzinfo is None:
                 expires = expires.replace(tzinfo=timezone.utc)
             if expires > datetime.now(timezone.utc):
+                # Enrich an existing pending request with installment details if missing.
+                if installment_policy and installment_policy.get("needs_approval"):
+                    payload = dict(existing.lines_payload or {})
+                    if not payload.get("installment_policy"):
+                        payload["installment_policy"] = installment_policy
+                        kinds = list(payload.get("approval_kinds") or [])
+                        if "installment" not in kinds:
+                            kinds.append("installment")
+                        payload["approval_kinds"] = kinds
+                        reasons = [existing.reason] if existing.reason else []
+                        for reason in installment_policy.get("reasons") or []:
+                            if reason not in reasons:
+                                reasons.append(reason)
+                        existing.reason = "\n".join(reasons)
+                        existing.lines_payload = payload
+                        self.db.commit()
+                        self.db.refresh(existing)
                 logger.info(
                     "Reusing pending price approval %s for lead %s | notified=%s",
                     existing.id,
@@ -193,12 +219,45 @@ class PriceApprovalService:
                 manager_email,
             )
 
+        kinds: list[str] = []
+        if gate is not None and not gate.ok:
+            kinds.append("price")
+        if installment_policy and installment_policy.get("needs_approval"):
+            kinds.append("installment")
+
         if not manager_email:
             raise ValueError(
-                "Selling price is below catalog minimum, but no manager email was found "
+                "Manager approval is required, but no manager email was found "
                 "for the lead owner. Set the owner's department manager in Bitrix, or set "
                 "BITRIX_APPROVAL_FALLBACK_EMAIL."
             )
+
+        reasons: list[str] = []
+        if gate is not None and gate.reason:
+            reasons.append(gate.reason)
+        for reason in (installment_policy or {}).get("reasons") or []:
+            if reason not in reasons:
+                reasons.append(reason)
+
+        total_payable = (
+            f"{gate.total_payable:.2f}"
+            if gate is not None and gate.total_payable > 0
+            else f"{Decimal(workflow.total_amount or 0):.2f}"
+        )
+        catalog_min = (
+            f"{gate.catalog_minimum_total:.2f}"
+            if gate is not None
+            else f"{Decimal(workflow.total_amount or 0):.2f}"
+        )
+        lines_payload = _lines_payload(gate.lines) if gate is not None else {
+            "lines": [],
+            "below_minimum_count": 0,
+            "ok_count": 0,
+            "product_count": 0,
+        }
+        lines_payload["approval_kinds"] = kinds
+        if installment_policy:
+            lines_payload["installment_policy"] = installment_policy
 
         token = secrets.token_urlsafe(32)
         approval = PriceApproval(
@@ -207,10 +266,10 @@ class PriceApprovalService:
             token=token,
             status=STATUS_PENDING,
             currency=workflow.currency or self.settings.default_currency,
-            total_payable=f"{gate.total_payable:.2f}",
-            catalog_minimum_total=f"{gate.catalog_minimum_total:.2f}",
-            reason=gate.reason,
-            lines_payload=_lines_payload(gate.lines),
+            total_payable=total_payable,
+            catalog_minimum_total=catalog_min,
+            reason="\n".join(reasons),
+            lines_payload=lines_payload,
             lead_title=str(lead.get("TITLE") or lead.get("title") or f"Lead {workflow.bitrix_lead_id}"),
             owner_user_id=owner_id,
             owner_name=_user_display_name(owner),
@@ -227,8 +286,6 @@ class PriceApprovalService:
         approval_url = self.build_approval_url(token)
         channels = await self._deliver(approval)
 
-        # The timeline comment is the channel that always works with the crm scope,
-        # so the link reaches Bitrix even when mail and chat are unavailable.
         delivery = (
             f"Notified via: {', '.join(channels)}."
             if channels
@@ -238,12 +295,24 @@ class PriceApprovalService:
                 "share the link below with them."
             )
         )
+        summary = ""
+        if gate is not None:
+            summary = gate.summary_comment(
+                currency=approval.currency, amount_paid=workflow.amount_paid
+            ) + "\n\n"
+        installment_block = ""
+        if installment_policy and installment_policy.get("reasons"):
+            installment_block = (
+                "Installment policy:\n"
+                + "\n".join(f"- {r}" for r in installment_policy["reasons"])
+                + "\n\n"
+            )
         try:
             await self.bitrix.add_timeline_comment(
                 entity_type="LEAD",
                 entity_id=workflow.bitrix_lead_id,
                 comment=(
-                    f"{gate.summary_comment(currency=approval.currency, amount_paid=workflow.amount_paid)}\n\n"
+                    f"{summary}{installment_block}"
                     f"Pending manager approval — {manager_email}.\n"
                     f"{delivery}\n"
                     f"Approval link: {approval_url}"
@@ -346,7 +415,7 @@ class PriceApprovalService:
             )
             return False
 
-        subject = f"Discount approval needed — {approval.lead_title}"
+        subject = f"Approval needed — {approval.lead_title}"
         body = self._email_body(approval, self.build_approval_url(approval.token))
         logger.info(
             "TRY approval delivery | channel=sendgrid lead_id=%s approval_id=%s "
@@ -392,7 +461,7 @@ class PriceApprovalService:
 
     async def _notify_manager(self, approval: PriceApproval, approval_url: str) -> list[str]:
         """Prefer SendGrid, then Bitrix chat. Bitrix mail is skipped (portal often lacks it)."""
-        subject = f"Discount approval needed — {approval.lead_title}"
+        subject = f"Approval needed — {approval.lead_title}"
         body = self._email_body(approval, approval_url)
         delivered: list[str] = []
         attempts: list[str] = []
@@ -453,54 +522,70 @@ class PriceApprovalService:
         ok = [line for line in all_lines if not line.get("below_minimum")]
         below_count = payload.get("below_minimum_count", len(below))
         product_count = payload.get("product_count", len(all_lines))
+        installment = payload.get("installment_policy") or {}
+        kinds = payload.get("approval_kinds") or []
 
         lines = [
             f"Hello {approval.manager_name or 'Manager'},",
             "",
-            "A payment link was requested with one or more courses below the catalog minimum.",
-            "Please review all products below, then approve or reject.",
+            "A payment link needs your approval before it can be sent.",
             "",
             f"Lead: {approval.lead_title} (#{approval.bitrix_lead_id})",
             f"Owner: {approval.owner_name or approval.owner_user_id or '-'}",
-            f"Products: {product_count} total | {below_count} need approval | "
-            f"{product_count - below_count} at/above minimum",
             f"Proposed total: {approval.total_payable} {approval.currency}",
-            f"Catalog minimum total: {approval.catalog_minimum_total} {approval.currency}",
-            "",
-            f"Needs approval ({below_count}):",
         ]
-        if below:
-            for line in below:
-                catalog = line.get("catalog_min_price") or "missing"
-                discount = line.get("discount_amount")
-                discount_txt = f" | discount {discount}" if discount else ""
-                lines.append(
-                    f"- {line.get('product_name')} × {line.get('quantity')} | "
-                    f"selling {line.get('selling_price')} | catalog min {catalog}"
-                    f"{discount_txt} | BELOW MIN"
-                )
-        else:
-            lines.append("- (none)")
+        if "price" in kinds or below:
+            lines.extend(
+                [
+                    f"Catalog minimum total: {approval.catalog_minimum_total} {approval.currency}",
+                    f"Products: {product_count} total | {below_count} below minimum",
+                    "",
+                    f"Needs price approval ({below_count}):",
+                ]
+            )
+            if below:
+                for line in below:
+                    catalog = line.get("catalog_min_price") or "missing"
+                    discount = line.get("discount_amount")
+                    discount_txt = f" | discount {discount}" if discount else ""
+                    lines.append(
+                        f"- {line.get('product_name')} × {line.get('quantity')} | "
+                        f"selling {line.get('selling_price')} | catalog min {catalog}"
+                        f"{discount_txt} | BELOW MIN"
+                    )
+            else:
+                lines.append("- (none)")
+            lines.append("")
+            lines.append(f"At / above minimum ({len(ok)}):")
+            if ok:
+                for line in ok:
+                    catalog = line.get("catalog_min_price") or "missing"
+                    lines.append(
+                        f"- {line.get('product_name')} × {line.get('quantity')} | "
+                        f"selling {line.get('selling_price')} | catalog min {catalog} | OK"
+                    )
+            else:
+                lines.append("- (none)")
 
-        lines.append("")
-        lines.append(f"At / above minimum ({len(ok)}):")
-        if ok:
-            for line in ok:
-                catalog = line.get("catalog_min_price") or "missing"
-                lines.append(
-                    f"- {line.get('product_name')} × {line.get('quantity')} | "
-                    f"selling {line.get('selling_price')} | catalog min {catalog} | OK"
-                )
-        else:
-            lines.append("- (none)")
+        if installment.get("needs_approval"):
+            lines.extend(["", "Installment policy:"])
+            for reason in installment.get("reasons") or []:
+                lines.append(f"- {reason}")
+            schedule = installment.get("schedule") or []
+            if schedule:
+                lines.append("Schedule:")
+                for slot in schedule:
+                    lines.append(
+                        f"- Installment {slot.get('number')}: "
+                        f"{slot.get('amount') or '-'} due {slot.get('due_date') or '-'}"
+                    )
 
         lines.extend(
             [
                 "",
                 f"Open approval page: {approval_url}",
                 "",
-                "If you APPROVE, the payment link is sent for the full lead "
-                "(all products above, including the discounted ones).",
+                "If you APPROVE, the payment link is sent.",
                 "If you REJECT, no payment link is sent.",
             ]
         )
@@ -531,16 +616,17 @@ class PriceApprovalService:
         self.db.commit()
         self.db.refresh(approval)
 
+        kinds = (approval.lines_payload or {}).get("approval_kinds") or ["price"]
+        label = " / ".join(kinds) if kinds else "request"
         if approve:
             comment = (
-                f"Discount APPROVED by manager ({approval.manager_email or 'unknown'}).\n"
-                f"Proposed total {approval.total_payable} {approval.currency} "
-                f"(catalog min {approval.catalog_minimum_total}).\n"
+                f"APPROVED by manager ({approval.manager_email or 'unknown'}) — {label}.\n"
+                f"Proposed total {approval.total_payable} {approval.currency}.\n"
                 "Payment link will be generated."
             )
         else:
             comment = (
-                f"Discount REJECTED by manager ({approval.manager_email or 'unknown'}).\n"
+                f"REJECTED by manager ({approval.manager_email or 'unknown'}) — {label}.\n"
                 f"Reason note: {approval.decision_note or '-'}\n"
                 "No payment link was sent."
             )

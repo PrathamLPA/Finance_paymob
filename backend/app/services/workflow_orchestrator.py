@@ -20,9 +20,18 @@ from app.services.estimate_price_gate import (
     PriceGateResult,
     ProductLine,
     evaluate_price_gate,
+    minimal_pricing_snapshot,
+    pricing_snapshot_from_gate,
     product_rows_for_estimate,
+    serialize_pricing_snapshot,
 )
-from app.services.installment_charge import resolve_first_charge
+from app.services.installment_plan import (
+    evaluate_installment_policy,
+    installment_policy_payload,
+    persist_installment_plan,
+    resolve_first_charge_for_workflow,
+    validate_installment_plan,
+)
 from app.services.invoice_service import InvoiceService
 from app.services.paymob_mapper import apply_paymob_fields
 from app.services.payment_session_service import PaymentSessionService
@@ -267,6 +276,10 @@ class WorkflowOrchestrator:
         # Prefer product-derived total whenever we have product lines.
         if gate.total_payable > 0:
             workflow.total_amount = gate.total_payable
+            if not workflow.pricing_snapshot:
+                workflow.pricing_snapshot = pricing_snapshot_from_gate(
+                    gate, currency=currency
+                )
             self.db.commit()
             self.db.refresh(workflow)
 
@@ -287,8 +300,18 @@ class WorkflowOrchestrator:
                 lead_id,
                 workflow.bitrix_estimate_id,
             )
+            policy = evaluate_installment_policy(
+                lead,
+                self.settings,
+                payable_total=gate.total_payable or Decimal(workflow.total_amount or 0),
+            )
             approval = await self.approval_service.request_manager_approval(
-                workflow, gate, lead=lead
+                workflow,
+                gate,
+                lead=lead,
+                installment_policy=(
+                    installment_policy_payload(policy) if policy.needs_approval else None
+                ),
             )
             approval_url = self.approval_service.build_approval_url(approval.token)
             logger.warning(
@@ -317,6 +340,87 @@ class WorkflowOrchestrator:
             workflow.bitrix_estimate_id,
             gate.total_payable,
             currency,
+        )
+
+    async def _capture_first_payment_snapshots(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        lead: dict,
+        skip_installment_policy: bool = False,
+    ) -> None:
+        """Freeze pricing + installment plan once at first payment-link creation."""
+        currency = workflow.currency or self.settings.default_currency
+        if not workflow.pricing_snapshot:
+            workflow.pricing_snapshot = minimal_pricing_snapshot(
+                currency=currency,
+                total_payable=Decimal(workflow.total_amount or 0),
+            )
+            self.db.commit()
+            self.db.refresh(workflow)
+
+        if not workflow.installments:
+            validation = validate_installment_plan(
+                lead,
+                self.settings,
+                payable_total=Decimal(workflow.total_amount or 0),
+            )
+            if validation.indicated and not validation.ok:
+                message = (
+                    "Installment plan is incomplete or invalid. Fix Bitrix installment "
+                    "amounts and due dates before generating a payment link.\n"
+                    + "\n".join(f"- {err}" for err in validation.errors)
+                )
+                try:
+                    await self.bitrix.add_timeline_comment(
+                        entity_type="LEAD",
+                        entity_id=workflow.bitrix_lead_id,
+                        comment=message,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to post installment validation comment on lead %s",
+                        workflow.bitrix_lead_id,
+                    )
+                raise ValueError(message)
+
+            if validation.indicated and validation.ok:
+                persist_installment_plan(self.db, workflow, validation.slots)
+
+        if skip_installment_policy:
+            return
+
+        policy = evaluate_installment_policy(
+            lead,
+            self.settings,
+            payable_total=Decimal(workflow.total_amount or 0),
+        )
+        if not policy.needs_approval:
+            return
+
+        approval = await self.approval_service.request_manager_approval(
+            workflow,
+            gate=None,
+            lead=lead,
+            installment_policy=installment_policy_payload(policy),
+        )
+        approval_url = self.approval_service.build_approval_url(approval.token)
+        logger.warning(
+            "PENDING installment policy approval | lead_id=%s approval_id=%s "
+            "manager=%s reasons=%s url=%s",
+            workflow.bitrix_lead_id,
+            approval.id,
+            approval.manager_email,
+            "; ".join(policy.reasons),
+            approval_url,
+        )
+        raise PriceApprovalPending(
+            (
+                "Installment plan needs manager approval. "
+                f"Manager approval requested ({approval.manager_email})."
+            ),
+            approval_url=approval_url,
+            approval_id=approval.id,
         )
 
     async def _post_gate_comment(
@@ -442,6 +546,7 @@ class WorkflowOrchestrator:
         total_amount: Decimal | None = None,
         lead_data: dict | None = None,
         skip_price_gate: bool = False,
+        skip_installment_policy: bool = False,
     ) -> PaymentSession:
         workflow = self.get_or_create_workflow(lead_id)
         explicit_override = (
@@ -470,11 +575,14 @@ class WorkflowOrchestrator:
             )
 
         lead = lead_data or workflow.bitrix_lead_payload or {}
-        plan = resolve_first_charge(
-            lead,
-            remaining_balance=workflow.remaining_balance or workflow.total_amount,
-            installment_1_field=self.settings.bitrix_field_installment_1,
-            installment_count_field=self.settings.bitrix_field_installment_count,
+        await self._capture_first_payment_snapshots(
+            workflow,
+            lead=lead,
+            skip_installment_policy=skip_installment_policy,
+        )
+
+        plan = resolve_first_charge_for_workflow(
+            workflow, lead=lead, settings=self.settings
         )
         if plan.amount <= 0:
             raise ValueError(
@@ -493,11 +601,13 @@ class WorkflowOrchestrator:
             plan.locked,
         )
 
+        installment_number = 1 if plan.source == "installment_1" else None
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,
             charge_source=plan.source,
             amount_locked=plan.locked,
+            installment_number=installment_number,
         )
         payment_url = self.session_service.build_payment_url(session.token)
 
@@ -556,20 +666,30 @@ class WorkflowOrchestrator:
             base = (line.selling_price * qty).quantize(Decimal("0.01"))
             tax_total += (base * line.tax_rate / Decimal("100")).quantize(Decimal("0.01"))
 
+        if product_lines and not workflow.pricing_snapshot:
+            workflow.pricing_snapshot = serialize_pricing_snapshot(
+                product_lines,
+                currency=workflow.currency or self.settings.default_currency,
+                total_payable=workflow.total_amount,
+            )
+            self.db.commit()
+            self.db.refresh(workflow)
+
         comment = (
-            f"Manager-approved discount\n"
+            f"Manager-approved payment\n"
             f"Total payable: {workflow.total_amount:.2f} {workflow.currency}\n"
             f"Catalog minimum total: {approval.catalog_minimum_total} {workflow.currency}"
         )
-        await self._ensure_estimate_for_gate(
-            workflow,
-            lead=lead,
-            gate_total=workflow.total_amount,
-            gate_tax=tax_total,
-            product_rows=product_rows_for_estimate(product_lines),
-            comment=comment,
-            awaiting_approval=False,
-        )
+        if product_lines or workflow.bitrix_estimate_id:
+            await self._ensure_estimate_for_gate(
+                workflow,
+                lead=lead,
+                gate_total=workflow.total_amount,
+                gate_tax=tax_total,
+                product_rows=product_rows_for_estimate(product_lines),
+                comment=comment,
+                awaiting_approval=False,
+            )
         logger.info(
             "OK manager approve | lead_id=%s estimate_id=%s approval_id=%s next=send_payment_link",
             approval.bitrix_lead_id,
@@ -580,6 +700,7 @@ class WorkflowOrchestrator:
             approval.bitrix_lead_id,
             lead_data=lead,
             skip_price_gate=True,
+            skip_installment_policy=True,
         )
 
     async def reject_price_approval(self, token: str, *, note: str | None = None) -> None:

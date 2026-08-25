@@ -151,7 +151,7 @@ async def test_manager_approval_includes_all_products_with_below_flags(db_sessio
     assert public["ok_lines"][0]["product_name"] == "PMP"
 
     body = orchestrator.approval_service._email_body(approval, public["approval_url"])
-    assert "Needs approval (1):" in body
+    assert "Needs price approval (1):" in body
     assert "AWS" in body and "BELOW MIN" in body
     assert "At / above minimum (1):" in body
     assert "PMP" in body
@@ -196,7 +196,7 @@ async def test_price_gate_requests_manager_approval(db_session, monkeypatch):
     email_client = get_email_client()
     assert email_client.sent_emails
     assert email_client.sent_emails[-1]["to"] == "manager@test.com"
-    assert "Discount approval needed" in email_client.sent_emails[-1]["subject"]
+    assert "Approval needed" in email_client.sent_emails[-1]["subject"]
 
     comments = bitrix._mock_comments.get(("LEAD", 501), [])
     assert comments
@@ -257,7 +257,7 @@ async def test_failed_notification_is_retried_on_next_trigger(db_session, monkey
         await orchestrator.initiate_payment_from_lead(888)
 
     assert len(email_client.sent_emails) == sent_before + 1
-    assert "Discount approval needed" in email_client.sent_emails[-1]["subject"]
+    assert "Approval needed" in email_client.sent_emails[-1]["subject"]
     db_session.refresh(approval)
     assert approval.notified_at is not None
     assert approval.notified_via == "sendgrid"

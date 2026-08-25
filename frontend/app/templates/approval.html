@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Discount approval</title>
-    <link rel="stylesheet" href="/static/styles.css?v=6">
+    <title>Manager approval</title>
+    <link rel="stylesheet" href="/static/styles.css?v=7">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -44,6 +44,12 @@
             font-size: 0.9rem;
             color: #475467;
         }
+        .policy-list {
+            margin: 0.5rem 0 0;
+            padding-left: 1.1rem;
+            color: #b42318;
+            font-size: 0.9rem;
+        }
     </style>
 </head>
 <body class="paymob-page">
@@ -57,7 +63,7 @@
             </div>
             <div>
                 <span class="brand-name">Finance Automation</span>
-                <span class="brand-tagline">Manager discount approval</span>
+                <span class="brand-tagline">Manager approval</span>
             </div>
         </div>
     </header>
@@ -67,11 +73,11 @@
             <div class="card-hero">
                 <div class="card-hero-text">
                     <div class="card-header">
-                        <h1>Discount approval</h1>
+                        <h1>Manager approval</h1>
                         <span class="version-pill">{{ data.status }}</span>
                     </div>
                     <p class="card-subtitle">
-                        Review every course on this lead. Approve only if the discounted prices are acceptable.
+                        Review discount and/or installment policy details, then approve or reject.
                     </p>
                 </div>
             </div>
@@ -82,8 +88,7 @@
 
             {% if result and result.status == 'approved' %}
             <div class="alert" role="status">
-                Approved. The payment link has been posted to Bitrix for the full lead
-                (all courses, including discounted ones).
+                Approved. The payment link has been posted to Bitrix.
                 {% if result.payment_url %}
                 <div style="margin-top:0.75rem"><a href="{{ result.payment_url }}">Open payment link</a></div>
                 {% endif %}
@@ -103,25 +108,52 @@
                         <dd>{{ data.owner_name or '—' }}</dd>
                     </div>
                     <div class="amount-row">
-                        <dt>Products</dt>
-                        <dd>
-                            {{ data.product_count or data.lines|length }} total ·
-                            {{ data.below_minimum_count or 0 }} need approval ·
-                            {{ data.ok_count or 0 }} OK
-                        </dd>
+                        <dt>Approval type</dt>
+                        <dd>{{ (data.approval_kinds or ['price']) | join(' + ') }}</dd>
                     </div>
                     <div class="amount-row">
                         <dt>Proposed total</dt>
                         <dd>{{ data.total_payable }} {{ data.currency }}</dd>
                     </div>
+                    {% if 'price' in (data.approval_kinds or []) or (data.below_minimum_count or 0) > 0 %}
                     <div class="amount-row amount-row-total">
                         <dt>Catalog minimum total</dt>
                         <dd>{{ data.catalog_minimum_total }} {{ data.currency }}</dd>
                     </div>
+                    {% endif %}
                 </dl>
 
+                {% set installment = data.installment_policy if data.installment_policy is defined else {} %}
+                {% if installment and installment.needs_approval %}
                 <h2 class="section-heading">
-                    Needs approval
+                    Installment policy
+                    <span class="status-pill status-pill-bad">Needs approval</span>
+                </h2>
+                <div class="amount-summary">
+                    <ul class="policy-list">
+                        {% for reason in installment.reasons or [] %}
+                        <li>{{ reason }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% if installment.schedule %}
+                    <div style="margin-top:0.85rem">
+                        {% for slot in installment.schedule %}
+                        <div class="amount-row">
+                            <dt>
+                                Installment {{ slot.number }}
+                                <span class="line-meta">Due {{ slot.due_date or '—' }}</span>
+                            </dt>
+                            <dd>{% if slot.amount %}{{ slot.amount }} {{ data.currency }}{% else %}—{% endif %}</dd>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                {% if 'price' in (data.approval_kinds or []) or (data.below_minimum_count or 0) > 0 or (data.lines and data.lines|length > 0) %}
+                <h2 class="section-heading">
+                    Needs price approval
                     <span class="status-pill status-pill-bad">{{ data.below_minimum_count or 0 }}</span>
                 </h2>
                 <div class="amount-summary">
@@ -168,10 +200,10 @@
                     <p class="field-hint">No courses at or above the catalog minimum.</p>
                     {% endfor %}
                 </div>
+                {% endif %}
 
                 <p class="summary-note">
-                    Approving sends one payment link for the <strong>entire lead</strong>
-                    (all courses above). Rejecting blocks the payment link.
+                    Approving sends the payment link. Rejecting blocks it.
                 </p>
 
                 {% if data.status == 'pending' %}

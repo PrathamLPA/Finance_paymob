@@ -13,6 +13,7 @@ from app.db.session import get_db
 from app.integrations.factory import get_bitrix_client
 from app.models.payment_session import PaymentSession
 from app.services.course_seats import load_lead_courses, total_seats
+from app.services.installment_plan import schedule_payload
 from app.services.payment_session_service import PaymentSessionService
 from app.services.terms_service import TermsService
 
@@ -80,10 +81,27 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
     required_percent = session_service.settings.payment_required_percent
     locked = bool(getattr(session, "amount_locked", True))
     charge_source = getattr(session, "charge_source", None) or "full"
-    charge_labels = {
-        "installment_1": "Installment 1",
-        "full": "Full payment",
-    }
+    installment_number = getattr(session, "installment_number", None)
+    schedule = schedule_payload(workflow)
+    installment_count = len(schedule) or None
+    current_due_date = None
+    if installment_number and schedule:
+        for row in schedule:
+            if row["number"] == installment_number:
+                current_due_date = row["due_date"]
+                break
+    if charge_source == "installment_1":
+        charge_label = (
+            f"Installment {installment_number or 1}"
+            + (f" of {installment_count}" if installment_count else "")
+        )
+    else:
+        charge_label = "Full payment"
+
+    pricing = workflow.pricing_snapshot or {}
+    payment_amount = Decimal(session.charge_amount)
+    balance_after = max(workflow.remaining_balance - payment_amount, Decimal("0.00"))
+
     bitrix = get_bitrix_client(session_service.settings)
     courses = await load_lead_courses(bitrix, workflow.bitrix_lead_id)
     return {
@@ -98,12 +116,21 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
         "remaining_balance": str(workflow.remaining_balance),
         "minimum_amount": str(session.charge_amount if locked else workflow.minimum_due(required_percent)),
         "payment_amount": str(session.charge_amount),
+        "balance_after_payment": str(balance_after.quantize(Decimal("0.01"))),
         "allows_partial": False if locked else (
             workflow.minimum_due(required_percent) < workflow.remaining_balance
         ),
         "amount_locked": locked,
         "charge_source": charge_source,
-        "charge_label": charge_labels.get(charge_source, charge_source),
+        "charge_label": charge_label,
+        "installment_number": installment_number,
+        "installment_count": installment_count,
+        "installment_due_date": current_due_date,
+        "installment_schedule": schedule,
+        "subtotal": str(pricing.get("subtotal") or workflow.total_amount),
+        "vat_total": str(pricing.get("vat_total") or pricing.get("tax_total") or "0.00"),
+        "tax_total": str(pricing.get("tax_total") or pricing.get("vat_total") or "0.00"),
+        "pricing_lines": pricing.get("lines") or [],
         "required_percent": str(required_percent),
         "courses": courses,
         "total_seats": total_seats(courses),

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment — Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=6">
+    <link rel="stylesheet" href="/static/styles.css?v=7">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -220,7 +220,26 @@
                         <h2 class="section-heading" id="amount-heading">Amount to pay</h2>
                     </div>
 
+                    {% if installment_number %}
+                    <div class="installment-banner" role="status">
+                        <strong>{{ charge_label }}</strong>
+                        {% if installment_due_date %}
+                        <span>Due {{ installment_due_date }}</span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
                     <dl class="amount-summary">
+                        <div class="amount-row">
+                            <dt>Course subtotal</dt>
+                            <dd>{{ subtotal }} {{ currency }}</dd>
+                        </div>
+                        {% if vat_total != '0.00' %}
+                        <div class="amount-row">
+                            <dt>VAT</dt>
+                            <dd>{{ vat_total }} {{ currency }}</dd>
+                        </div>
+                        {% endif %}
                         <div class="amount-row">
                             <dt>Course total</dt>
                             <dd>{{ total_amount }} {{ currency }}</dd>
@@ -229,11 +248,35 @@
                             <dt>Already paid</dt>
                             <dd>{{ amount_paid }} {{ currency }}</dd>
                         </div>
-                        <div class="amount-row amount-row-total">
+                        <div class="amount-row">
                             <dt>Outstanding balance</dt>
                             <dd>{{ remaining_balance }} {{ currency }}</dd>
                         </div>
+                        <div class="amount-row amount-row-total">
+                            <dt>Pay now</dt>
+                            <dd>{{ payment_amount }} {{ currency }}</dd>
+                        </div>
+                        <div class="amount-row">
+                            <dt>Balance after this payment</dt>
+                            <dd>{{ balance_after_payment }} {{ currency }}</dd>
+                        </div>
                     </dl>
+
+                    {% if installment_schedule %}
+                    <div class="installment-schedule" aria-label="Installment schedule">
+                        <h3 class="schedule-heading">Installment schedule</h3>
+                        <ul class="schedule-list">
+                            {% for slot in installment_schedule %}
+                            <li class="schedule-item schedule-{{ slot.status }}{% if installment_number == slot.number %} current{% endif %}">
+                                <span class="schedule-label">Installment {{ slot.number }}</span>
+                                <span class="schedule-meta">Due {{ slot.due_date }}</span>
+                                <span class="schedule-amount">{{ slot.amount }} {{ currency }}</span>
+                                <span class="schedule-status">{{ slot.status }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
 
                     {% if allows_partial %}
                     <div class="amount-choice" role="radiogroup" aria-label="How much to pay now">
@@ -273,7 +316,7 @@
                         </span>
                         <span class="field-hint" id="amount-hint">
                             {% if amount_locked %}
-                            This amount comes from Bitrix ({{ charge_label }}) and cannot be changed.
+                            This amount is locked for {{ charge_label | lower }} and cannot be changed.
                             {% else %}
                             Minimum {{ minimum_amount }} {{ currency }}, maximum {{ remaining_balance }} {{ currency }}.
                             {% endif %}

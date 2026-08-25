@@ -79,6 +79,7 @@ class PaymentSessionService:
         charge_amount: Decimal | None = None,
         charge_source: str = "full",
         amount_locked: bool = True,
+        installment_number: int | None = None,
     ) -> PaymentSession:
         """Reuse a non-expired payment session when charge amount still matches."""
         expected = charge_amount
@@ -93,6 +94,7 @@ class PaymentSessionService:
             existing
             and existing.charge_amount == expected
             and (existing.charge_source or "full") == charge_source
+            and existing.installment_number == installment_number
         ):
             return existing
         if existing:
@@ -110,6 +112,7 @@ class PaymentSessionService:
             charge_amount=expected,
             charge_source=charge_source,
             amount_locked=amount_locked,
+            installment_number=installment_number,
         )
 
     async def create_session(
@@ -121,6 +124,7 @@ class PaymentSessionService:
         charge_amount: Decimal | None = None,
         charge_source: str = "full",
         amount_locked: bool = True,
+        installment_number: int | None = None,
     ) -> PaymentSession:
         amount = charge_amount
         if amount is None:
@@ -147,6 +151,7 @@ class PaymentSessionService:
             charge_amount=amount,
             charge_source=charge_source,
             amount_locked=amount_locked,
+            installment_number=installment_number,
             currency=workflow.currency,
             paymob_session_id=paymob_session.session_id,
             paymob_checkout_url=paymob_session.checkout_url,
