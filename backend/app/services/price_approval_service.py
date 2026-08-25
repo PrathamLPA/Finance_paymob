@@ -634,10 +634,15 @@ class PriceApprovalService:
                 "Payment link will be generated."
             )
         else:
+            owner = approval.owner_name or (
+                f"user #{approval.owner_user_id}" if approval.owner_user_id else "lead owner"
+            )
             comment = (
                 f"REJECTED by manager ({approval.manager_email or 'unknown'}) — {label}.\n"
+                f"Responsible person: {owner}\n"
                 f"Reason note: {approval.decision_note or '-'}\n"
-                "No payment link was sent."
+                "No payment link was sent. Please update the lead (price / installment plan) "
+                "and move it to the payment stage again if needed."
             )
         try:
             await self.bitrix.add_timeline_comment(

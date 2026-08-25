@@ -835,6 +835,105 @@ class WorkflowOrchestrator:
             workflow.bitrix_estimate_id or "-",
             (note or "")[:80],
         )
+        await self._notify_owner_of_rejection(workflow, approval)
+
+    async def _notify_owner_of_rejection(
+        self,
+        workflow: CustomerWorkflow,
+        approval,
+    ) -> None:
+        """Tell the lead responsible person the manager rejected approval."""
+        kinds = (approval.lines_payload or {}).get("approval_kinds") or ["price"]
+        label = " / ".join(kinds)
+        note = approval.decision_note or "-"
+        subject = f"Payment approval rejected — {approval.lead_title or f'Lead {approval.bitrix_lead_id}'}"
+        body = (
+            f"Your payment approval request was rejected by the manager "
+            f"({approval.manager_email or 'unknown'}).\n\n"
+            f"Lead: {approval.lead_title or '-'} (#{approval.bitrix_lead_id})\n"
+            f"Approval type: {label}\n"
+            f"Proposed total: {approval.total_payable} {approval.currency}\n"
+            f"Manager note: {note}\n\n"
+            "No payment link was sent.\n"
+            "Please update the price and/or installment plan on the lead, "
+            "then move it to the payment stage again."
+        )
+
+        # Prefer live lead ASSIGNED_BY_ID (chat + email). Fall back to stored owner id.
+        try:
+            lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
+        except Exception:
+            logger.exception(
+                "Could not load lead %s to notify owner of rejection",
+                workflow.bitrix_lead_id,
+            )
+            lead = None
+
+        owner_id = 0
+        if lead:
+            owner_raw = lead.get("ASSIGNED_BY_ID") or lead.get("assignedById")
+            try:
+                owner_id = int(owner_raw or 0)
+            except (TypeError, ValueError):
+                owner_id = 0
+        if owner_id <= 0 and approval.owner_user_id:
+            try:
+                owner_id = int(approval.owner_user_id)
+            except (TypeError, ValueError):
+                owner_id = 0
+
+        if owner_id <= 0:
+            logger.info(
+                "No responsible person on lead %s — skip rejection chat/email",
+                workflow.bitrix_lead_id,
+            )
+            return
+
+        chat_text = f"{subject}\n\n{body}"
+        try:
+            await self.bitrix.notify_user(user_id=owner_id, message=chat_text)
+        except Exception:
+            logger.exception(
+                "Failed Bitrix rejection chat to user %s for lead %s",
+                owner_id,
+                workflow.bitrix_lead_id,
+            )
+
+        agent_email = None
+        agent_name = None
+        try:
+            user = await self.bitrix.get_user(owner_id)
+        except Exception:
+            logger.exception("Failed to load Bitrix user %s for rejection email", owner_id)
+            user = None
+        if user:
+            agent_email, agent_name = _bitrix_user_email_name(user)
+        if not agent_email:
+            logger.info(
+                "Responsible person %s has no email — chat only | lead_id=%s",
+                owner_id,
+                workflow.bitrix_lead_id,
+            )
+            return
+        try:
+            sent = self.email.send_agent_payment_notice(
+                to_email=agent_email,
+                agent_name=agent_name,
+                subject=subject,
+                body=body,
+            )
+            if sent:
+                logger.info(
+                    "Rejection notice emailed to responsible person | to=%s lead_id=%s",
+                    agent_email,
+                    workflow.bitrix_lead_id,
+                )
+        except Exception:
+            logger.exception(
+                "Failed SendGrid rejection notice | to=%s lead_id=%s",
+                agent_email,
+                workflow.bitrix_lead_id,
+            )
 
     async def initiate_payment_from_finance_deal(self, finance_deal_id: int) -> PaymentSession:
         workflow = self.get_workflow_by_finance_deal(finance_deal_id)

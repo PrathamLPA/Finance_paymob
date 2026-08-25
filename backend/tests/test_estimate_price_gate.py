@@ -365,6 +365,55 @@ async def test_manager_approval_sends_payment_link(db_session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_manager_rejection_notifies_lead_owner(db_session, monkeypatch):
+    monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
+    monkeypatch.setenv("BITRIX_APPROVAL_FALLBACK_EMAIL", "")
+    get_settings.cache_clear()
+
+    bitrix = get_bitrix_client()
+    bitrix.seed_user(101, email="owner@test.com", name="Lead Owner", department_ids=[5])
+    bitrix.seed_user(202, email="manager@test.com", name="Sales Manager", department_ids=[5])
+    bitrix.seed_department_manager(5, 202)
+    bitrix.seed_lead(504, email="reject@test.com", name="Reject Test", amount=Decimal("5500"))
+    bitrix.seed_catalog_product(10, name="AWS Solutions Architect", price=Decimal("6000"))
+    bitrix.seed_lead_products(
+        504,
+        [
+            {
+                "productId": 10,
+                "productName": "AWS Solutions Architect",
+                "price": 5500,
+                "quantity": 1,
+                "taxRate": 0,
+                "taxIncluded": "Y",
+            }
+        ],
+    )
+
+    orchestrator = WorkflowOrchestrator(db_session)
+    with pytest.raises(PriceApprovalPending) as pending:
+        await orchestrator.initiate_payment_from_lead(504)
+
+    token = pending.value.approval_url.rsplit("/", 1)[-1]
+    await orchestrator.reject_price_approval(token, note="Raise the selling price")
+
+    comments = bitrix._mock_comments.get(("LEAD", 504), [])
+    assert any("REJECTED by manager" in c["COMMENT"] for c in comments)
+    assert any("Responsible person" in c["COMMENT"] for c in comments)
+    assert any(
+        n["user_id"] == 101 and "Payment approval rejected" in n["message"]
+        for n in bitrix._mock_notifications
+    )
+    from app.integrations.factory import get_email_client
+
+    emails = get_email_client().sent_emails
+    assert any(
+        e["to"] == "owner@test.com" and "Payment approval rejected" in e["subject"]
+        for e in emails
+    )
+
+
+@pytest.mark.asyncio
 async def test_price_gate_creates_estimate_and_payment_link(db_session, monkeypatch):
     monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
     get_settings.cache_clear()
