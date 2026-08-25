@@ -43,10 +43,30 @@ def test_policy_count_more_than_two():
     assert any("more than 2" in r for r in result.reasons)
 
 
-def test_garbage_installment_count_is_ignored():
-    settings = _settings()
+def test_enum_installment_count_5830_maps_to_three():
+    """Bitrix Number Of Installments returns list IDs (5830), not the digit 3."""
+    settings = _settings(**{"BITRIX_INSTALLMENT_COUNT_ENUM_MAP": "5826:1,5828:2,5830:3,5832:4"})
     lead = {
         "UF_COUNT": "5830",
+        "UF_I1": "1000",
+        "UF_D1": "2026-01-01",
+        "UF_I2": "1000",
+        "UF_D2": "2026-01-15",
+        "UF_I3": "1000",
+        "UF_D3": "2026-01-30",
+    }
+    result = evaluate_installment_policy(
+        lead, settings, payable_total=Decimal("3000.00"), required_percent=50
+    )
+    assert result.installment_count == 3
+    assert result.count_above_two is True
+    assert any("count is 3" in r.lower() for r in result.reasons)
+
+
+def test_unknown_garbage_count_is_ignored():
+    settings = _settings()
+    lead = {
+        "UF_COUNT": "99999",
         "UF_I1": "1500",
         "UF_D1": "2026-01-01",
         "UF_I2": "1500",

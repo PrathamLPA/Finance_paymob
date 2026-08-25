@@ -70,6 +70,7 @@ async def decide_approval(
     note: str = "",
     product_prices: list[dict] | None = None,
     installments: list[dict] | None = None,
+    rejected_case: str | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
     action = "approve" if approve else "reject"
@@ -79,6 +80,8 @@ async def decide_approval(
         payload["product_prices"] = product_prices
     if installments is not None:
         payload["installments"] = installments
+    if rejected_case:
+        payload["rejected_case"] = rejected_case
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(url, json=payload)
     if response.status_code >= 400:

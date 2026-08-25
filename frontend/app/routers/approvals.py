@@ -38,6 +38,7 @@ async def approval_decide(
     decision: str = Form(...),
     note: str = Form(default=""),
     overrides_json: str = Form(default="{}"),
+    rejected_case: str = Form(default=""),
 ) -> HTMLResponse:
     try:
         data = await get_approval(token)
@@ -64,8 +65,9 @@ async def approval_decide(
             token,
             approve=approve,
             note=note,
-            product_prices=product_prices if approve else [],
-            installments=installments if approve else [],
+            product_prices=product_prices,
+            installments=installments,
+            rejected_case=(rejected_case or None) if not approve else None,
         )
         data = await get_approval(token)
     except BackendApiError as exc:

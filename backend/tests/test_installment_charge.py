@@ -22,10 +22,18 @@ def test_empty_installment_fields_charge_full_amount():
     assert plan.label == "Full payment"
 
 
+def test_bitrix_money_pipe_currency_is_parsed():
+    from app.services.installment_charge import _money
+
+    assert _money("5000|AED") == Decimal("5000.00")
+    assert _money("5,000.50|AED") == Decimal("5000.50")
+    assert _money("Dh5000.00") == Decimal("5000.00")
+
+
 def test_installment_1_sets_locked_first_payment():
     plan = resolve_first_charge(
         {
-            "UF_CRM_INSTALLMENT_1": "1500.50",
+            "UF_CRM_INSTALLMENT_1": "1500.50|AED",
             "UF_CRM_INSTALLMENT_COUNT": "3",
         },
         remaining_balance=Decimal("5500.00"),

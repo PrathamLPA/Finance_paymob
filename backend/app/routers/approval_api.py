@@ -29,6 +29,7 @@ class DecisionBody(BaseModel):
     note: str | None = None
     product_prices: list[ProductPriceOverride] = Field(default_factory=list)
     installments: list[InstallmentOverride] = Field(default_factory=list)
+    rejected_case: str | None = None
 
 
 @router.get("/{token}")
@@ -66,7 +67,13 @@ async def approve_price(token: str, body: DecisionBody, db: Session = Depends(ge
 async def reject_price(token: str, body: DecisionBody, db: Session = Depends(get_db)) -> dict[str, Any]:
     orchestrator = WorkflowOrchestrator(db)
     try:
-        await orchestrator.reject_price_approval(token, note=body.note)
+        await orchestrator.reject_price_approval(
+            token,
+            note=body.note,
+            product_prices=[p.model_dump() for p in body.product_prices],
+            installment_overrides=[i.model_dump() for i in body.installments],
+            rejected_case=body.rejected_case,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "rejected"}

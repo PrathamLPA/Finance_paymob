@@ -395,20 +395,29 @@ async def test_manager_rejection_notifies_lead_owner(db_session, monkeypatch):
         await orchestrator.initiate_payment_from_lead(504)
 
     token = pending.value.approval_url.rsplit("/", 1)[-1]
-    await orchestrator.reject_price_approval(token, note="Raise the selling price")
+    await orchestrator.reject_price_approval(
+        token,
+        note="Raise the selling price",
+        product_prices=[{"product_id": 10, "selling_price": Decimal("6000.00")}],
+    )
 
     comments = bitrix._mock_comments.get(("LEAD", 504), [])
     assert any("REJECTED by manager" in c["COMMENT"] for c in comments)
     assert any("Responsible person" in c["COMMENT"] for c in comments)
+    assert any("preferred 6000.00" in c["COMMENT"] for c in comments)
     assert any(
-        n["user_id"] == 101 and "Payment approval rejected" in n["message"]
+        n["user_id"] == 101
+        and "Payment approval rejected" in n["message"]
+        and "preferred 6000.00" in n["message"]
         for n in bitrix._mock_notifications
     )
     from app.integrations.factory import get_email_client
 
     emails = get_email_client().sent_emails
     assert any(
-        e["to"] == "owner@test.com" and "Payment approval rejected" in e["subject"]
+        e["to"] == "owner@test.com"
+        and "Payment approval rejected" in e["subject"]
+        and "preferred 6000.00" in e["body"]
         for e in emails
     )
 

@@ -824,18 +824,48 @@ class WorkflowOrchestrator:
             base[number] = ParsedInstallment(number=number, amount=amount, due_date=due)
         return [base[n] for n in sorted(base) if base[n].amount is not None and base[n].due_date]
 
-    async def reject_price_approval(self, token: str, *, note: str | None = None) -> None:
+    async def reject_price_approval(
+        self,
+        token: str,
+        *,
+        note: str | None = None,
+        product_prices: list[dict] | None = None,
+        installment_overrides: list[dict] | None = None,
+        rejected_case: str | None = None,
+    ) -> None:
         logger.info("START manager reject | token=%s...", token[:8])
-        approval = await self.approval_service.decide(token, approve=False, note=note)
+        suggested_dates = []
+        suggested_amounts = []
+        for row in installment_overrides or []:
+            entry: dict = {"number": row.get("number")}
+            if row.get("due_date"):
+                suggested_dates.append({**entry, "due_date": row.get("due_date")})
+            if row.get("amount") is not None and str(row.get("amount")).strip() != "":
+                suggested_amounts.append({**entry, "amount": row.get("amount")})
+        approval = await self.approval_service.decide(
+            token,
+            approve=False,
+            note=note,
+            suggested_prices=product_prices or [],
+            suggested_dates=suggested_dates,
+            suggested_amounts=suggested_amounts,
+            rejected_case=rejected_case,
+        )
         workflow = self.get_or_create_workflow(approval.bitrix_lead_id)
         logger.warning(
-            "OK manager reject | lead_id=%s approval_id=%s estimate_id=%s note=%s",
+            "OK manager reject | lead_id=%s approval_id=%s estimate_id=%s note=%s case=%s",
             approval.bitrix_lead_id,
             approval.id,
             workflow.bitrix_estimate_id or "-",
             (note or "")[:80],
+            rejected_case or "-",
         )
         await self._notify_owner_of_rejection(workflow, approval)
+
+    @staticmethod
+    def _format_suggested_prices(approval) -> str:
+        """Preferred values the manager set on reject (guidance for the lead owner)."""
+        return PriceApprovalService._rejection_preferred_block(approval).rstrip()
 
     async def _notify_owner_of_rejection(
         self,
@@ -844,20 +874,30 @@ class WorkflowOrchestrator:
     ) -> None:
         """Tell the lead responsible person the manager rejected approval."""
         kinds = (approval.lines_payload or {}).get("approval_kinds") or ["price"]
-        label = " / ".join(kinds)
+        label = (approval.lines_payload or {}).get("rejected_case") or " / ".join(kinds)
         note = approval.decision_note or "-"
+        preferred = self._format_suggested_prices(approval)
         subject = f"Payment approval rejected — {approval.lead_title or f'Lead {approval.bitrix_lead_id}'}"
-        body = (
+        body_parts = [
             f"Your payment approval request was rejected by the manager "
-            f"({approval.manager_email or 'unknown'}).\n\n"
-            f"Lead: {approval.lead_title or '-'} (#{approval.bitrix_lead_id})\n"
-            f"Approval type: {label}\n"
-            f"Proposed total: {approval.total_payable} {approval.currency}\n"
-            f"Manager note: {note}\n\n"
-            "No payment link was sent.\n"
-            "Please update the price and/or installment plan on the lead, "
-            "then move it to the payment stage again."
+            f"({approval.manager_email or 'unknown'}).",
+            "",
+            f"Lead: {approval.lead_title or '-'} (#{approval.bitrix_lead_id})",
+            f"Rejected case: {label}",
+            f"Proposed total: {approval.total_payable} {approval.currency}",
+            f"Manager note: {note}",
+        ]
+        if preferred:
+            body_parts.extend(["", preferred])
+        body_parts.extend(
+            [
+                "",
+                "No payment link was sent.",
+                "Please update the lead to match the preferred values above "
+                "(and/or the installment plan), then move it to the payment stage again.",
+            ]
         )
+        body = "\n".join(body_parts)
 
         # Prefer live lead ASSIGNED_BY_ID (chat + email). Fall back to stored owner id.
         try:

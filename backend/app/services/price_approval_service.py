@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings, get_settings
 from app.integrations.factory import get_bitrix_client, get_email_client
@@ -94,7 +94,11 @@ class PriceApprovalService:
         return f"{base.rstrip('/')}/approvals/{token}"
 
     def get_by_token(self, token: str) -> PriceApproval | None:
-        return self.db.scalar(select(PriceApproval).where(PriceApproval.token == token))
+        return self.db.scalar(
+            select(PriceApproval)
+            .options(selectinload(PriceApproval.workflow))
+            .where(PriceApproval.token == token)
+        )
 
     def get_pending_for_lead(self, lead_id: int) -> PriceApproval | None:
         return self.db.scalar(
@@ -117,6 +121,39 @@ class PriceApprovalService:
         below_lines = [line for line in lines if line.get("below_minimum")]
         ok_lines = [line for line in lines if not line.get("below_minimum")]
         installment = payload.get("installment_policy") or {}
+
+        # Re-read installment fields from the stored lead so money/enum fixes apply
+        # to pending approvals created before the field-mapping correction.
+        if approval.status == STATUS_PENDING and not expired:
+            lead = {}
+            workflow = getattr(approval, "workflow", None)
+            if workflow is not None:
+                lead = workflow.bitrix_lead_payload or {}
+            if lead:
+                from decimal import Decimal
+
+                from app.services.installment_plan import (
+                    evaluate_installment_policy,
+                    installment_policy_payload,
+                )
+
+                refreshed = installment_policy_payload(
+                    evaluate_installment_policy(
+                        lead,
+                        self.settings,
+                        payable_total=Decimal(str(approval.total_payable or "0")),
+                    )
+                )
+                if refreshed.get("needs_approval") or installment.get("needs_approval"):
+                    installment = refreshed
+                    payload = dict(payload)
+                    payload["installment_policy"] = refreshed
+                    kinds = list(payload.get("approval_kinds") or [])
+                    if refreshed.get("needs_approval") and "installment" not in kinds:
+                        kinds.append("installment")
+                    payload["approval_kinds"] = kinds
+                    approval.lines_payload = payload
+
         issues = installment.get("issues") or {}
         kinds = payload.get("approval_kinds") or (
             ["price"] if below_lines else []
@@ -141,6 +178,7 @@ class PriceApprovalService:
             "ok_count": payload.get("ok_count", len(ok_lines)),
             "approval_kinds": kinds,
             "installment_policy": installment,
+            "cases": self._case_cards(below_lines=below_lines, installment=installment),
             "editable": {
                 "price": bool(below_lines),
                 "first_installment_amount": bool(issues.get("first_below_percent")),
@@ -158,6 +196,66 @@ class PriceApprovalService:
             "expires_at": approval.expires_at.isoformat() if approval.expires_at else None,
             "approval_url": self.build_approval_url(approval.token),
         }
+
+    @staticmethod
+    def _case_cards(
+        *,
+        below_lines: list[dict],
+        installment: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """One card per policy issue so the manager can approve/reject each case."""
+        issues = installment.get("issues") or {}
+        reasons = installment.get("reasons") or []
+        cards: list[dict[str, Any]] = []
+        if below_lines:
+            cards.append(
+                {
+                    "id": "price",
+                    "title": "Course prices below minimum",
+                    "summary": "One or more courses are priced under catalog minimum.",
+                    "reject_fields": "preferred_prices",
+                }
+            )
+        if issues.get("first_below_percent"):
+            cards.append(
+                {
+                    "id": "first_below",
+                    "title": "Installment 1 below minimum %",
+                    "summary": next((r for r in reasons if "below the" in r), reasons[0] if reasons else ""),
+                    "reject_fields": "preferred_first_amount",
+                }
+            )
+        if issues.get("count_above_two"):
+            cards.append(
+                {
+                    "id": "count",
+                    "title": "Installment count above 2",
+                    "summary": next((r for r in reasons if "more than 2" in r), "Count is more than 2."),
+                    "reject_fields": None,
+                }
+            )
+        if issues.get("gap_over_limit"):
+            cards.append(
+                {
+                    "id": "gap",
+                    "title": "Due date gap over 30 days",
+                    "summary": next((r for r in reasons if "days after" in r), "Installment 2 due date is too far."),
+                    "reject_fields": "preferred_dates",
+                }
+            )
+        if issues.get("missing_amounts"):
+            cards.append(
+                {
+                    "id": "missing_amounts",
+                    "title": "Missing installment amounts",
+                    "summary": next(
+                        (r for r in reasons if "no amount" in r.lower()),
+                        "One or more installments have a due date but no amount.",
+                    ),
+                    "reject_fields": "preferred_amounts",
+                }
+            )
+        return cards
 
     async def request_manager_approval(
         self,
@@ -600,12 +698,95 @@ class PriceApprovalService:
         )
         return "\n".join(lines)
 
+    @staticmethod
+    def _clean_suggested_prices(rows: list[dict]) -> list[dict]:
+        cleaned: list[dict] = []
+        for row in rows:
+            try:
+                product_id = int(row.get("product_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if product_id <= 0:
+                continue
+            price = row.get("selling_price")
+            if price is None or str(price).strip() == "":
+                continue
+            cleaned.append({"product_id": product_id, "selling_price": str(price)})
+        return cleaned
+
+    @staticmethod
+    def _clean_suggested_dates(rows: list[dict]) -> list[dict]:
+        cleaned: list[dict] = []
+        for row in rows:
+            try:
+                number = int(row.get("number") or 0)
+            except (TypeError, ValueError):
+                continue
+            due = str(row.get("due_date") or "").strip()
+            if number <= 0 or not due:
+                continue
+            cleaned.append({"number": number, "due_date": due})
+        return cleaned
+
+    @staticmethod
+    def _clean_suggested_amounts(rows: list[dict]) -> list[dict]:
+        cleaned: list[dict] = []
+        for row in rows:
+            try:
+                number = int(row.get("number") or 0)
+            except (TypeError, ValueError):
+                continue
+            amount = row.get("amount")
+            if number <= 0 or amount is None or str(amount).strip() == "":
+                continue
+            cleaned.append({"number": number, "amount": str(amount)})
+        return cleaned
+
+    @staticmethod
+    def _rejection_preferred_block(approval: PriceApproval) -> str:
+        payload = approval.lines_payload or {}
+        currency = approval.currency or "AED"
+        parts: list[str] = []
+        lines_by_id = {
+            int(row.get("product_id") or 0): row
+            for row in (payload.get("lines") or [])
+            if int(row.get("product_id") or 0) > 0
+        }
+        for row in payload.get("manager_suggested_prices") or []:
+            pid = int(row.get("product_id") or 0)
+            meta = lines_by_id.get(pid) or {}
+            name = str(meta.get("product_name") or f"Product {pid}")
+            parts.append(
+                f"  • {name}: preferred {row.get('selling_price')} {currency}"
+                + (
+                    f" (was {meta.get('selling_price')})"
+                    if meta.get("selling_price") is not None
+                    else ""
+                )
+            )
+        for row in payload.get("manager_suggested_dates") or []:
+            parts.append(
+                f"  • Installment {row.get('number')}: preferred due date {row.get('due_date')}"
+            )
+        for row in payload.get("manager_suggested_amounts") or []:
+            parts.append(
+                f"  • Installment {row.get('number')}: preferred amount "
+                f"{row.get('amount')} {currency}"
+            )
+        if not parts:
+            return ""
+        return "Manager preferred values:\n" + "\n".join(parts) + "\n"
+
     async def decide(
         self,
         token: str,
         *,
         approve: bool,
         note: str | None = None,
+        suggested_prices: list[dict] | None = None,
+        suggested_dates: list[dict] | None = None,
+        suggested_amounts: list[dict] | None = None,
+        rejected_case: str | None = None,
     ) -> PriceApproval:
         approval = self.get_by_token(token)
         if not approval:
@@ -622,6 +803,20 @@ class PriceApprovalService:
         approval.status = STATUS_APPROVED if approve else STATUS_REJECTED
         approval.decided_at = datetime.now(timezone.utc)
         approval.decision_note = (note or "").strip() or None
+        if not approve:
+            payload = dict(approval.lines_payload or {})
+            if rejected_case:
+                payload["rejected_case"] = rejected_case
+            cleaned_prices = self._clean_suggested_prices(suggested_prices or [])
+            if cleaned_prices:
+                payload["manager_suggested_prices"] = cleaned_prices
+            cleaned_dates = self._clean_suggested_dates(suggested_dates or [])
+            if cleaned_dates:
+                payload["manager_suggested_dates"] = cleaned_dates
+            cleaned_amounts = self._clean_suggested_amounts(suggested_amounts or [])
+            if cleaned_amounts:
+                payload["manager_suggested_amounts"] = cleaned_amounts
+            approval.lines_payload = payload
         self.db.commit()
         self.db.refresh(approval)
 
@@ -637,10 +832,13 @@ class PriceApprovalService:
             owner = approval.owner_name or (
                 f"user #{approval.owner_user_id}" if approval.owner_user_id else "lead owner"
             )
+            preferred_block = self._rejection_preferred_block(approval)
+            case_label = (approval.lines_payload or {}).get("rejected_case") or label
             comment = (
-                f"REJECTED by manager ({approval.manager_email or 'unknown'}) — {label}.\n"
+                f"REJECTED by manager ({approval.manager_email or 'unknown'}) — {case_label}.\n"
                 f"Responsible person: {owner}\n"
                 f"Reason note: {approval.decision_note or '-'}\n"
+                f"{preferred_block}"
                 "No payment link was sent. Please update the lead (price / installment plan) "
                 "and move it to the payment stage again if needed."
             )

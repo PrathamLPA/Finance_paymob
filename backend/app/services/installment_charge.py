@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from typing import Any
@@ -10,6 +11,9 @@ from typing import Any
 CHARGE_SOURCE_INSTALLMENT_1 = "installment_1"
 CHARGE_SOURCE_FULL = "full"
 
+# Bitrix money fields often arrive as "5000.00|AED" (or with currency text).
+_MONEY_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+
 
 def _money(value: Any) -> Decimal | None:
     if value in (None, "", [], {}):
@@ -17,9 +21,20 @@ def _money(value: Any) -> Decimal | None:
     if isinstance(value, (list, tuple)) and value:
         value = value[0]
     if isinstance(value, dict):
-        value = value.get("VALUE") or value.get("value") or value.get("amount")
+        value = (
+            value.get("VALUE")
+            or value.get("value")
+            or value.get("amount")
+            or value.get("AMOUNT")
+        )
+    raw = str(value).replace(",", "").replace(" ", "").strip()
+    if "|" in raw:
+        raw = raw.split("|", 1)[0].strip()
+    match = _MONEY_NUMBER.search(raw)
+    if not match:
+        return None
     try:
-        amount = Decimal(str(value).replace(",", "").replace(" ", "").strip())
+        amount = Decimal(match.group(0))
     except (InvalidOperation, ArithmeticError, ValueError):
         return None
     if amount <= 0:

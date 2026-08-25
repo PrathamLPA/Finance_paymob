@@ -48,18 +48,43 @@ def _installment_field_map(settings: Settings) -> list[tuple[int, str, str]]:
     ]
 
 
+def _parse_count_enum_map(settings: Settings) -> dict[str, int]:
+    """Map Bitrix list-field IDs → installment count (e.g. 5830 → 3)."""
+    mapping: dict[str, int] = {}
+    raw = (getattr(settings, "bitrix_installment_count_enum_map", None) or "").strip()
+    if not raw:
+        return mapping
+    for part in raw.split(","):
+        piece = part.strip()
+        if not piece or ":" not in piece:
+            continue
+        enum_id, value = piece.split(":", 1)
+        try:
+            count = int(value.strip())
+        except (TypeError, ValueError):
+            continue
+        if 1 <= count <= 4:
+            mapping[enum_id.strip()] = count
+    return mapping
+
+
 def _installment_count(entity: dict[str, Any], settings: Settings) -> int | None:
-    """Read Bitrix installment count. Only 1–4 are valid; garbage values are ignored."""
+    """Read Bitrix installment count (plain 1–4 or list-field enum ID)."""
     count_raw = _field(entity, settings.bitrix_field_installment_count)
     try:
         if count_raw in (None, ""):
             return None
-        count = int(str(count_raw).strip().split(".")[0])
+        token = str(count_raw).strip().split(".")[0]
+        count = int(token)
     except (TypeError, ValueError):
         return None
-    if count < 1 or count > 4:
-        return None
-    return count
+    if 1 <= count <= 4:
+        return count
+    # Bitrix enumeration fields return IDs like 5830 for display value "3".
+    mapped = _parse_count_enum_map(settings).get(str(count))
+    if mapped is not None:
+        return mapped
+    return None
 
 
 def _derived_installment_count(

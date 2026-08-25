@@ -69,17 +69,19 @@ class Settings(BaseSettings):
     bitrix_field_lead_amount: str = ""
     # Lead Payment Section — first payment link uses Installment 1 when set
     bitrix_field_installment_count: str = "UF_CRM_1684374566210"
-    bitrix_field_installment_1: str = "UF_CRM_1684373954405"
-    # Reserved for later scheduled installment links (not used yet)
+    # Number Of Installments is a Bitrix list field — API returns enum IDs, not 1–4.
+    bitrix_installment_count_enum_map: str = "5826:1,5828:2,5830:3,5832:4"
+    # Payment Installment 1 amount (money). Do NOT use Payment 1 Mode here.
+    bitrix_field_installment_1: str = "UF_CRM_1684373846380"
     bitrix_field_installment_2: str = "UF_CRM_1684380172"
-    bitrix_field_installment_3: str = ""
-    bitrix_field_installment_4: str = ""
+    bitrix_field_installment_3: str = "UF_CRM_1684380201"
+    bitrix_field_installment_4: str = "UF_CRM_1684380220"
     bitrix_field_installment_1_date: str = "UF_CRM_1684373986749"
     bitrix_field_installment_2_due_date: str = "UF_CRM_1684374142163"
     bitrix_field_installment_3_due_date: str = "UF_CRM_1684374296635"
     bitrix_field_installment_4_due_date: str = "UF_CRM_1684374497754"
-    # Payment mode fields (reserved; not used for charge amount yet)
-    bitrix_field_payment_1_mode: str = ""
+    # Payment mode fields (enumeration — not amounts)
+    bitrix_field_payment_1_mode: str = "UF_CRM_1684373954405"
     bitrix_field_payment_2_mode: str = "UF_CRM_1684374103659"
     bitrix_field_payment_3_mode: str = "UF_CRM_1684374256836"
     bitrix_field_payment_4_mode: str = "UF_CRM_1684374451274"

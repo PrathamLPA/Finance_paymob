@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manager approval</title>
-    <link rel="stylesheet" href="/static/styles.css?v=8">
+    <link rel="stylesheet" href="/static/styles.css?v=10">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -21,10 +21,9 @@
         }
         .status-pill-bad { background: #fef3f2; color: #b42318; }
         .status-pill-ok { background: #ecfdf3; color: #027a48; }
-        .section-heading { margin-top: 1.25rem; margin-bottom: 0.5rem; font-size: 0.95rem; }
+        .section-heading { margin-top: 0; margin-bottom: 0.5rem; font-size: 0.95rem; }
         .line-meta { display: block; font-size: 0.8rem; color: #667085; font-weight: 400; margin-top: 0.15rem; }
         .summary-note { margin: 0.75rem 0 0; font-size: 0.9rem; color: #475467; }
-        .policy-list { margin: 0.5rem 0 0; padding-left: 1.1rem; color: #b42318; font-size: 0.9rem; }
         .override-grid { display: grid; gap: 0.75rem; margin-top: 0.75rem; }
         .override-row {
             display: grid;
@@ -36,6 +35,21 @@
             .override-row { grid-template-columns: 1fr; }
         }
         .readonly-ok { opacity: 0.9; }
+        .case-card {
+            border: 1px solid #e4e7ec;
+            border-radius: 12px;
+            padding: 1rem 1.1rem;
+            margin-top: 1rem;
+            background: #fff;
+        }
+        .case-card[data-state="approved"] { border-color: #abefc6; background: #f6fef9; }
+        .case-card[data-state="rejecting"],
+        .case-card[data-state="rejected"] { border-color: #fecdca; background: #fffbfa; }
+        .case-card.is-dimmed { opacity: 0.45; pointer-events: none; }
+        .case-actions { display: flex; gap: 0.65rem; flex-wrap: wrap; margin-top: 0.9rem; }
+        .case-actions .btn-paymob { flex: 0 0 auto; min-width: 7.5rem; padding: 0.55rem 1rem; font-size: 0.9rem; }
+        .case-reject-panel { margin-top: 0.85rem; }
+        .final-actions { margin-top: 1.25rem; }
     </style>
 </head>
 <body class="paymob-page">
@@ -63,7 +77,8 @@
                         <span class="version-pill">{{ data.status }}</span>
                     </div>
                     <p class="card-subtitle">
-                        Only items that need attention are editable. Set your preferred prices or dates, then approve once.
+                        Decide each issue separately. Approve all cases to send the payment link.
+                        Reject on a case asks for preferred values and notifies the lead owner.
                     </p>
                 </div>
             </div>
@@ -80,12 +95,13 @@
                 {% endif %}
             </div>
             {% elif result and result.status == 'rejected' %}
-            <div class="alert alert-error" role="status">Rejected. No payment link was sent.</div>
+            <div class="alert alert-error" role="status">Rejected. No payment link was sent. The lead owner was notified.</div>
             {% endif %}
 
             {% set editable = data.editable if data.editable is defined else {} %}
             {% set installment = data.installment_policy if data.installment_policy is defined else {} %}
             {% set issues = installment.issues if installment.issues is defined else {} %}
+            {% set cases = data.cases if data.cases is defined else [] %}
 
             <section class="amount-panel" aria-label="Approval summary">
                 <dl class="amount-summary">
@@ -101,43 +117,22 @@
                         <dt>Proposed total</dt>
                         <dd>{{ data.total_payable }} {{ data.currency }}</dd>
                     </div>
+                    {% if installment.installment_count %}
+                    <div class="amount-row">
+                        <dt>Installment count</dt>
+                        <dd>{{ installment.installment_count }}</dd>
+                    </div>
+                    {% endif %}
                 </dl>
 
                 {% if data.status == 'pending' %}
                 <form method="post" action="/approvals/{{ token }}/decide" class="accept-form" id="approval-form">
-
-                    {% if editable.price %}
-                    <h2 class="section-heading">
-                        Course prices below minimum
-                        <span class="status-pill status-pill-bad">Set preferred price</span>
-                    </h2>
-                    <p class="summary-note">Enter the selling price you approve for each course below minimum.</p>
-                    <div class="override-grid">
-                        {% for line in data.below_minimum_lines or [] %}
-                        <div class="override-row">
-                            <div>
-                                <strong>{{ line.product_name }}</strong>
-                                <span class="line-meta">
-                                    Current {{ line.selling_price }} {{ data.currency }} ·
-                                    catalog min {{ line.catalog_min_price or '—' }}
-                                </span>
-                            </div>
-                            <label class="field">
-                                <span class="field-label">Preferred price ({{ data.currency }})</span>
-                                <input type="number" step="0.01" min="0"
-                                    class="field-input price-override"
-                                    name="price_{{ line.product_id }}"
-                                    data-product-id="{{ line.product_id }}"
-                                    value="{{ line.catalog_min_price or line.selling_price }}"
-                                    required>
-                            </label>
-                        </div>
-                        {% endfor %}
-                    </div>
-                    {% endif %}
+                    <input type="hidden" name="decision" id="decision-input" value="">
+                    <input type="hidden" name="rejected_case" id="rejected-case" value="">
+                    <input type="hidden" name="overrides_json" id="overrides-json" value="{}">
 
                     {% if data.ok_lines %}
-                    <h2 class="section-heading readonly-ok">
+                    <h2 class="section-heading readonly-ok" style="margin-top:1.25rem">
                         Courses already OK
                         <span class="status-pill status-pill-ok">{{ data.ok_count or 0 }}</span>
                     </h2>
@@ -154,86 +149,201 @@
                     </div>
                     {% endif %}
 
-                    {% if installment and installment.needs_approval %}
-                    <h2 class="section-heading">
-                        Installment policy
-                        <span class="status-pill status-pill-bad">Needs attention</span>
-                    </h2>
-                    <ul class="policy-list">
-                        {% for reason in installment.reasons or [] %}
-                        <li>{{ reason }}</li>
-                        {% endfor %}
-                    </ul>
-
-                    {% if editable.count_note and not editable.installment_dates and not editable.installment_amounts and not editable.first_installment_amount %}
-                    <p class="summary-note">
-                        Count is above 2. Approving accepts this installment plan as shown.
-                    </p>
-                    {% endif %}
-
-                    {% if editable.first_installment_amount or editable.installment_dates or editable.installment_amounts or installment.schedule %}
-                    <div class="override-grid" style="margin-top:1rem">
-                        {% for slot in installment.schedule or [] %}
-                        {% set needs_amount = editable.installment_amounts and (not slot.amount or slot.amount_missing == '1') %}
-                        {% set needs_date = editable.installment_dates %}
-                        {% set needs_first = editable.first_installment_amount and slot.number == '1' %}
-                        <div class="override-row">
-                            <div>
-                                <strong>Installment {{ slot.number }}</strong>
+                    {% if installment.schedule %}
+                    <h2 class="section-heading" style="margin-top:1.25rem">Installment schedule</h2>
+                    <div class="amount-summary">
+                        {% for slot in installment.schedule %}
+                        <div class="amount-row">
+                            <dt>
+                                Installment {{ slot.number }}
                                 <span class="line-meta">
                                     {% if slot.amount %}Amount {{ slot.amount }} {{ data.currency }}{% else %}Amount not set in Bitrix{% endif %}
                                     · Due {{ slot.due_date or '—' }}
                                 </span>
-                            </div>
-                            {% if needs_amount or needs_first %}
-                            <label class="field">
-                                <span class="field-label">
-                                    {% if needs_first %}Preferred installment 1 amount{% else %}Amount{% endif %}
-                                    ({{ data.currency }})
-                                </span>
-                                <input type="number" step="0.01" min="0"
-                                    class="field-input installment-amount"
-                                    data-number="{{ slot.number }}"
-                                    value="{{ slot.amount or '' }}"
-                                    {% if needs_amount or needs_first %}required{% endif %}>
-                            </label>
-                            {% else %}
-                            <div></div>
-                            {% endif %}
-                            {% if needs_date %}
-                            <label class="field">
-                                <span class="field-label">Suggested due date</span>
-                                <input type="date"
-                                    class="field-input installment-date"
-                                    data-number="{{ slot.number }}"
-                                    value="{{ slot.due_date or '' }}"
-                                    required>
-                            </label>
-                            {% else %}
-                            <div></div>
-                            {% endif %}
+                            </dt>
+                            <dd>{% if slot.amount_missing == '1' %}missing{% else %}ok{% endif %}</dd>
                         </div>
                         {% endfor %}
                     </div>
                     {% endif %}
-                    {% endif %}
 
-                    <input type="hidden" name="overrides_json" id="overrides-json" value="{}">
+                    {% for case in cases %}
+                    <div class="case-card" data-case="{{ case.id }}" data-reject-fields="{{ case.reject_fields or '' }}" data-state="pending">
+                        <h2 class="section-heading">
+                            {{ case.title }}
+                            <span class="status-pill status-pill-bad">Needs attention</span>
+                        </h2>
+                        <p class="summary-note">{{ case.summary }}</p>
+
+                        {% if case.id == 'price' and editable.price %}
+                        <div class="case-reject-panel" data-panel="preferred_prices" hidden>
+                            <p class="summary-note">Enter the preferred selling price for the lead owner.</p>
+                            <div class="override-grid">
+                                {% for line in data.below_minimum_lines or [] %}
+                                <div class="override-row">
+                                    <div>
+                                        <strong>{{ line.product_name }}</strong>
+                                        <span class="line-meta">
+                                            Current {{ line.selling_price }} {{ data.currency }} ·
+                                            catalog min {{ line.catalog_min_price or '—' }}
+                                        </span>
+                                    </div>
+                                    <label class="field">
+                                        <span class="field-label">Preferred price ({{ data.currency }})</span>
+                                        <input type="number" step="0.01" min="0"
+                                            class="field-input price-override"
+                                            data-product-id="{{ line.product_id }}"
+                                            value="{{ line.catalog_min_price or line.selling_price }}">
+                                    </label>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <div class="case-approve-panel" data-panel="approve_prices">
+                            <p class="summary-note">Set the prices to apply when you approve this case.</p>
+                            <div class="override-grid">
+                                {% for line in data.below_minimum_lines or [] %}
+                                <div class="override-row">
+                                    <div>
+                                        <strong>{{ line.product_name }}</strong>
+                                        <span class="line-meta">
+                                            Current {{ line.selling_price }} {{ data.currency }} ·
+                                            catalog min {{ line.catalog_min_price or '—' }}
+                                        </span>
+                                    </div>
+                                    <label class="field">
+                                        <span class="field-label">Approved price ({{ data.currency }})</span>
+                                        <input type="number" step="0.01" min="0"
+                                            class="field-input price-override-approve"
+                                            data-product-id="{{ line.product_id }}"
+                                            value="{{ line.catalog_min_price or line.selling_price }}">
+                                    </label>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        {% if case.id == 'gap' %}
+                        <div class="case-reject-panel" data-panel="preferred_dates" hidden>
+                            <p class="summary-note">Enter the preferred due dates (keep Installment 2 within 30 days of Installment 1).</p>
+                            <div class="override-grid">
+                                {% for slot in installment.schedule or [] %}
+                                <div class="override-row">
+                                    <div>
+                                        <strong>Installment {{ slot.number }}</strong>
+                                        <span class="line-meta">Current due {{ slot.due_date or '—' }}</span>
+                                    </div>
+                                    <label class="field">
+                                        <span class="field-label">Preferred due date</span>
+                                        <input type="date"
+                                            class="field-input installment-date-reject"
+                                            data-number="{{ slot.number }}"
+                                            value="{{ slot.due_date or '' }}">
+                                    </label>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        {% if case.id in ['missing_amounts', 'first_below'] %}
+                        <div class="case-reject-panel" data-panel="preferred_amounts" hidden>
+                            <p class="summary-note">Enter preferred installment amounts for the lead owner.</p>
+                            <div class="override-grid">
+                                {% for slot in installment.schedule or [] %}
+                                <div class="override-row">
+                                    <div>
+                                        <strong>Installment {{ slot.number }}</strong>
+                                        <span class="line-meta">
+                                            {% if slot.amount %}Current {{ slot.amount }} {{ data.currency }}{% else %}Amount missing{% endif %}
+                                        </span>
+                                    </div>
+                                    <label class="field">
+                                        <span class="field-label">Preferred amount ({{ data.currency }})</span>
+                                        <input type="number" step="0.01" min="0"
+                                            class="field-input installment-amount-reject"
+                                            data-number="{{ slot.number }}"
+                                            value="{{ slot.amount or '' }}">
+                                    </label>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <div class="case-approve-panel" data-panel="approve_amounts">
+                            <div class="override-grid">
+                                {% for slot in installment.schedule or [] %}
+                                {% set needs = (case.id == 'missing_amounts' and slot.amount_missing == '1') or (case.id == 'first_below' and slot.number == '1') %}
+                                {% if needs or case.id == 'missing_amounts' %}
+                                <div class="override-row">
+                                    <div>
+                                        <strong>Installment {{ slot.number }}</strong>
+                                        <span class="line-meta">Due {{ slot.due_date or '—' }}</span>
+                                    </div>
+                                    <label class="field">
+                                        <span class="field-label">Amount ({{ data.currency }})</span>
+                                        <input type="number" step="0.01" min="0"
+                                            class="field-input installment-amount"
+                                            data-number="{{ slot.number }}"
+                                            value="{{ slot.amount or '' }}">
+                                    </label>
+                                    {% if editable.installment_dates and case.id == 'gap' %}
+                                    {% else %}
+                                    <div></div>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        {% if case.id == 'gap' %}
+                        <div class="case-approve-panel" data-panel="approve_dates">
+                            <p class="summary-note">Optional: adjust due dates before approving this exception.</p>
+                            <div class="override-grid">
+                                {% for slot in installment.schedule or [] %}
+                                <div class="override-row">
+                                    <div>
+                                        <strong>Installment {{ slot.number }}</strong>
+                                        <span class="line-meta">Current due {{ slot.due_date or '—' }}</span>
+                                    </div>
+                                    <label class="field">
+                                        <span class="field-label">Due date</span>
+                                        <input type="date"
+                                            class="field-input installment-date"
+                                            data-number="{{ slot.number }}"
+                                            value="{{ slot.due_date or '' }}">
+                                    </label>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <div class="case-actions">
+                            <button type="button" class="btn-paymob case-approve-btn">Approve</button>
+                            <button type="button" class="btn-paymob case-reject-btn" style="background:#b42318">Reject</button>
+                            <button type="button" class="btn-paymob case-confirm-reject-btn" style="background:#b42318" hidden>
+                                Confirm reject &amp; notify owner
+                            </button>
+                        </div>
+                    </div>
+                    {% endfor %}
+
                     <label class="field field-full" style="margin-top:1.25rem">
                         <span class="field-label">Note (optional)</span>
                         <textarea name="note" class="field-input" rows="3" placeholder="Reason for approve/reject"></textarea>
                     </label>
-                    <div class="form-footer" style="display:flex;gap:0.75rem;flex-wrap:wrap">
-                        <button type="submit" name="decision" value="approve" class="btn-paymob">
-                            Approve &amp; send payment link
+
+                    <div class="final-actions form-footer" id="final-approve-wrap" hidden>
+                        <button type="submit" class="btn-paymob" id="btn-final-approve">
+                            Send payment link (all cases approved)
                         </button>
-                        <button type="submit" name="decision" value="reject" class="btn-paymob" style="background:#b42318">
-                            Reject
-                        </button>
+                        <p class="summary-note">All policy cases are approved. This sends one payment link.</p>
                     </div>
-                    <p class="summary-note">
-                        Approve applies your preferred prices/dates and sends one payment link.
-                        Reject blocks the payment link.
+                    <p class="summary-note" id="decision-hint">
+                        Approve each case that is acceptable. Reject opens preferred fields for that case only.
                     </p>
                 </form>
                 {% else %}
@@ -249,27 +359,156 @@
     <script>
         const form = document.getElementById('approval-form');
         if (form) {
-            form.addEventListener('submit', () => {
-                const productPrices = Array.from(document.querySelectorAll('.price-override')).map((input) => ({
+            const cards = Array.from(form.querySelectorAll('.case-card'));
+            const finalWrap = document.getElementById('final-approve-wrap');
+            const decisionInput = document.getElementById('decision-input');
+            const rejectedCaseInput = document.getElementById('rejected-case');
+            const hint = document.getElementById('decision-hint');
+
+            function collectOverrides(forReject, activeCard) {
+                const root = forReject && activeCard ? activeCard : form;
+                const priceSelector = forReject ? '.price-override' : '.price-override-approve';
+                const productPrices = Array.from(root.querySelectorAll(priceSelector)).map((input) => ({
                     product_id: Number(input.getAttribute('data-product-id')),
                     selling_price: input.value,
-                }));
+                })).filter((row) => row.product_id && row.selling_price !== '');
+
+                // On approve, also include price-override-approve from all cards.
+                if (!forReject) {
+                    form.querySelectorAll('.price-override-approve').forEach((input) => {
+                        const product_id = Number(input.getAttribute('data-product-id'));
+                        const selling_price = input.value;
+                        if (!product_id || selling_price === '') return;
+                        if (!productPrices.some((p) => p.product_id === product_id)) {
+                            productPrices.push({ product_id, selling_price });
+                        }
+                    });
+                }
+
                 const byNumber = {};
-                document.querySelectorAll('.installment-amount').forEach((input) => {
+                const amountSel = forReject ? '.installment-amount-reject' : '.installment-amount';
+                const dateSel = forReject ? '.installment-date-reject' : '.installment-date';
+                root.querySelectorAll(amountSel).forEach((input) => {
                     const number = Number(input.getAttribute('data-number'));
+                    if (!number) return;
                     byNumber[number] = byNumber[number] || { number };
-                    byNumber[number].amount = input.value;
+                    if (input.value !== '') byNumber[number].amount = input.value;
                 });
-                document.querySelectorAll('.installment-date').forEach((input) => {
+                root.querySelectorAll(dateSel).forEach((input) => {
                     const number = Number(input.getAttribute('data-number'));
+                    if (!number) return;
                     byNumber[number] = byNumber[number] || { number };
-                    byNumber[number].due_date = input.value;
+                    if (input.value) byNumber[number].due_date = input.value;
                 });
-                document.getElementById('overrides-json').value = JSON.stringify({
+                if (!forReject) {
+                    form.querySelectorAll('.installment-amount, .installment-date').forEach((input) => {
+                        const number = Number(input.getAttribute('data-number'));
+                        if (!number) return;
+                        byNumber[number] = byNumber[number] || { number };
+                        if (input.classList.contains('installment-amount') && input.value !== '') {
+                            byNumber[number].amount = input.value;
+                        }
+                        if (input.classList.contains('installment-date') && input.value) {
+                            byNumber[number].due_date = input.value;
+                        }
+                    });
+                }
+                return {
                     product_prices: productPrices,
                     installments: Object.values(byNumber),
+                };
+            }
+
+            function refreshFinalApprove() {
+                const allApproved = cards.length > 0 && cards.every((c) => c.dataset.state === 'approved');
+                if (finalWrap) finalWrap.hidden = !allApproved;
+                if (allApproved && hint) {
+                    hint.textContent = 'All cases approved — send the payment link when ready.';
+                }
+            }
+
+            function enterRejectMode(card) {
+                cards.forEach((other) => {
+                    if (other !== card) other.classList.add('is-dimmed');
+                });
+                card.dataset.state = 'rejecting';
+                card.querySelectorAll('.case-approve-panel').forEach((el) => { el.hidden = true; });
+                card.querySelectorAll('.case-reject-panel').forEach((el) => { el.hidden = false; });
+                const approveBtn = card.querySelector('.case-approve-btn');
+                const rejectBtn = card.querySelector('.case-reject-btn');
+                const confirmBtn = card.querySelector('.case-confirm-reject-btn');
+                if (approveBtn) approveBtn.hidden = true;
+                if (rejectBtn) rejectBtn.hidden = true;
+                if (confirmBtn) confirmBtn.hidden = false;
+                if (finalWrap) finalWrap.hidden = true;
+                if (hint) {
+                    hint.textContent = 'Preferred values for this case will be sent to the lead owner. No payment link.';
+                }
+                card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+
+            cards.forEach((card) => {
+                card.querySelector('.case-approve-btn')?.addEventListener('click', () => {
+                    card.dataset.state = 'approved';
+                    card.querySelectorAll('.case-reject-panel').forEach((el) => { el.hidden = true; });
+                    const pill = card.querySelector('.status-pill');
+                    if (pill) {
+                        pill.className = 'status-pill status-pill-ok';
+                        pill.textContent = 'Approved';
+                    }
+                    card.querySelector('.case-approve-btn').hidden = true;
+                    card.querySelector('.case-reject-btn').hidden = true;
+                    refreshFinalApprove();
+                });
+
+                card.querySelector('.case-reject-btn')?.addEventListener('click', () => {
+                    const fields = card.getAttribute('data-reject-fields');
+                    if (fields) {
+                        enterRejectMode(card);
+                        return;
+                    }
+                    // Count-only reject: no preferred fields — confirm immediately.
+                    decisionInput.value = 'reject';
+                    rejectedCaseInput.value = card.getAttribute('data-case') || '';
+                    document.getElementById('overrides-json').value = JSON.stringify({
+                        product_prices: [],
+                        installments: [],
+                    });
+                    form.requestSubmit();
+                });
+
+                card.querySelector('.case-confirm-reject-btn')?.addEventListener('click', () => {
+                    decisionInput.value = 'reject';
+                    rejectedCaseInput.value = card.getAttribute('data-case') || '';
+                    document.getElementById('overrides-json').value = JSON.stringify(
+                        collectOverrides(true, card)
+                    );
+                    form.requestSubmit();
                 });
             });
+
+            form.addEventListener('submit', (event) => {
+                if (decisionInput.value === 'reject') return;
+                if (decisionInput.value !== 'approve') {
+                    // Final approve button
+                    const allApproved = cards.length === 0 || cards.every((c) => c.dataset.state === 'approved');
+                    if (!allApproved) {
+                        event.preventDefault();
+                        return;
+                    }
+                    decisionInput.value = 'approve';
+                }
+                rejectedCaseInput.value = '';
+                document.getElementById('overrides-json').value = JSON.stringify(
+                    collectOverrides(false, null)
+                );
+            });
+
+            // No cases → allow immediate approve (edge case)
+            if (cards.length === 0 && finalWrap) {
+                finalWrap.hidden = false;
+                decisionInput.value = 'approve';
+            }
         }
     </script>
 </body>
