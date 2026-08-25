@@ -420,6 +420,11 @@ async def test_manager_rejection_notifies_lead_owner(db_session, monkeypatch):
         and "preferred 6000.00" in e["body"]
         for e in emails
     )
+    # Preferred price is written back to the Bitrix estimate / lead products.
+    assert bitrix._mock_estimates
+    est_id = next(iter(bitrix._mock_estimates))
+    rows = bitrix._mock_product_rows.get(("Q", est_id)) or []
+    assert any(float(r.get("price") or 0) == 6000.0 for r in rows)
 
 
 @pytest.mark.asyncio

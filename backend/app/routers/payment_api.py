@@ -73,8 +73,10 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
     session_service = PaymentSessionService(db)
     session = session_service.get_active_session_by_token(token)
     if not session:
-        raise HTTPException(status_code=404, detail="This payment link is invalid or has expired.")
-
+        raise HTTPException(
+            status_code=404,
+            detail=session_service.describe_inactive_token(token),
+        )
     terms_service = TermsService(db)
     context = terms_service.get_terms_context()
     workflow = session.workflow

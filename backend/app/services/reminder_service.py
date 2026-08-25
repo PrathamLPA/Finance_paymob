@@ -60,6 +60,25 @@ class ReminderService:
             return False
         return str(slot.number) not in self._notices_sent(workflow)
 
+    def _has_open_balance(self, workflow: CustomerWorkflow) -> bool:
+        if workflow.total_amount <= 0 or workflow.remaining_balance <= 0:
+            return False
+        if workflow.meets_required_percent(self.settings.payment_required_percent):
+            return False
+        return True
+
+    def _needs_expired_link_refresh(self, workflow: CustomerWorkflow) -> bool:
+        """True when payment is still owed but every payment link has expired."""
+        if not self._has_open_balance(workflow):
+            return False
+        if self.session_service.get_active_session_for_workflow(workflow):
+            return False
+        sessions = list(workflow.payment_sessions or [])
+        if not sessions:
+            return False
+        # At least one link was issued before; none are usable now.
+        return True
+
     def workflows_due_for_reminder(self) -> list[CustomerWorkflow]:
         if not self.settings.reminder_enabled:
             return []
@@ -74,16 +93,23 @@ class ReminderService:
         ).all()
 
         due: list[CustomerWorkflow] = []
+        seen: set[int] = set()
         for workflow in workflows:
-            if workflow.total_amount <= 0 or workflow.remaining_balance <= 0:
+            if not self._has_open_balance(workflow):
                 continue
-            if workflow.meets_required_percent(self.settings.payment_required_percent):
+
+            # Expired unpaid link → issue and share a new one immediately.
+            if self._needs_expired_link_refresh(workflow):
+                due.append(workflow)
+                seen.add(workflow.id)
                 continue
+
             if not workflow.payment_sessions:
                 continue
             lead = self._lead_payload(workflow)
             if self._installment_notice_pending(workflow, lead):
                 due.append(workflow)
+                seen.add(workflow.id)
                 continue
             if is_installment_plan(lead, self.settings):
                 # Date-based notices only; skip the 24h interval for installment plans.
@@ -91,12 +117,20 @@ class ReminderService:
             reference = workflow.last_reminder_at or workflow.created_at
             if reference.tzinfo is None:
                 reference = reference.replace(tzinfo=timezone.utc)
-            if now - reference >= interval:
+            if now - reference >= interval and workflow.id not in seen:
                 due.append(workflow)
+                seen.add(workflow.id)
         return due
 
     async def send_reminder(self, workflow: CustomerWorkflow) -> PaymentSession | None:
+        from app.services.workflow_orchestrator import WorkflowOrchestrator
+
+        refreshing_expired = self._needs_expired_link_refresh(workflow)
         session = await self.session_service.get_or_create_reusable_session(workflow)
+        replaced = bool(getattr(session, "_replaced_previous_link", False)) or refreshing_expired
+        if replaced:
+            session._replaced_previous_link = True  # type: ignore[attr-defined]
+
         payment_url = self.session_service.build_payment_url(session.token)
 
         lead = self._lead_payload(workflow)
@@ -141,33 +175,28 @@ class ReminderService:
                 payment_url=payment_url,
             )
 
-        comment = f"Payment reminder link: {payment_url}"
-        if slot:
-            comment = (
-                f"Installment {slot.number} due {slot.due_date.isoformat()} — "
-                f"client emailed at {client_email or 'no-email'}\n{payment_url}"
-            )
+        orchestrator = WorkflowOrchestrator(self.db, self.settings)
         if workflow.finance_deal_id:
             try:
                 await self.bitrix.set_deal_payment_link(workflow.finance_deal_id, payment_url)
-                await self.bitrix.add_timeline_comment(
-                    entity_type="DEAL",
-                    entity_id=workflow.finance_deal_id,
-                    comment=comment,
-                )
-            except Exception:
-                logger.exception("Failed to refresh Bitrix payment link for deal %s", workflow.finance_deal_id)
-        elif workflow.bitrix_lead_id:
-            try:
-                await self.bitrix.add_timeline_comment(
-                    entity_type="LEAD",
-                    entity_id=workflow.bitrix_lead_id,
-                    comment=comment,
-                )
             except Exception:
                 logger.exception(
-                    "Failed to post reminder comment on Bitrix lead %s", workflow.bitrix_lead_id
+                    "Failed to refresh Bitrix payment link field for deal %s",
+                    workflow.finance_deal_id,
                 )
+            await orchestrator.announce_payment_link(
+                session,
+                entity_type="DEAL",
+                entity_id=workflow.finance_deal_id,
+                force=True,
+            )
+        elif workflow.bitrix_lead_id:
+            await orchestrator.announce_payment_link(
+                session,
+                entity_type="LEAD",
+                entity_id=workflow.bitrix_lead_id,
+                force=True,
+            )
 
         if slot:
             sent = self._notices_sent(workflow)
@@ -180,11 +209,12 @@ class ReminderService:
         self.db.commit()
         self.db.refresh(workflow)
         logger.info(
-            "Reminder #%s sent for workflow %s (token %s... installment=%s)",
+            "Reminder #%s sent for workflow %s (token %s... installment=%s expired_refresh=%s)",
             workflow.reminder_count,
             workflow.id,
             session.token[:8],
             slot.number if slot else "-",
+            refreshing_expired,
         )
         return session
 

@@ -55,6 +55,30 @@ class PaymentSessionService:
             return None
         return session
 
+    def describe_inactive_token(self, token: str) -> str:
+        """Human-readable reason when a payment link cannot be opened."""
+        session = self.get_session_by_token(token)
+        if not session:
+            return (
+                "This payment link is not recognized. It may be incomplete, from another "
+                "environment, or was never created successfully."
+            )
+        if session.status == SESSION_COMPLETED:
+            return (
+                "This payment link was already used and completed. "
+                "Ask your sales contact if a new link is needed."
+            )
+        if session.status == SESSION_EXPIRED or _ensure_utc(session.expires_at) <= _utcnow():
+            if session.status != SESSION_EXPIRED:
+                session.status = SESSION_EXPIRED
+                self.db.commit()
+            return (
+                "This payment link has expired or was replaced by a newer link. "
+                "Ask your sales contact to move the lead to the payment stage again "
+                "for a fresh link."
+            )
+        return "This payment link is not available right now."
+
     def get_active_session_for_workflow(self, workflow: CustomerWorkflow) -> PaymentSession | None:
         sessions = self.db.scalars(
             select(PaymentSession)
@@ -97,15 +121,17 @@ class PaymentSessionService:
             and existing.installment_number == installment_number
         ):
             return existing
+        replaced_old = False
         if existing:
             existing.status = SESSION_EXPIRED
             self.db.commit()
+            replaced_old = True
 
         if workflow.finance_deal_id:
             source_type, source_id = self.source_finance_deal(workflow.finance_deal_id)
         else:
             source_type, source_id = self.source_lead(workflow.bitrix_lead_id)
-        return await self.create_session(
+        session = await self.create_session(
             workflow,
             source_type=source_type,
             source_id=source_id,
@@ -114,6 +140,9 @@ class PaymentSessionService:
             amount_locked=amount_locked,
             installment_number=installment_number,
         )
+        # Mark so callers know Bitrix must be updated with the replacement URL.
+        session._replaced_previous_link = replaced_old  # type: ignore[attr-defined]
+        return session
 
     async def create_session(
         self,

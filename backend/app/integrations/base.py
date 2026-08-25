@@ -126,6 +126,23 @@ class BitrixIntegration(Protocol):
         comments: str = "",
     ) -> int: ...
 
+    async def update_estimate(
+        self,
+        estimate_id: int,
+        *,
+        currency: str,
+        opportunity: Decimal,
+        tax_value: Decimal,
+        product_rows: list[dict[str, Any]],
+        comments: str | None = None,
+    ) -> None: ...
+
+    async def update_lead_fields(self, lead_id: int, fields: dict[str, Any]) -> None: ...
+
+    async def set_lead_product_rows(
+        self, lead_id: int, product_rows: list[dict[str, Any]]
+    ) -> None: ...
+
     async def get_user(self, user_id: int) -> dict[str, Any] | None: ...
 
     async def resolve_manager_for_user(self, user_id: int) -> dict[str, Any] | None: ...

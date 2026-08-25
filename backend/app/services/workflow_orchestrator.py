@@ -6,6 +6,7 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -119,14 +120,39 @@ class WorkflowOrchestrator:
         entity_id: int,
         force: bool = False,
     ) -> bool:
-        """Comment the link on the CRM entity once per session, unless forced."""
+        """Comment the link on the CRM entity once per session, unless forced.
+
+        Never posts a link that is already inactive. When a previous session was
+        replaced, always force a fresh comment so Bitrix is not left with only a dead URL.
+        """
+        replaced = bool(getattr(session, "_replaced_previous_link", False))
+        if replaced:
+            force = True
+
+        active = self.session_service.get_active_session_by_token(session.token)
+        if not active:
+            logger.warning(
+                "SKIP Bitrix payment-link comment | token=%s... reason=session_not_active",
+                session.token[:8],
+            )
+            return False
+
         if session.link_commented_at and not force:
             return False
 
         payment_url = self.session_service.build_payment_url(session.token)
         workflow = session.workflow
         minimum = workflow.minimum_due(self.settings.payment_required_percent)
+        prefix = ""
+        if replaced:
+            prefix = (
+                "Updated payment link (any earlier payment links for this record "
+                "are no longer valid):\n"
+            )
+        elif force:
+            prefix = "Payment reminder — current link:\n"
         comment = (
+            f"{prefix}"
             f"Payment link: {payment_url}\n"
             f"Outstanding: {workflow.remaining_balance:.2f} {workflow.currency}\n"
             f"Minimum payable now: {minimum:.2f} {workflow.currency}"
@@ -146,7 +172,11 @@ class WorkflowOrchestrator:
         session.link_commented_at = datetime.now(timezone.utc)
         self.db.commit()
         logger.info(
-            "Payment link commented on Bitrix %s %s", entity_type.lower(), entity_id
+            "Payment link commented on Bitrix %s %s | token=%s... replaced=%s",
+            entity_type.lower(),
+            entity_id,
+            session.token[:8],
+            replaced,
         )
         return True
 
@@ -731,6 +761,22 @@ class WorkflowOrchestrator:
             self.db.commit()
             self.db.refresh(workflow)
 
+        changed = await self._apply_manager_changes_to_bitrix(
+            workflow=workflow,
+            approval=approval,
+            lead=lead,
+            product_prices=product_prices or [],
+            installment_overrides=installment_overrides or [],
+            product_lines=product_lines,
+        )
+        if changed:
+            await self._notify_owner_of_manager_changes(
+                workflow,
+                approval,
+                changed=changed,
+                approved=True,
+            )
+
         tax_total = Decimal("0.00")
         for line in product_lines:
             if line.tax_included or line.tax_rate <= 0:
@@ -824,6 +870,318 @@ class WorkflowOrchestrator:
             base[number] = ParsedInstallment(number=number, amount=amount, due_date=due)
         return [base[n] for n in sorted(base) if base[n].amount is not None and base[n].due_date]
 
+    def _product_lines_from_approval(
+        self,
+        approval,
+        *,
+        product_prices: list[dict] | None = None,
+    ) -> list[ProductLine]:
+        payload = approval.lines_payload or {}
+        price_map = {
+            int(row.get("product_id") or 0): Decimal(str(row.get("selling_price") or "0"))
+            for row in (product_prices or [])
+            if int(row.get("product_id") or 0) > 0
+        }
+        for row in payload.get("manager_suggested_prices") or []:
+            try:
+                pid = int(row.get("product_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if pid > 0 and row.get("selling_price") not in (None, ""):
+                price_map.setdefault(pid, Decimal(str(row["selling_price"])))
+
+        lines: list[ProductLine] = []
+        for row in payload.get("lines") or []:
+            product_id = int(row.get("product_id") or 0)
+            catalog = row.get("catalog_min_price")
+            selling = price_map.get(product_id)
+            if selling is None:
+                selling = Decimal(str(row.get("selling_price") or "0"))
+            lines.append(
+                ProductLine(
+                    product_id=product_id,
+                    product_name=str(row.get("product_name") or "Course"),
+                    quantity=Decimal(str(row.get("quantity") or "1")),
+                    selling_price=selling.quantize(Decimal("0.01")),
+                    tax_rate=Decimal(str(row.get("tax_rate") or "0")),
+                    tax_included=bool(row.get("tax_included")),
+                    catalog_min_price=Decimal(str(catalog)) if catalog is not None else None,
+                )
+            )
+        return lines
+
+    def _money_field_value(self, amount: Decimal, currency: str) -> str:
+        return f"{amount.quantize(Decimal('0.01'))}|{currency or self.settings.default_currency}"
+
+    async def _apply_manager_changes_to_bitrix(
+        self,
+        *,
+        workflow: CustomerWorkflow,
+        approval,
+        lead: dict,
+        product_prices: list[dict],
+        installment_overrides: list[dict],
+        product_lines: list[ProductLine] | None,
+    ) -> dict[str, Any]:
+        """Write manager amount/date/price changes to Estimate + lead Payment Section."""
+        changed: dict[str, Any] = {
+            "prices": [],
+            "amounts": [],
+            "dates": [],
+            "estimate_id": None,
+        }
+        currency = approval.currency or workflow.currency or self.settings.default_currency
+        payload = approval.lines_payload or {}
+        suggested_prices = list(product_prices or []) or list(
+            payload.get("manager_suggested_prices") or []
+        )
+
+        lines = product_lines or self._product_lines_from_approval(
+            approval, product_prices=suggested_prices
+        )
+        if suggested_prices and lines:
+            rows = product_rows_for_estimate(lines)
+            snapshot = serialize_pricing_snapshot(lines, currency=currency)
+            tax_total = Decimal(snapshot.get("vat_total") or "0")
+            opportunity = Decimal(snapshot["total_payable"])
+            estimate_id = workflow.bitrix_estimate_id
+            try:
+                if estimate_id:
+                    await self.bitrix.update_estimate(
+                        estimate_id,
+                        currency=currency,
+                        opportunity=opportunity,
+                        tax_value=tax_total,
+                        product_rows=rows,
+                        comments=(
+                            f"Updated from manager approval recommendation "
+                            f"({approval.manager_email or 'manager'})."
+                        ),
+                    )
+                else:
+                    contact_raw = lead.get("CONTACT_ID") or lead.get("contactId")
+                    try:
+                        contact_id = (
+                            int(contact_raw)
+                            if contact_raw not in (None, "", 0, "0")
+                            else None
+                        )
+                    except (TypeError, ValueError):
+                        contact_id = None
+                    estimate_id = await self.bitrix.create_estimate(
+                        lead_id=approval.bitrix_lead_id,
+                        title=f"Estimate - {approval.lead_title or approval.bitrix_lead_id}",
+                        currency=currency,
+                        opportunity=opportunity,
+                        tax_value=tax_total,
+                        contact_id=contact_id,
+                        product_rows=rows,
+                        comments="Created from manager approval recommendation.",
+                    )
+                    workflow.bitrix_estimate_id = estimate_id
+                    self.db.commit()
+                try:
+                    await self.bitrix.set_lead_product_rows(approval.bitrix_lead_id, rows)
+                except Exception:
+                    logger.exception(
+                        "Failed to sync lead product rows after manager price change | lead_id=%s",
+                        approval.bitrix_lead_id,
+                    )
+                changed["estimate_id"] = estimate_id
+                changed_ids = {
+                    int(p.get("product_id") or 0)
+                    for p in suggested_prices
+                    if int(p.get("product_id") or 0) > 0
+                }
+                changed["prices"] = [
+                    {
+                        "product_id": line.product_id,
+                        "product_name": line.product_name,
+                        "selling_price": str(line.selling_price),
+                    }
+                    for line in lines
+                    if line.product_id in changed_ids
+                ]
+            except Exception:
+                logger.exception(
+                    "Failed to update Bitrix estimate after manager price change | lead_id=%s",
+                    approval.bitrix_lead_id,
+                )
+
+        overrides = list(installment_overrides or [])
+        for row in payload.get("manager_suggested_amounts") or []:
+            overrides.append({"number": row.get("number"), "amount": row.get("amount")})
+        for row in payload.get("manager_suggested_dates") or []:
+            overrides.append({"number": row.get("number"), "due_date": row.get("due_date")})
+
+        lead_fields: dict[str, Any] = {}
+        seen_amount: set[int] = set()
+        seen_date: set[int] = set()
+        for raw in overrides:
+            try:
+                number = int(raw.get("number") or 0)
+            except (TypeError, ValueError):
+                continue
+            if number < 1 or number > 4:
+                continue
+            amount_field, date_field = self._installment_field_codes(number)
+            if raw.get("amount") not in (None, "") and amount_field and number not in seen_amount:
+                amount = Decimal(str(raw["amount"])).quantize(Decimal("0.01"))
+                lead_fields[amount_field] = self._money_field_value(amount, currency)
+                lead[amount_field] = lead_fields[amount_field]
+                changed["amounts"].append({"number": number, "amount": str(amount)})
+                seen_amount.add(number)
+            if raw.get("due_date") and date_field and number not in seen_date:
+                due = str(raw["due_date"]).strip()
+                lead_fields[date_field] = due
+                lead[date_field] = due
+                changed["dates"].append({"number": number, "due_date": due})
+                seen_date.add(number)
+
+        if lead_fields:
+            try:
+                await self.bitrix.update_lead_fields(approval.bitrix_lead_id, lead_fields)
+                workflow.bitrix_lead_payload = lead
+                self.db.commit()
+            except Exception:
+                logger.exception(
+                    "Failed to write manager installment changes to lead %s",
+                    approval.bitrix_lead_id,
+                )
+
+        if not (changed["prices"] or changed["amounts"] or changed["dates"]):
+            return {}
+        return changed
+
+    async def _notify_lead_owner(
+        self,
+        workflow: CustomerWorkflow,
+        approval,
+        *,
+        subject: str,
+        body: str,
+    ) -> None:
+        try:
+            lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
+        except Exception:
+            logger.exception(
+                "Could not load lead %s to notify owner",
+                workflow.bitrix_lead_id,
+            )
+            lead = None
+
+        owner_id = 0
+        if lead:
+            owner_raw = lead.get("ASSIGNED_BY_ID") or lead.get("assignedById")
+            try:
+                owner_id = int(owner_raw or 0)
+            except (TypeError, ValueError):
+                owner_id = 0
+        if owner_id <= 0 and approval.owner_user_id:
+            try:
+                owner_id = int(approval.owner_user_id)
+            except (TypeError, ValueError):
+                owner_id = 0
+
+        if owner_id <= 0:
+            logger.info(
+                "No responsible person on lead %s — skip owner chat/email",
+                workflow.bitrix_lead_id,
+            )
+            return
+
+        chat_text = f"{subject}\n\n{body}"
+        try:
+            await self.bitrix.notify_user(user_id=owner_id, message=chat_text)
+        except Exception:
+            logger.exception(
+                "Failed Bitrix owner chat to user %s for lead %s",
+                owner_id,
+                workflow.bitrix_lead_id,
+            )
+
+        agent_email = None
+        agent_name = None
+        try:
+            user = await self.bitrix.get_user(owner_id)
+        except Exception:
+            logger.exception("Failed to load Bitrix user %s for owner email", owner_id)
+            user = None
+        if user:
+            agent_email, agent_name = _bitrix_user_email_name(user)
+        if not agent_email:
+            logger.info(
+                "Responsible person %s has no email — chat only | lead_id=%s",
+                owner_id,
+                workflow.bitrix_lead_id,
+            )
+            return
+        try:
+            sent = self.email.send_agent_payment_notice(
+                to_email=agent_email,
+                agent_name=agent_name,
+                subject=subject,
+                body=body,
+            )
+            if sent:
+                logger.info(
+                    "Owner notice emailed | to=%s lead_id=%s subject=%s",
+                    agent_email,
+                    workflow.bitrix_lead_id,
+                    subject[:60],
+                )
+        except Exception:
+            logger.exception(
+                "Failed SendGrid owner notice | to=%s lead_id=%s",
+                agent_email,
+                workflow.bitrix_lead_id,
+            )
+
+    async def _notify_owner_of_manager_changes(
+        self,
+        workflow: CustomerWorkflow,
+        approval,
+        *,
+        changed: dict[str, Any],
+        approved: bool,
+    ) -> None:
+        preferred = self._format_suggested_prices(approval)
+        if not preferred and changed:
+            parts = []
+            for row in changed.get("prices") or []:
+                parts.append(
+                    f"  • {row.get('product_name')}: {row.get('selling_price')} {approval.currency}"
+                )
+            for row in changed.get("amounts") or []:
+                parts.append(
+                    f"  • Installment {row.get('number')}: amount {row.get('amount')} "
+                    f"{approval.currency}"
+                )
+            for row in changed.get("dates") or []:
+                parts.append(
+                    f"  • Installment {row.get('number')}: due date {row.get('due_date')}"
+                )
+            preferred = "Manager changes:\n" + "\n".join(parts) if parts else ""
+        if not preferred:
+            return
+
+        action = "approved with updates" if approved else "updated values"
+        subject = (
+            f"Manager {action} — {approval.lead_title or f'Lead {approval.bitrix_lead_id}'}"
+        )
+        body = "\n".join(
+            [
+                f"The manager ({approval.manager_email or 'unknown'}) changed payment details "
+                f"on lead #{approval.bitrix_lead_id}.",
+                "",
+                preferred,
+                "",
+                "Bitrix Estimate / Payment Section were updated to match.",
+                "Please discuss these values with the client.",
+            ]
+        )
+        await self._notify_lead_owner(workflow, approval, subject=subject, body=body)
+
     async def reject_price_approval(
         self,
         token: str,
@@ -852,15 +1210,38 @@ class WorkflowOrchestrator:
             rejected_case=rejected_case,
         )
         workflow = self.get_or_create_workflow(approval.bitrix_lead_id)
+        lead: dict = {}
+        try:
+            lead = await self.bitrix.get_lead(approval.bitrix_lead_id)
+            await self.sync_workflow_from_lead(workflow, lead)
+        except Exception:
+            logger.exception(
+                "Could not reload lead %s before applying manager reject changes",
+                approval.bitrix_lead_id,
+            )
+            lead = workflow.bitrix_lead_payload or {}
+
+        changed = await self._apply_manager_changes_to_bitrix(
+            workflow=workflow,
+            approval=approval,
+            lead=lead,
+            product_prices=product_prices or [],
+            installment_overrides=installment_overrides or [],
+            product_lines=None,
+        )
         logger.warning(
-            "OK manager reject | lead_id=%s approval_id=%s estimate_id=%s note=%s case=%s",
+            "OK manager reject | lead_id=%s approval_id=%s estimate_id=%s note=%s case=%s "
+            "bitrix_updated=%s",
             approval.bitrix_lead_id,
             approval.id,
             workflow.bitrix_estimate_id or "-",
             (note or "")[:80],
             rejected_case or "-",
+            bool(changed),
         )
-        await self._notify_owner_of_rejection(workflow, approval)
+        await self._notify_owner_of_rejection(
+            workflow, approval, bitrix_updated=bool(changed)
+        )
 
     @staticmethod
     def _format_suggested_prices(approval) -> str:
@@ -871,6 +1252,8 @@ class WorkflowOrchestrator:
         self,
         workflow: CustomerWorkflow,
         approval,
+        *,
+        bitrix_updated: bool = False,
     ) -> None:
         """Tell the lead responsible person the manager rejected approval."""
         kinds = (approval.lines_payload or {}).get("approval_kinds") or ["price"]
@@ -889,91 +1272,23 @@ class WorkflowOrchestrator:
         ]
         if preferred:
             body_parts.extend(["", preferred])
-        body_parts.extend(
-            [
-                "",
-                "No payment link was sent.",
+        body_parts.append("")
+        body_parts.append("No payment link was sent.")
+        if bitrix_updated:
+            body_parts.append(
+                "Bitrix Estimate / Payment Section were updated with the manager's preferred values."
+            )
+            body_parts.append(
+                "Please discuss these values with the client, then move the lead to the "
+                "payment stage again when ready."
+            )
+        else:
+            body_parts.append(
                 "Please update the lead to match the preferred values above "
-                "(and/or the installment plan), then move it to the payment stage again.",
-            ]
-        )
+                "(and/or the installment plan), then move it to the payment stage again."
+            )
         body = "\n".join(body_parts)
-
-        # Prefer live lead ASSIGNED_BY_ID (chat + email). Fall back to stored owner id.
-        try:
-            lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
-        except Exception:
-            logger.exception(
-                "Could not load lead %s to notify owner of rejection",
-                workflow.bitrix_lead_id,
-            )
-            lead = None
-
-        owner_id = 0
-        if lead:
-            owner_raw = lead.get("ASSIGNED_BY_ID") or lead.get("assignedById")
-            try:
-                owner_id = int(owner_raw or 0)
-            except (TypeError, ValueError):
-                owner_id = 0
-        if owner_id <= 0 and approval.owner_user_id:
-            try:
-                owner_id = int(approval.owner_user_id)
-            except (TypeError, ValueError):
-                owner_id = 0
-
-        if owner_id <= 0:
-            logger.info(
-                "No responsible person on lead %s — skip rejection chat/email",
-                workflow.bitrix_lead_id,
-            )
-            return
-
-        chat_text = f"{subject}\n\n{body}"
-        try:
-            await self.bitrix.notify_user(user_id=owner_id, message=chat_text)
-        except Exception:
-            logger.exception(
-                "Failed Bitrix rejection chat to user %s for lead %s",
-                owner_id,
-                workflow.bitrix_lead_id,
-            )
-
-        agent_email = None
-        agent_name = None
-        try:
-            user = await self.bitrix.get_user(owner_id)
-        except Exception:
-            logger.exception("Failed to load Bitrix user %s for rejection email", owner_id)
-            user = None
-        if user:
-            agent_email, agent_name = _bitrix_user_email_name(user)
-        if not agent_email:
-            logger.info(
-                "Responsible person %s has no email — chat only | lead_id=%s",
-                owner_id,
-                workflow.bitrix_lead_id,
-            )
-            return
-        try:
-            sent = self.email.send_agent_payment_notice(
-                to_email=agent_email,
-                agent_name=agent_name,
-                subject=subject,
-                body=body,
-            )
-            if sent:
-                logger.info(
-                    "Rejection notice emailed to responsible person | to=%s lead_id=%s",
-                    agent_email,
-                    workflow.bitrix_lead_id,
-                )
-        except Exception:
-            logger.exception(
-                "Failed SendGrid rejection notice | to=%s lead_id=%s",
-                agent_email,
-                workflow.bitrix_lead_id,
-            )
+        await self._notify_lead_owner(workflow, approval, subject=subject, body=body)
 
     async def initiate_payment_from_finance_deal(self, finance_deal_id: int) -> PaymentSession:
         workflow = self.get_workflow_by_finance_deal(finance_deal_id)

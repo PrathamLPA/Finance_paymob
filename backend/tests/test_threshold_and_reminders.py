@@ -102,3 +102,52 @@ def test_process_reminders_sends_for_due_workflows(client, seed_lead, db_session
 
     db_session.refresh(workflow)
     assert workflow.reminder_count >= 1
+
+
+def test_expired_unpaid_link_is_refreshed_immediately(client, seed_lead, db_session):
+    """When the only payment link expires and balance remains, share a new one."""
+    from app.models.payment_session import SESSION_EXPIRED, SESSION_PENDING
+
+    seed_lead(305, email="expired@test.com", amount=Decimal("1000"))
+    link = client.post(
+        "/api/dev/send-payment-link",
+        json={
+            "lead_id": 305,
+            "customer_email": "expired@test.com",
+            "customer_name": "Expired User",
+            "total_amount": "1000",
+        },
+    )
+    assert link.status_code == 200
+    old_token = link.json()["token"]
+
+    workflow = db_session.scalar(select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 305))
+    assert workflow is not None
+    session = next(s for s in workflow.payment_sessions if s.token == old_token)
+    session.status = SESSION_EXPIRED
+    session.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    # Do not wait for the 24h reminder interval.
+    workflow.last_reminder_at = datetime.now(timezone.utc)
+    db_session.commit()
+
+    service = ReminderService(db_session)
+    assert service._needs_expired_link_refresh(workflow) is True
+    assert workflow in service.workflows_due_for_reminder()
+
+    email_client = get_email_client()
+    before = len(email_client.sent_emails)
+    bitrix = get_bitrix_client()
+    comments_before = len(bitrix._mock_comments.get(("LEAD", 305), []))
+
+    result = client.post("/api/dev/process-reminders")
+    assert result.status_code == 200
+    assert result.json()["sent"] >= 1
+    assert len(email_client.sent_emails) > before
+
+    db_session.refresh(workflow)
+    active = [s for s in workflow.payment_sessions if s.status == SESSION_PENDING]
+    assert active
+    assert active[0].token != old_token
+    comments = bitrix._mock_comments.get(("LEAD", 305), [])
+    assert len(comments) > comments_before
+    assert any("no longer valid" in c["COMMENT"] or "Payment link:" in c["COMMENT"] for c in comments)

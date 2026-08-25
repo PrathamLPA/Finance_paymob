@@ -357,6 +357,47 @@ class MockBitrixClient:
         )
         return estimate_id
 
+    async def update_estimate(
+        self,
+        estimate_id: int,
+        *,
+        currency: str,
+        opportunity: Decimal,
+        tax_value: Decimal,
+        product_rows: list[dict[str, Any]],
+        comments: str | None = None,
+    ) -> None:
+        estimate = self._mock_estimates.get(estimate_id)
+        if estimate is None:
+            estimate = {"id": estimate_id}
+            self._mock_estimates[estimate_id] = estimate
+        estimate["currencyId"] = currency
+        estimate["opportunity"] = str(opportunity)
+        estimate["taxValue"] = str(tax_value)
+        if comments is not None:
+            estimate["comments"] = comments
+        self._mock_product_rows[("Q", estimate_id)] = [dict(row) for row in product_rows]
+        logger.info(
+            "[MockBitrix] Updated estimate %s opportunity=%s %s rows=%s",
+            estimate_id,
+            opportunity,
+            currency,
+            len(product_rows),
+        )
+
+    async def update_lead_fields(self, lead_id: int, fields: dict[str, Any]) -> None:
+        lead = self._mock_leads.setdefault(lead_id, {"ID": lead_id})
+        lead.update(fields)
+        logger.info("[MockBitrix] Updated lead %s fields=%s", lead_id, list(fields))
+
+    async def set_lead_product_rows(
+        self, lead_id: int, product_rows: list[dict[str, Any]]
+    ) -> None:
+        self._mock_product_rows[("L", lead_id)] = [dict(row) for row in product_rows]
+        logger.info(
+            "[MockBitrix] Set lead %s product rows=%s", lead_id, len(product_rows)
+        )
+
     async def get_user(self, user_id: int) -> dict[str, Any] | None:
         return self._mock_users.get(user_id)
 
@@ -777,6 +818,87 @@ class RealBitrixClient:
             currency,
         )
         return estimate_id
+
+    async def update_estimate(
+        self,
+        estimate_id: int,
+        *,
+        currency: str,
+        opportunity: Decimal,
+        tax_value: Decimal,
+        product_rows: list[dict[str, Any]],
+        comments: str | None = None,
+    ) -> None:
+        fields: dict[str, Any] = {
+            "currencyId": currency,
+            "opportunity": float(opportunity),
+            "taxValue": float(tax_value),
+            "isManualOpportunity": "Y",
+        }
+        if comments is not None:
+            fields["comments"] = comments
+        await self._call(
+            "crm.item.update",
+            {
+                "entityTypeId": 7,
+                "id": estimate_id,
+                "fields": fields,
+            },
+        )
+        cleaned_rows = []
+        for row in product_rows:
+            cleaned = {k: v for k, v in row.items() if v is not None}
+            cleaned_rows.append(cleaned)
+        if cleaned_rows:
+            await self._call(
+                "crm.item.productrow.set",
+                {
+                    "ownerType": "Q",
+                    "ownerId": estimate_id,
+                    "productRows": cleaned_rows,
+                },
+            )
+        logger.info(
+            "Updated Bitrix estimate %s opportunity=%s %s rows=%s",
+            estimate_id,
+            opportunity,
+            currency,
+            len(cleaned_rows),
+        )
+
+    async def update_lead_fields(self, lead_id: int, fields: dict[str, Any]) -> None:
+        cleaned = {k: v for k, v in fields.items() if k and v is not None}
+        if not cleaned:
+            return
+        await self._call("crm.lead.update", {"id": lead_id, "fields": cleaned})
+        logger.info("Updated Bitrix lead %s fields=%s", lead_id, list(cleaned))
+
+    async def set_lead_product_rows(
+        self, lead_id: int, product_rows: list[dict[str, Any]]
+    ) -> None:
+        cleaned_rows = []
+        for row in product_rows:
+            cleaned = {k: v for k, v in row.items() if v is not None}
+            # crm.lead.productrows.set uses uppercase legacy keys.
+            legacy = {
+                "PRODUCT_ID": cleaned.get("productId") or cleaned.get("PRODUCT_ID"),
+                "PRICE": cleaned.get("price") if "price" in cleaned else cleaned.get("PRICE"),
+                "QUANTITY": cleaned.get("quantity")
+                if "quantity" in cleaned
+                else cleaned.get("QUANTITY"),
+                "TAX_RATE": cleaned.get("taxRate")
+                if "taxRate" in cleaned
+                else cleaned.get("TAX_RATE"),
+                "TAX_INCLUDED": cleaned.get("taxIncluded")
+                if "taxIncluded" in cleaned
+                else cleaned.get("TAX_INCLUDED"),
+            }
+            cleaned_rows.append({k: v for k, v in legacy.items() if v is not None})
+        await self._call(
+            "crm.lead.productrows.set",
+            {"id": lead_id, "rows": cleaned_rows},
+        )
+        logger.info("Set Bitrix lead %s product rows=%s", lead_id, len(cleaned_rows))
 
     async def get_user(self, user_id: int) -> dict[str, Any] | None:
         try:
