@@ -631,7 +631,11 @@ class WorkflowOrchestrator:
             plan.locked,
         )
 
-        installment_number = 1 if plan.source == "installment_1" else None
+        from app.services.installment_plan import charge_installment_number_for_workflow
+
+        installment_number = charge_installment_number_for_workflow(workflow)
+        if installment_number is None and plan.source == "installment_1":
+            installment_number = 1
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,
@@ -1298,7 +1302,22 @@ class WorkflowOrchestrator:
         if workflow.remaining_balance <= 0 and workflow.amount_paid >= workflow.total_amount:
             raise ValueError(f"Finance deal {finance_deal_id} has no remaining balance")
 
-        session = await self.session_service.get_or_create_reusable_session(workflow)
+        lead = workflow.bitrix_lead_payload if isinstance(workflow.bitrix_lead_payload, dict) else {}
+        plan = resolve_first_charge_for_workflow(
+            workflow, lead=lead, settings=self.settings
+        )
+        from app.services.installment_plan import charge_installment_number_for_workflow
+
+        installment_number = charge_installment_number_for_workflow(workflow)
+        if installment_number is None and plan.source == "installment_1":
+            installment_number = 1
+        session = await self.session_service.get_or_create_reusable_session(
+            workflow,
+            charge_amount=plan.amount,
+            charge_source=plan.source,
+            amount_locked=plan.locked,
+            installment_number=installment_number,
+        )
 
         payment_url = self.session_service.build_payment_url(session.token)
         # Write link to Bitrix deal field so Bitrix can email it (no SendGrid).

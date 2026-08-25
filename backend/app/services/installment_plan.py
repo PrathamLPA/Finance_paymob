@@ -234,21 +234,38 @@ def resolve_first_charge_for_workflow(
     lead: dict[str, Any] | None,
     settings: Settings,
 ) -> ChargePlan:
-    """Prefer persisted installment 1; otherwise fall back to live lead fields."""
+    """Prefer the next unpaid persisted installment; otherwise live lead Installment 1."""
     remaining = (workflow.remaining_balance or workflow.total_amount).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
     persisted = sorted(workflow.installments or [], key=lambda row: row.installment_number)
     if persisted:
-        first = persisted[0]
-        amount = min(Decimal(first.amount), remaining) if remaining > 0 else Decimal("0.00")
+        paid = Decimal(workflow.amount_paid or 0).quantize(Decimal("0.01"))
+        cumulative = Decimal("0.00")
+        for row in persisted:
+            amount = Decimal(row.amount).quantize(Decimal("0.01"))
+            slot_end = cumulative + amount
+            if paid < slot_end:
+                # Partial progress within this installment: charge only what's still due.
+                still_due = (slot_end - paid).quantize(Decimal("0.01"))
+                charge = min(still_due, remaining) if remaining > 0 else Decimal("0.00")
+                return ChargePlan(
+                    amount=charge,
+                    source=CHARGE_SOURCE_INSTALLMENT_1,
+                    label=f"Installment {row.installment_number}",
+                    locked=True,
+                    installment_count=len(persisted),
+                    installment_1=Decimal(persisted[0].amount),
+                )
+            cumulative = slot_end
+        # Plan fully covered by amount_paid — charge remaining balance if any.
         return ChargePlan(
-            amount=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-            source=CHARGE_SOURCE_INSTALLMENT_1,
-            label="Installment 1",
+            amount=remaining if remaining > 0 else Decimal("0.00"),
+            source=CHARGE_SOURCE_FULL,
+            label="Remaining balance",
             locked=True,
             installment_count=len(persisted),
-            installment_1=Decimal(first.amount),
+            installment_1=Decimal(persisted[0].amount),
         )
 
     return resolve_first_charge(
@@ -257,6 +274,22 @@ def resolve_first_charge_for_workflow(
         installment_1_field=settings.bitrix_field_installment_1,
         installment_count_field=settings.bitrix_field_installment_count,
     )
+
+
+def charge_installment_number_for_workflow(workflow: CustomerWorkflow) -> int | None:
+    """Which installment number the next charge corresponds to (if a plan exists)."""
+    persisted = sorted(workflow.installments or [], key=lambda row: row.installment_number)
+    if not persisted:
+        return None
+    paid = Decimal(workflow.amount_paid or 0).quantize(Decimal("0.01"))
+    cumulative = Decimal("0.00")
+    for row in persisted:
+        amount = Decimal(row.amount).quantize(Decimal("0.01"))
+        slot_end = cumulative + amount
+        if paid < slot_end:
+            return row.installment_number
+        cumulative = slot_end
+    return None
 
 
 def installment_status_for_amount(

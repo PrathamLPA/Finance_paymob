@@ -123,15 +123,10 @@ class ReminderService:
         return due
 
     async def send_reminder(self, workflow: CustomerWorkflow) -> PaymentSession | None:
+        from app.services.installment_plan import resolve_first_charge_for_workflow
         from app.services.workflow_orchestrator import WorkflowOrchestrator
 
         refreshing_expired = self._needs_expired_link_refresh(workflow)
-        session = await self.session_service.get_or_create_reusable_session(workflow)
-        replaced = bool(getattr(session, "_replaced_previous_link", False)) or refreshing_expired
-        if replaced:
-            session._replaced_previous_link = True  # type: ignore[attr-defined]
-
-        payment_url = self.session_service.build_payment_url(session.token)
 
         lead = self._lead_payload(workflow)
         try:
@@ -139,8 +134,40 @@ class ReminderService:
             if fresh:
                 lead = fresh
                 workflow.bitrix_lead_payload = fresh
+                self.db.commit()
         except Exception:
             logger.exception("Could not refresh Bitrix lead %s for reminder", workflow.bitrix_lead_id)
+
+        # Always charge Installment 1 (or remaining) — never silently fall back to full total
+        # just because charge_amount was omitted.
+        plan = resolve_first_charge_for_workflow(
+            workflow, lead=lead, settings=self.settings
+        )
+        from app.services.installment_plan import charge_installment_number_for_workflow
+
+        installment_number = charge_installment_number_for_workflow(workflow)
+        if installment_number is None and plan.source == "installment_1":
+            installment_number = 1
+        session = await self.session_service.get_or_create_reusable_session(
+            workflow,
+            charge_amount=plan.amount,
+            charge_source=plan.source,
+            amount_locked=plan.locked,
+            installment_number=installment_number,
+        )
+        replaced = bool(getattr(session, "_replaced_previous_link", False)) or refreshing_expired
+        if replaced:
+            session._replaced_previous_link = True  # type: ignore[attr-defined]
+
+        payment_url = self.session_service.build_payment_url(session.token)
+        logger.info(
+            "Reminder charge plan | workflow_id=%s source=%s amount=%s %s token=%s...",
+            workflow.id,
+            plan.source,
+            f"{plan.amount:.2f}",
+            workflow.currency,
+            session.token[:8],
+        )
 
         client_email = self._client_email(workflow, lead)
         if client_email:
