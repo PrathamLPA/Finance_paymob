@@ -49,11 +49,31 @@ def _installment_field_map(settings: Settings) -> list[tuple[int, str, str]]:
 
 
 def _installment_count(entity: dict[str, Any], settings: Settings) -> int | None:
+    """Read Bitrix installment count. Only 1–4 are valid; garbage values are ignored."""
     count_raw = _field(entity, settings.bitrix_field_installment_count)
     try:
-        return int(str(count_raw).strip()) if count_raw not in (None, "") else None
+        if count_raw in (None, ""):
+            return None
+        count = int(str(count_raw).strip().split(".")[0])
     except (TypeError, ValueError):
         return None
+    if count < 1 or count > 4:
+        return None
+    return count
+
+
+def _derived_installment_count(
+    entity: dict[str, Any],
+    settings: Settings,
+    candidates: list[ParsedInstallment] | None = None,
+) -> int | None:
+    count = _installment_count(entity, settings)
+    if count is not None:
+        return count
+    slots = candidates if candidates is not None else parse_installment_candidates(entity, settings)
+    if not slots:
+        return None
+    return max(s.number for s in slots)
 
 
 def parse_installment_candidates(
@@ -77,7 +97,7 @@ def parse_installment_candidates(
 def plan_is_indicated(entity: dict[str, Any] | None, settings: Settings) -> bool:
     """True when Bitrix data claims a multi-installment plan."""
     entity = entity or {}
-    count = _installment_count(entity, settings) or 0
+    count = _derived_installment_count(entity, settings) or 0
     candidates = parse_installment_candidates(entity, settings)
     dated = [s for s in candidates if s.due_date is not None]
     if len(dated) >= 2:
@@ -99,7 +119,7 @@ def validate_installment_plan(
     if not indicated:
         return PlanValidation(ok=True, indicated=False, slots=candidates, errors=[])
 
-    count = _installment_count(entity, settings)
+    count = _derived_installment_count(entity, settings, candidates)
     errors: list[str] = []
     expected = count
     if expected is None:
@@ -155,10 +175,16 @@ def persist_installment_plan(
     db: Session,
     workflow: CustomerWorkflow,
     slots: list[ParsedInstallment],
+    *,
+    replace: bool = False,
 ) -> None:
-    """Freeze installment rows once. Later Bitrix edits are ignored."""
-    if workflow.installments:
+    """Freeze installment rows once. Later Bitrix edits are ignored unless replace=True."""
+    if workflow.installments and not replace:
         return
+    if replace and workflow.installments:
+        for row in list(workflow.installments):
+            db.delete(row)
+        db.flush()
     for slot in slots:
         if slot.amount is None or slot.due_date is None:
             continue
@@ -260,6 +286,10 @@ class InstallmentPolicyResult:
     installment_1_percent: Decimal | None
     gap_days: int | None
     schedule: list[dict[str, str]]
+    first_below_percent: bool = False
+    count_above_two: bool = False
+    gap_over_limit: bool = False
+    missing_amounts: bool = False
 
 
 def evaluate_installment_policy(
@@ -276,14 +306,13 @@ def evaluate_installment_policy(
     1. Installment 1 is less than required_percent of the payable total (default 50%)
     2. Installment count is greater than 2
     3. Installment 2 due date is more than max_gap_days after Installment 1 due date
+    4. Any dated installment is missing its amount
     """
     entity = entity or {}
     threshold = Decimal(str(required_percent if required_percent is not None else settings.payment_required_percent))
     payable = payable_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     candidates = parse_installment_candidates(entity, settings)
-    count = _installment_count(entity, settings)
-    if count is None and candidates:
-        count = max(s.number for s in candidates)
+    count = _derived_installment_count(entity, settings, candidates)
 
     installment_1 = None
     for slot in candidates:
@@ -294,18 +323,25 @@ def evaluate_installment_policy(
         installment_1 = _money(_field(entity, settings.bitrix_field_installment_1))
 
     reasons: list[str] = []
+    first_below = False
+    count_above = False
+    gap_over = False
+    missing_amounts = False
     percent: Decimal | None = None
+
     if installment_1 is not None and payable > 0:
         percent = (installment_1 / payable * Decimal("100")).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
         if percent < threshold:
+            first_below = True
             reasons.append(
                 f"Installment 1 is {percent}% of the total "
                 f"({installment_1:.2f} of {payable:.2f}), below the {threshold:g}% minimum."
             )
 
     if count is not None and count > 2:
+        count_above = True
         reasons.append(
             f"Installment count is {count} (more than 2). Manager approval is required."
         )
@@ -317,9 +353,17 @@ def evaluate_installment_policy(
     if first and second and first.due_date and second.due_date:
         gap_days = (second.due_date - first.due_date).days
         if gap_days > max_gap_days:
+            gap_over = True
             reasons.append(
                 f"Next installment is due {gap_days} days after Installment 1 "
                 f"(limit is {max_gap_days} days)."
+            )
+
+    for slot in candidates:
+        if slot.due_date is not None and (slot.amount is None or slot.amount <= 0):
+            missing_amounts = True
+            reasons.append(
+                f"Installment {slot.number} has a due date but no amount in Bitrix."
             )
 
     schedule = [
@@ -327,6 +371,7 @@ def evaluate_installment_policy(
             "number": str(s.number),
             "amount": str(s.amount) if s.amount is not None else "",
             "due_date": s.due_date.isoformat() if s.due_date else "",
+            "amount_missing": "1" if (s.amount is None or s.amount <= 0) else "0",
         }
         for s in candidates
     ]
@@ -338,6 +383,10 @@ def evaluate_installment_policy(
         installment_1_percent=percent,
         gap_days=gap_days,
         schedule=schedule,
+        first_below_percent=first_below,
+        count_above_two=count_above,
+        gap_over_limit=gap_over,
+        missing_amounts=missing_amounts,
     )
 
 
@@ -352,6 +401,12 @@ def installment_policy_payload(result: InstallmentPolicyResult) -> dict[str, Any
         ),
         "gap_days": result.gap_days,
         "schedule": result.schedule,
+        "issues": {
+            "first_below_percent": result.first_below_percent,
+            "count_above_two": result.count_above_two,
+            "gap_over_limit": result.gap_over_limit,
+            "missing_amounts": result.missing_amounts,
+        },
     }
 
 

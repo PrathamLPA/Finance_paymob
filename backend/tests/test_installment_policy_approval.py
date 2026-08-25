@@ -39,7 +39,40 @@ def test_policy_count_more_than_two():
         lead, settings, payable_total=Decimal("3000.00"), required_percent=50
     )
     assert result.needs_approval is True
+    assert result.count_above_two is True
     assert any("more than 2" in r for r in result.reasons)
+
+
+def test_garbage_installment_count_is_ignored():
+    settings = _settings()
+    lead = {
+        "UF_COUNT": "5830",
+        "UF_I1": "1500",
+        "UF_D1": "2026-01-01",
+        "UF_I2": "1500",
+        "UF_D2": "2026-01-20",
+    }
+    result = evaluate_installment_policy(
+        lead, settings, payable_total=Decimal("3000.00"), required_percent=50
+    )
+    assert result.installment_count == 2
+    assert result.count_above_two is False
+    assert result.needs_approval is False
+
+
+def test_missing_amount_flagged_for_manager():
+    settings = _settings()
+    lead = {
+        "UF_COUNT": "2",
+        "UF_I1": "1500",
+        "UF_D1": "2026-01-01",
+        "UF_D2": "2026-01-20",
+    }
+    result = evaluate_installment_policy(
+        lead, settings, payable_total=Decimal("3000.00"), required_percent=50
+    )
+    assert result.missing_amounts is True
+    assert result.needs_approval is True
 
 
 def test_policy_gap_over_one_month():

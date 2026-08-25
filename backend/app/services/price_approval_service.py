@@ -117,6 +117,7 @@ class PriceApprovalService:
         below_lines = [line for line in lines if line.get("below_minimum")]
         ok_lines = [line for line in lines if not line.get("below_minimum")]
         installment = payload.get("installment_policy") or {}
+        issues = installment.get("issues") or {}
         kinds = payload.get("approval_kinds") or (
             ["price"] if below_lines else []
         )
@@ -140,6 +141,14 @@ class PriceApprovalService:
             "ok_count": payload.get("ok_count", len(ok_lines)),
             "approval_kinds": kinds,
             "installment_policy": installment,
+            "editable": {
+                "price": bool(below_lines),
+                "first_installment_amount": bool(issues.get("first_below_percent")),
+                "installment_dates": bool(issues.get("gap_over_limit")),
+                "installment_amounts": bool(issues.get("missing_amounts")),
+                "count_note": bool(issues.get("count_above_two")),
+            },
+            "required_percent": str(self.settings.payment_required_percent),
             "owner_name": approval.owner_name,
             "manager_email": approval.manager_email,
             "manager_name": approval.manager_name,

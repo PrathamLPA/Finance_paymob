@@ -1,9 +1,10 @@
 """Manager price-approval APIs consumed by the frontend approval page."""
 
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -13,8 +14,21 @@ from app.services.workflow_orchestrator import WorkflowOrchestrator
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
 
+class ProductPriceOverride(BaseModel):
+    product_id: int
+    selling_price: Decimal
+
+
+class InstallmentOverride(BaseModel):
+    number: int
+    amount: Decimal | None = None
+    due_date: str | None = None
+
+
 class DecisionBody(BaseModel):
     note: str | None = None
+    product_prices: list[ProductPriceOverride] = Field(default_factory=list)
+    installments: list[InstallmentOverride] = Field(default_factory=list)
 
 
 @router.get("/{token}")
@@ -30,7 +44,12 @@ async def get_approval(token: str, db: Session = Depends(get_db)) -> dict[str, A
 async def approve_price(token: str, body: DecisionBody, db: Session = Depends(get_db)) -> dict[str, Any]:
     orchestrator = WorkflowOrchestrator(db)
     try:
-        session = await orchestrator.complete_approved_payment(token, note=body.note)
+        session = await orchestrator.complete_approved_payment(
+            token,
+            note=body.note,
+            product_prices=[p.model_dump() for p in body.product_prices],
+            installment_overrides=[i.model_dump() for i in body.installments],
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

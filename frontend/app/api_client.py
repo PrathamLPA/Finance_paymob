@@ -63,12 +63,24 @@ async def get_approval(token: str) -> dict[str, Any]:
     return response.json()
 
 
-async def decide_approval(token: str, *, approve: bool, note: str = "") -> dict[str, Any]:
+async def decide_approval(
+    token: str,
+    *,
+    approve: bool,
+    note: str = "",
+    product_prices: list[dict] | None = None,
+    installments: list[dict] | None = None,
+) -> dict[str, Any]:
     settings = get_settings()
     action = "approve" if approve else "reject"
     url = f"{settings.api_base_url.rstrip('/')}/api/approvals/{token}/{action}"
+    payload: dict[str, Any] = {"note": note}
+    if product_prices is not None:
+        payload["product_prices"] = product_prices
+    if installments is not None:
+        payload["installments"] = installments
     async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(url, json={"note": note})
+        response = await client.post(url, json=payload)
     if response.status_code >= 400:
         detail = _extract_detail(response)
         raise BackendApiError(response.status_code, detail)

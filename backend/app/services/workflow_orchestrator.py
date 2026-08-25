@@ -630,20 +630,59 @@ class WorkflowOrchestrator:
         )
         return session
 
-    async def complete_approved_payment(self, token: str, *, note: str | None = None) -> PaymentSession:
-        """Manager approved a below-min price — reuse Estimate and send payment link."""
+    async def complete_approved_payment(
+        self,
+        token: str,
+        *,
+        note: str | None = None,
+        product_prices: list[dict] | None = None,
+        installment_overrides: list[dict] | None = None,
+    ) -> PaymentSession:
+        """Manager approved — apply optional overrides, then send payment link."""
         logger.info("START manager approve | token=%s...", token[:8])
         approval = await self.approval_service.decide(token, approve=True, note=note)
         workflow = self.get_or_create_workflow(approval.bitrix_lead_id)
         lead = await self.bitrix.get_lead(approval.bitrix_lead_id)
         await self.sync_workflow_from_lead(workflow, lead)
 
-        workflow.total_amount = Decimal(approval.total_payable)
-        workflow.currency = approval.currency or self.settings.default_currency
-        self.db.commit()
-        self.db.refresh(workflow)
+        payload = dict(approval.lines_payload or {})
+        lines_raw = list(payload.get("lines") or [])
+        price_map = {
+            int(row.get("product_id") or 0): Decimal(str(row.get("selling_price") or "0"))
+            for row in (product_prices or [])
+            if int(row.get("product_id") or 0) > 0
+        }
+        if price_map:
+            updated_lines = []
+            for row in lines_raw:
+                product_id = int(row.get("product_id") or 0)
+                if product_id in price_map:
+                    row = dict(row)
+                    new_price = price_map[product_id].quantize(Decimal("0.01"))
+                    row["selling_price"] = str(new_price)
+                    catalog = row.get("catalog_min_price")
+                    if catalog is not None:
+                        catalog_dec = Decimal(str(catalog))
+                        below = new_price < catalog_dec
+                        row["below_minimum"] = below
+                        row["discount_amount"] = (
+                            str((catalog_dec - new_price).quantize(Decimal("0.01")))
+                            if below
+                            else None
+                        )
+                        row["status"] = "BELOW MIN" if below else "OK"
+                    else:
+                        row["below_minimum"] = False
+                        row["status"] = "OK"
+                updated_lines.append(row)
+            lines_raw = updated_lines
+            payload["lines"] = lines_raw
+            payload["below_minimum_count"] = sum(
+                1 for row in lines_raw if row.get("below_minimum")
+            )
+            payload["ok_count"] = len(lines_raw) - payload["below_minimum_count"]
+            approval.lines_payload = payload
 
-        lines_raw = (approval.lines_payload or {}).get("lines") or []
         product_lines: list[ProductLine] = []
         for row in lines_raw:
             catalog = row.get("catalog_min_price")
@@ -658,6 +697,40 @@ class WorkflowOrchestrator:
                     catalog_min_price=Decimal(str(catalog)) if catalog is not None else None,
                 )
             )
+
+        if product_lines:
+            snapshot = serialize_pricing_snapshot(
+                product_lines,
+                currency=approval.currency or self.settings.default_currency,
+            )
+            workflow.total_amount = Decimal(snapshot["total_payable"])
+            workflow.pricing_snapshot = snapshot
+            approval.total_payable = snapshot["total_payable"]
+        else:
+            workflow.total_amount = Decimal(approval.total_payable)
+        workflow.currency = approval.currency or self.settings.default_currency
+        self.db.commit()
+        self.db.refresh(workflow)
+        self.db.refresh(approval)
+
+        override_slots = self._merge_installment_overrides(
+            lead=lead,
+            workflow=workflow,
+            installment_overrides=installment_overrides or [],
+        )
+        if override_slots:
+            persist_installment_plan(self.db, workflow, override_slots, replace=True)
+            # Keep lead payload in sync for any later reads before freeze path.
+            for slot in override_slots:
+                amount_field, date_field = self._installment_field_codes(slot.number)
+                if amount_field and slot.amount is not None:
+                    lead[amount_field] = str(slot.amount)
+                if date_field and slot.due_date is not None:
+                    lead[date_field] = slot.due_date.isoformat()
+            workflow.bitrix_lead_payload = lead
+            self.db.commit()
+            self.db.refresh(workflow)
+
         tax_total = Decimal("0.00")
         for line in product_lines:
             if line.tax_included or line.tax_rate <= 0:
@@ -665,15 +738,6 @@ class WorkflowOrchestrator:
             qty = line.quantity if line.quantity > 0 else Decimal("1")
             base = (line.selling_price * qty).quantize(Decimal("0.01"))
             tax_total += (base * line.tax_rate / Decimal("100")).quantize(Decimal("0.01"))
-
-        if product_lines and not workflow.pricing_snapshot:
-            workflow.pricing_snapshot = serialize_pricing_snapshot(
-                product_lines,
-                currency=workflow.currency or self.settings.default_currency,
-                total_payable=workflow.total_amount,
-            )
-            self.db.commit()
-            self.db.refresh(workflow)
 
         comment = (
             f"Manager-approved payment\n"
@@ -702,6 +766,63 @@ class WorkflowOrchestrator:
             skip_price_gate=True,
             skip_installment_policy=True,
         )
+
+    def _installment_field_codes(self, number: int) -> tuple[str, str]:
+        mapping = {
+            1: (
+                self.settings.bitrix_field_installment_1,
+                self.settings.bitrix_field_installment_1_date,
+            ),
+            2: (
+                self.settings.bitrix_field_installment_2,
+                self.settings.bitrix_field_installment_2_due_date,
+            ),
+            3: (
+                self.settings.bitrix_field_installment_3,
+                self.settings.bitrix_field_installment_3_due_date,
+            ),
+            4: (
+                self.settings.bitrix_field_installment_4,
+                self.settings.bitrix_field_installment_4_due_date,
+            ),
+        }
+        return mapping.get(number, ("", ""))
+
+    def _merge_installment_overrides(
+        self,
+        *,
+        lead: dict,
+        workflow: CustomerWorkflow,
+        installment_overrides: list[dict],
+    ) -> list:
+        from app.services.installment_notices import parse_bitrix_date
+        from app.services.installment_plan import ParsedInstallment, parse_installment_candidates
+
+        base = {
+            s.number: s
+            for s in parse_installment_candidates(lead, self.settings)
+        }
+        for row in workflow.installments or []:
+            base[row.installment_number] = ParsedInstallment(
+                number=row.installment_number,
+                amount=Decimal(row.amount),
+                due_date=row.due_date,
+            )
+        for raw in installment_overrides:
+            number = int(raw.get("number") or 0)
+            if number < 1 or number > 4:
+                continue
+            current = base.get(number)
+            amount = current.amount if current else None
+            due = current.due_date if current else None
+            if raw.get("amount") not in (None, ""):
+                amount = Decimal(str(raw["amount"])).quantize(Decimal("0.01"))
+            if raw.get("due_date"):
+                due = parse_bitrix_date(raw["due_date"])
+            if amount is None or due is None:
+                continue
+            base[number] = ParsedInstallment(number=number, amount=amount, due_date=due)
+        return [base[n] for n in sorted(base) if base[n].amount is not None and base[n].due_date]
 
     async def reject_price_approval(self, token: str, *, note: str | None = None) -> None:
         logger.info("START manager reject | token=%s...", token[:8])

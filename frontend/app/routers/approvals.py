@@ -1,5 +1,8 @@
 """Manager discount approval pages."""
 
+from __future__ import annotations
+
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
@@ -34,6 +37,7 @@ async def approval_decide(
     request: Request,
     decision: str = Form(...),
     note: str = Form(default=""),
+    overrides_json: str = Form(default="{}"),
 ) -> HTMLResponse:
     try:
         data = await get_approval(token)
@@ -45,8 +49,24 @@ async def approval_decide(
         )
 
     approve = decision.strip().lower() == "approve"
+    product_prices: list[dict] = []
+    installments: list[dict] = []
     try:
-        result = await decide_approval(token, approve=approve, note=note)
+        overrides = json.loads(overrides_json or "{}")
+        if isinstance(overrides, dict):
+            product_prices = list(overrides.get("product_prices") or [])
+            installments = list(overrides.get("installments") or [])
+    except json.JSONDecodeError:
+        overrides = {}
+
+    try:
+        result = await decide_approval(
+            token,
+            approve=approve,
+            note=note,
+            product_prices=product_prices if approve else [],
+            installments=installments if approve else [],
+        )
         data = await get_approval(token)
     except BackendApiError as exc:
         return templates.TemplateResponse(
