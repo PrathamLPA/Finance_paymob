@@ -200,6 +200,18 @@ class EmailIntegration(Protocol):
         payment_url: str,
     ) -> None: ...
 
+    def send_installment_reminder(
+        self,
+        *,
+        to_email: str,
+        customer_name: str | None,
+        payment_url: str,
+        installment_number: int,
+        due_date: str,
+        amount: str | None,
+        currency: str,
+    ) -> None: ...
+
     def send_price_approval(
         self,
         *,

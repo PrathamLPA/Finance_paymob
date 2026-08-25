@@ -52,6 +52,8 @@ class CustomerWorkflow(Base):
     reminders_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_reminder_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     reminder_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Installment numbers already emailed on their due date, e.g. {"2": "2026-08-24"}
+    installment_notices_sent: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     first_payment_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("(CURRENT_TIMESTAMP)"))
     updated_at: Mapped[datetime] = mapped_column(

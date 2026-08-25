@@ -47,6 +47,33 @@ class MockEmailClient:
         )
         self._write_email("Payment Request", to_email, body)
 
+    def send_installment_reminder(
+        self,
+        *,
+        to_email: str,
+        customer_name: str | None,
+        payment_url: str,
+        installment_number: int,
+        due_date: str,
+        amount: str | None,
+        currency: str,
+    ) -> None:
+        name = customer_name or "Customer"
+        amount_line = f"Amount due: {currency} {amount}\n" if amount else ""
+        body = (
+            f"Dear {name},\n\n"
+            f"This is a reminder that installment {installment_number} is due on {due_date}.\n"
+            f"{amount_line}\n"
+            f"Please complete your payment using the secure link below:\n\n"
+            f"{payment_url}\n\n"
+            f"Regards,\n{self.settings.sendgrid_from_name}"
+        )
+        self._write_email(
+            f"Installment {installment_number} due {due_date}",
+            to_email,
+            body,
+        )
+
     def send_price_approval(
         self,
         *,
@@ -216,6 +243,49 @@ class RealEmailClient(MockEmailClient):
         if not self._send_mail(to_email=to_email, subject="Payment Request", body=body):
             super().send_payment_request(
                 to_email=to_email, customer_name=customer_name, payment_url=payment_url
+            )
+
+    def send_installment_reminder(
+        self,
+        *,
+        to_email: str,
+        customer_name: str | None,
+        payment_url: str,
+        installment_number: int,
+        due_date: str,
+        amount: str | None,
+        currency: str,
+    ) -> None:
+        if not self._sendgrid_ready():
+            return super().send_installment_reminder(
+                to_email=to_email,
+                customer_name=customer_name,
+                payment_url=payment_url,
+                installment_number=installment_number,
+                due_date=due_date,
+                amount=amount,
+                currency=currency,
+            )
+        name = customer_name or "Customer"
+        amount_line = f"Amount due: {currency} {amount}\n" if amount else ""
+        body = (
+            f"Dear {name},\n\n"
+            f"This is a reminder that installment {installment_number} is due on {due_date}.\n"
+            f"{amount_line}\n"
+            f"Please complete your payment using the secure link below:\n\n"
+            f"{payment_url}\n\n"
+            f"Regards,\n{self.settings.sendgrid_from_name}"
+        )
+        subject = f"Installment {installment_number} due {due_date}"
+        if not self._send_mail(to_email=to_email, subject=subject, body=body):
+            super().send_installment_reminder(
+                to_email=to_email,
+                customer_name=customer_name,
+                payment_url=payment_url,
+                installment_number=installment_number,
+                due_date=due_date,
+                amount=amount,
+                currency=currency,
             )
 
     def send_price_approval(

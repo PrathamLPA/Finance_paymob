@@ -67,6 +67,48 @@ def extract_amount(entity: dict[str, Any], fallback_field: str = "") -> Decimal:
     return Decimal("0.00")
 
 
+def _lookup_field(entity: dict[str, Any], field_code: str) -> Any:
+    if not field_code:
+        return None
+    if field_code in entity:
+        return entity.get(field_code)
+    lowered = {str(k).lower(): v for k, v in entity.items()}
+    return lowered.get(field_code.lower())
+
+
+def coerce_email(raw: Any) -> str | None:
+    if raw in (None, "", [], {}):
+        return None
+    if isinstance(raw, str):
+        value = raw.replace(";", ",").split(",")[0].strip()
+        return value or None
+    if isinstance(raw, dict):
+        return coerce_email(raw.get("VALUE") or raw.get("value") or raw.get("EMAIL"))
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            email = coerce_email(item)
+            if email:
+                return email
+    return None
+
+
+def parse_lead_customer_details(
+    lead: dict[str, Any],
+    *,
+    client_email_field: str = "",
+    fallback_email_field: str = "",
+) -> tuple[str | None, str | None]:
+    """Name from NAME/LAST_NAME; email prefers the client UF field, then EMAIL."""
+    name_parts = [lead.get("NAME"), lead.get("LAST_NAME")]
+    name = " ".join(p for p in name_parts if p).strip() or None
+    email = coerce_email(_lookup_field(lead, client_email_field)) if client_email_field else None
+    if not email and fallback_email_field:
+        email = coerce_email(_lookup_field(lead, fallback_email_field))
+    if not email:
+        email = coerce_email(lead.get("EMAIL"))
+    return (email, name)
+
+
 class MockBitrixClient:
     """Placeholder Bitrix client for prototype — logs actions and returns fake IDs."""
 
@@ -362,13 +404,11 @@ class MockBitrixClient:
         return extract_amount(lead, self.settings.bitrix_field_lead_amount)
 
     def extract_customer_details(self, lead: dict[str, Any]) -> tuple[str | None, str | None]:
-        emails = lead.get("EMAIL") or []
-        email = emails[0].get("VALUE") if emails else lead.get("EMAIL")
-        if isinstance(email, list) and email:
-            email = email[0].get("VALUE")
-        name_parts = [lead.get("NAME"), lead.get("LAST_NAME")]
-        name = " ".join(p for p in name_parts if p).strip() or None
-        return (str(email) if email else None, name)
+        return parse_lead_customer_details(
+            lead,
+            client_email_field=self.settings.bitrix_field_client_email,
+            fallback_email_field=self.settings.bitrix_field_customer_email,
+        )
 
 
 class RealBitrixClient:
@@ -959,11 +999,11 @@ class RealBitrixClient:
         return extract_amount(lead, self.settings.bitrix_field_lead_amount)
 
     def extract_customer_details(self, lead: dict[str, Any]) -> tuple[str | None, str | None]:
-        emails = lead.get("EMAIL") or []
-        email = emails[0].get("VALUE") if emails else None
-        name_parts = [lead.get("NAME"), lead.get("LAST_NAME")]
-        name = " ".join(p for p in name_parts if p).strip() or None
-        return (email, name)
+        return parse_lead_customer_details(
+            lead,
+            client_email_field=self.settings.bitrix_field_client_email,
+            fallback_email_field=self.settings.bitrix_field_customer_email,
+        )
 
 
 def _mail_fix_hint(exc: BitrixApiError) -> str:

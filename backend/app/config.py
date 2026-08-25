@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     bitrix_field_total_amount: str = "UF_CRM_TOTAL_AMOUNT"
     bitrix_field_payment_link: str = "UF_CRM_PAYMENT_LINK"
     bitrix_field_customer_email: str = "UF_CRM_CUSTOMER_EMAIL"
+    # Client email on the lead (Bitrix name="UF_CRM_1740610735352")
+    bitrix_field_client_email: str = "UF_CRM_1740610735352"
     bitrix_field_payment_percentage: str = "UF_CRM_PAYMENT_PERCENTAGE"
     bitrix_field_payment_status: str = "UF_CRM_PAYMENT_STATUS"
     bitrix_field_transaction_id: str = "UF_CRM_TRANSACTION_ID"
@@ -140,6 +142,8 @@ class Settings(BaseSettings):
     reminder_interval_hours: int = 24
     reminder_scheduler_enabled: bool = True
     reminder_scheduler_poll_seconds: int = 300
+    # When the plan is installments, also email the client on each due date
+    installment_due_notices_enabled: bool = True
 
     @field_validator("database_url")
     @classmethod
