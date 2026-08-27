@@ -148,6 +148,27 @@ class ReminderService:
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
+
+        from app.services.cash_collection_service import CashCollectionService
+        from app.services.payment_mode import is_cash_payment_mode
+
+        number_for_mode = installment_number or 1
+        if is_cash_payment_mode(
+            lead, installment_number=number_for_mode, settings=self.settings
+        ):
+            CashCollectionService(self.db, self.settings).enqueue_from_workflow(
+                workflow,
+                lead=lead,
+                due_amount=plan.amount,
+                installment_number=number_for_mode,
+            )
+            logger.info(
+                "Reminder skipped Paymob — cash queued | workflow_id=%s installment=%s",
+                workflow.id,
+                number_for_mode,
+            )
+            return None
+
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,

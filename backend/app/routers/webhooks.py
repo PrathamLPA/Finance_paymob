@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.db.session import get_db
 from app.integrations.paymob import extract_transaction_obj
 from app.services.price_approval_service import PriceApprovalPending
+from app.services.cash_collection_service import CashCollectionQueued
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -307,6 +308,20 @@ async def bitrix24_webhook(
                 "deal_id": deal_id,
                 "payment_url": orchestrator.session_service.build_payment_url(session.token),
             }
+        except CashCollectionQueued as exc:
+            logger.info(
+                "OK cash queued | request_id=%s deal_id=%s collection_id=%s",
+                request_id,
+                deal_id,
+                exc.collection.id,
+            )
+            return {
+                "status": "cash_queued",
+                "deal_id": deal_id,
+                "collection_id": exc.collection.id,
+                "installment_number": exc.collection.installment_number,
+                "due_amount": str(exc.collection.due_amount),
+            }
         except ValueError as exc:
             logger.warning(
                 "Bitrix payment link failed request_id=%s deal_id=%s reason=%s",
@@ -420,6 +435,22 @@ async def bitrix24_webhook(
                 "approval_id": exc.approval_id,
                 "approval_url": exc.approval_url,
             }
+        except CashCollectionQueued as exc:
+            logger.info(
+                "OK cash queued | lead_id=%s title=%s collection_id=%s installment=%s amount=%s",
+                lead_id,
+                summary["title"],
+                exc.collection.id,
+                exc.collection.installment_number,
+                exc.collection.due_amount,
+            )
+            return {
+                "status": "cash_queued",
+                "lead_id": lead_id,
+                "collection_id": exc.collection.id,
+                "installment_number": exc.collection.installment_number,
+                "due_amount": str(exc.collection.due_amount),
+            }
         except ValueError as exc:
             logger.warning(
                 "FAIL payment link | lead_id=%s title=%s amount=%s | reason=%s",
@@ -513,6 +544,20 @@ async def bitrix24_webhook(
                 "source": "finance_deal_stage",
                 "deal_id": deal_id,
                 "payment_url": payment_url,
+            }
+        except CashCollectionQueued as exc:
+            logger.info(
+                "OK cash queued | request_id=%s deal_id=%s collection_id=%s",
+                request_id,
+                deal_id,
+                exc.collection.id,
+            )
+            return {
+                "status": "cash_queued",
+                "deal_id": deal_id,
+                "collection_id": exc.collection.id,
+                "installment_number": exc.collection.installment_number,
+                "due_amount": str(exc.collection.due_amount),
             }
         except ValueError as exc:
             logger.warning(

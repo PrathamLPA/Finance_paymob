@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import approval_api, dev, health, payment_api, webhooks
+from app.routers import approval_api, cash_api, dev, health, payment_api, staff_auth, webhooks
 
 settings = get_settings()
 logging.basicConfig(
@@ -59,6 +59,20 @@ async def lifespan(_app: FastAPI):
         settings.reminder_enabled and settings.reminder_scheduler_enabled,
         settings.paymob_hmac_fallback_to_inquiry,
     )
+    try:
+        from app.db.session import SessionLocal
+        from app.services.staff_auth import bootstrap_manager_if_needed
+
+        db = SessionLocal()
+        try:
+            created = bootstrap_manager_if_needed(db, settings)
+            if created:
+                logger.info("Cash Desk bootstrap manager ready email=%s", created.email)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Cash Desk manager bootstrap skipped/failed")
+
     if settings.reminder_enabled and settings.reminder_scheduler_enabled:
         task = asyncio.create_task(_reminder_scheduler_loop())
         logger.info(
@@ -81,6 +95,10 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 origins = [o.strip() for o in settings.frontend_origin.split(",") if o.strip()]
+for extra in (settings.cashdesk_origin or "").split(","):
+    o = extra.strip()
+    if o and o not in origins:
+        origins.append(o)
 if origins:
     app.add_middleware(
         CORSMiddleware,
@@ -94,4 +112,6 @@ app.include_router(health.router)
 app.include_router(webhooks.router)
 app.include_router(payment_api.router)
 app.include_router(approval_api.router)
+app.include_router(staff_auth.router)
+app.include_router(cash_api.router)
 app.include_router(dev.router)

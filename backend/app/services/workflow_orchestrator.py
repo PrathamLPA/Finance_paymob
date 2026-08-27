@@ -631,11 +631,53 @@ class WorkflowOrchestrator:
             plan.locked,
         )
 
+        from app.services.cash_collection_service import (
+            CashCollectionQueued,
+            CashCollectionService,
+        )
         from app.services.installment_plan import charge_installment_number_for_workflow
+        from app.services.payment_mode import is_cash_payment_mode
 
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
+        number_for_mode = installment_number or 1
+        if is_cash_payment_mode(
+            lead, installment_number=number_for_mode, settings=self.settings
+        ):
+            cash = CashCollectionService(self.db, self.settings)
+            collection = cash.enqueue_from_workflow(
+                workflow,
+                lead=lead,
+                due_amount=plan.amount,
+                installment_number=number_for_mode,
+            )
+            comment = (
+                f"Cash collection queued (Cash Desk)\n"
+                f"Installment {collection.installment_number}: "
+                f"{collection.due_amount} {collection.currency}\n"
+                f"Customer: {collection.customer_name or '-'}\n"
+                f"No Paymob link was created — collect cash in Cash Desk."
+            )
+            try:
+                await self.bitrix.add_timeline_comment(
+                    entity_type="LEAD",
+                    entity_id=lead_id,
+                    comment=comment,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to comment cash queue on lead %s", lead_id
+                )
+            logger.info(
+                "Cash queued | lead_id=%s installment=%s collection_id=%s amount=%s",
+                lead_id,
+                number_for_mode,
+                collection.id,
+                collection.due_amount,
+            )
+            raise CashCollectionQueued(collection)
+
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,
@@ -1306,11 +1348,45 @@ class WorkflowOrchestrator:
         plan = resolve_first_charge_for_workflow(
             workflow, lead=lead, settings=self.settings
         )
+        from app.services.cash_collection_service import (
+            CashCollectionQueued,
+            CashCollectionService,
+        )
         from app.services.installment_plan import charge_installment_number_for_workflow
+        from app.services.payment_mode import is_cash_payment_mode
 
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
+        number_for_mode = installment_number or 1
+        if is_cash_payment_mode(
+            lead, installment_number=number_for_mode, settings=self.settings
+        ):
+            cash = CashCollectionService(self.db, self.settings)
+            collection = cash.enqueue_from_workflow(
+                workflow,
+                lead=lead,
+                due_amount=plan.amount,
+                installment_number=number_for_mode,
+            )
+            comment = (
+                f"Cash collection queued (Cash Desk)\n"
+                f"Installment {collection.installment_number}: "
+                f"{collection.due_amount} {collection.currency}\n"
+                f"No Paymob link was created — collect cash in Cash Desk."
+            )
+            try:
+                await self.bitrix.add_timeline_comment(
+                    entity_type="DEAL",
+                    entity_id=finance_deal_id,
+                    comment=comment,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to comment cash queue on finance deal %s", finance_deal_id
+                )
+            raise CashCollectionQueued(collection)
+
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,
@@ -1386,6 +1462,152 @@ class WorkflowOrchestrator:
             b2c_deal_id,
         )
 
+    async def apply_recorded_payment(
+        self,
+        workflow: CustomerWorkflow,
+        transaction: PaymentTransaction,
+        *,
+        amount: Decimal,
+        currency: str,
+        comment_prefix: str = "Payment successful",
+        skip_zoho: bool = False,
+        skip_deals: bool = False,
+        dev_simulate: bool = False,
+    ) -> CustomerWorkflow:
+        """Shared post-payment side effects for Paymob and Cash Desk collections."""
+        first_payment = workflow.is_first_payment_pending
+        self.threshold_service.refresh_status(workflow)
+        self.db.commit()
+
+        if first_payment and not skip_deals:
+            try:
+                if dev_simulate:
+                    await self._create_dev_simulated_deals(workflow)
+                else:
+                    await self._create_deals_on_first_payment(workflow)
+            except Exception:
+                logger.exception(
+                    "Failed to create Bitrix deals after payment for lead %s",
+                    workflow.bitrix_lead_id,
+                )
+
+        comment = self._payment_success_message(
+            workflow, amount, currency, prefix=comment_prefix
+        )
+        await self._comment_on_workflow_entities(workflow, comment)
+        await self._notify_assigned_agent(
+            workflow,
+            subject=f"{comment_prefix} — Lead {workflow.bitrix_lead_id}",
+            body=comment,
+        )
+
+        if skip_zoho or dev_simulate:
+            if dev_simulate:
+                logger.info("Dev simulate — skipping Zoho invoice sync")
+        else:
+            try:
+                await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
+            except Exception:
+                logger.exception(
+                    "Failed to sync invoice after payment for lead %s",
+                    workflow.bitrix_lead_id,
+                )
+
+        try:
+            await self.threshold_service.apply_after_payment(
+                workflow,
+                latest_transaction_id=transaction.transaction_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to apply payment threshold for lead %s",
+                workflow.bitrix_lead_id,
+            )
+
+        self.db.commit()
+        self.db.refresh(workflow)
+        return workflow
+
+    async def collect_cash(
+        self,
+        collection_id: int,
+        *,
+        staff_id: int,
+        amount: Decimal | None = None,
+    ) -> CustomerWorkflow:
+        from app.models.cash_collection import (
+            STATUS_CLAIMED,
+            STATUS_COLLECTED,
+            STATUS_OPEN,
+            CashCollection,
+        )
+        from app.models.staff_user import StaffUser
+        from app.services.cash_collection_service import CashCollectionService
+
+        row = self.db.get(CashCollection, collection_id)
+        if not row:
+            raise ValueError("Cash collection not found")
+        if row.status == STATUS_COLLECTED:
+            raise ValueError("Already collected")
+        if row.status == STATUS_OPEN:
+            raise ValueError("Claim this collection before recording cash")
+        if row.status != STATUS_CLAIMED or row.claimed_by_id != staff_id:
+            raise ValueError("Only the claiming employee can collect this cash")
+
+        staff = self.db.get(StaffUser, staff_id)
+        if not staff or not staff.is_active:
+            raise ValueError("Staff user not found")
+
+        collect_amount = Decimal(amount if amount is not None else row.due_amount).quantize(
+            Decimal("0.01")
+        )
+        if collect_amount <= 0:
+            raise ValueError("Collect amount must be positive")
+        if collect_amount > row.due_amount:
+            raise ValueError(f"Cannot collect more than due amount {row.due_amount}")
+
+        workflow = self.db.get(CustomerWorkflow, row.workflow_id)
+        if not workflow:
+            raise ValueError("Workflow not found")
+
+        txn_id = CashCollectionService.new_cash_transaction_id(row.id)
+        existing = self.db.scalar(
+            select(PaymentTransaction).where(PaymentTransaction.transaction_id == txn_id)
+        )
+        if existing:
+            raise ValueError("Duplicate cash transaction")
+
+        workflow.amount_paid += collect_amount
+        remaining = workflow.remaining_balance
+        transaction = PaymentTransaction(
+            workflow_id=workflow.id,
+            payment_session_id=None,
+            transaction_id=txn_id,
+            order_id=None,
+            amount=collect_amount,
+            currency=row.currency or workflow.currency,
+            remaining_balance=remaining,
+            raw_payload=None,
+            source_type="cash",
+            success=True,
+            pending=False,
+        )
+        self.db.add(transaction)
+
+        row.collected_amount = collect_amount
+        row.status = STATUS_COLLECTED
+        row.collected_by_id = staff_id
+        row.collected_at = datetime.now(timezone.utc)
+        self.db.flush()
+
+        return await self.apply_recorded_payment(
+            workflow,
+            transaction,
+            amount=collect_amount,
+            currency=row.currency or workflow.currency,
+            comment_prefix=f"Cash collected (Installment {row.installment_number})",
+        )
+
     async def handle_paymob_webhook(
         self, data: PaymentWebhookData, *, dev_simulate: bool = False
     ) -> CustomerWorkflow | None:
@@ -1422,64 +1644,28 @@ class WorkflowOrchestrator:
         self.session_service.mark_completed(session)
         self.db.flush()
 
-        # Money is recorded; create Sales deal before commenting so the lead can show CONVERTED.
-        first_payment = workflow.is_first_payment_pending
-        self.threshold_service.refresh_status(workflow)
-        self.db.commit()
-
-        if first_payment:
-            try:
-                if dev_simulate:
-                    await self._create_dev_simulated_deals(workflow)
-                else:
-                    await self._create_deals_on_first_payment(workflow)
-            except Exception:
-                logger.exception(
-                    "Failed to create Bitrix deals after first payment for lead %s",
-                    workflow.bitrix_lead_id,
-                )
-
-        comment = self._payment_success_message(workflow, data.amount, data.currency)
-        await self._comment_on_workflow_entities(workflow, comment)
-        await self._notify_assigned_agent(
+        return await self.apply_recorded_payment(
             workflow,
-            subject=f"Payment successful — Lead {workflow.bitrix_lead_id}",
-            body=comment,
+            transaction,
+            amount=data.amount,
+            currency=data.currency,
+            comment_prefix="Payment successful",
+            skip_zoho=False,
+            skip_deals=False,
+            dev_simulate=dev_simulate,
         )
-
-        if dev_simulate:
-            logger.info("Dev simulate — skipping Zoho invoice sync")
-        else:
-            try:
-                await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
-            except Exception:
-                logger.exception(
-                    "Failed to sync invoice after payment for lead %s", workflow.bitrix_lead_id
-                )
-
-        try:
-            await self.threshold_service.apply_after_payment(
-                workflow,
-                latest_transaction_id=transaction.transaction_id,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to apply payment threshold for lead %s", workflow.bitrix_lead_id
-            )
-
-        self.db.commit()
-        self.db.refresh(workflow)
-        return workflow
 
     def _payment_success_message(
         self,
         workflow: CustomerWorkflow,
         amount: Decimal,
         currency: str,
+        *,
+        prefix: str = "Payment successful",
     ) -> str:
         pct = workflow.payment_percentage()
         return (
-            f"Payment successful\n"
+            f"{prefix}\n"
             f"Amount: {amount} {currency}\n"
             f"Paid: {workflow.amount_paid} / {workflow.total_amount} {workflow.currency} "
             f"({pct:.0f}%)\n"

@@ -11,3 +11,4 @@ python-multipart==0.0.20
 pytest==8.3.4
 pytest-asyncio==0.25.0
 sendgrid==6.11.0
+PyJWT==2.12.1
