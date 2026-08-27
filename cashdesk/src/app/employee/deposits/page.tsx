@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
@@ -69,12 +70,10 @@ function DepositsPanel() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-serif text-3xl text-teal-950">Deposits</h1>
-        <p className="mt-1 text-stone-600">
-          Record cash you handed to the office or bank. On hand = collected − deposited.
-        </p>
-      </div>
+      <PageHeader
+        title="Deposits"
+        description="Record cash you handed to the office or bank. On hand equals collected minus deposited."
+      />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>

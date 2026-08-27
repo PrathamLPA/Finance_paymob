@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
+import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -75,12 +76,10 @@ function EmployeesPanel() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-serif text-3xl text-teal-950">Employees</h1>
-        <p className="mt-1 text-stone-600">
-          Add collectors by email and name. See who holds cash and how much is left to deposit.
-        </p>
-      </div>
+      <PageHeader
+        title="Employees"
+        description="Add collectors and monitor who holds cash and how much is left to deposit."
+      />
 
       <div className="grid gap-4 lg:grid-cols-5">
         <Card className="lg:col-span-2">

@@ -1600,12 +1600,27 @@ class WorkflowOrchestrator:
         row.collected_at = datetime.now(timezone.utc)
         self.db.flush()
 
+        course = row.course_title or CashCollectionService.course_title_from_workflow(workflow)
+        comment_prefix = (
+            f"Cash payment confirmed via Cash Desk\n"
+            f"Collected by: {staff.name} ({staff.email})\n"
+            f"Course: {course}\n"
+            f"Installment {row.installment_number}"
+        )
+        logger.info(
+            "Cash collected | lead_id=%s installment=%s amount=%s employee=%s",
+            workflow.bitrix_lead_id,
+            row.installment_number,
+            collect_amount,
+            staff.email,
+        )
+
         return await self.apply_recorded_payment(
             workflow,
             transaction,
             amount=collect_amount,
             currency=row.currency or workflow.currency,
-            comment_prefix=f"Cash collected (Installment {row.installment_number})",
+            comment_prefix=comment_prefix,
         )
 
     async def handle_paymob_webhook(

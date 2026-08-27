@@ -1,13 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { CheckCircle2, HandCoins, PiggyBank, Wallet } from "lucide-react";
 import { api } from "@/lib/api";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
+import { PageHeader } from "@/components/page-header";
+import { StatCard } from "@/components/stat-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 
 type Collection = {
   id: number;
@@ -18,14 +20,12 @@ type Collection = {
   customer_email: string | null;
   customer_phone: string | null;
   due_amount: string;
-  collected_amount: string;
   currency: string;
   status: string;
   claimed_by_id: number | null;
   course_total: string;
   amount_paid: string;
   remaining_balance: string;
-  is_collected: boolean;
 };
 
 type Summary = {
@@ -40,6 +40,7 @@ function EmployeeDesk({ userId }: { userId: number }) {
   const [items, setItems] = useState<Collection[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
@@ -58,6 +59,7 @@ function EmployeeDesk({ userId }: { userId: number }) {
   async function claim(id: number) {
     setBusyId(id);
     setError("");
+    setSuccess("");
     try {
       await api(`/api/staff/cash/${id}/claim`, { method: "POST" });
       await refresh();
@@ -71,11 +73,10 @@ function EmployeeDesk({ userId }: { userId: number }) {
   async function collect(id: number) {
     setBusyId(id);
     setError("");
+    setSuccess("");
     try {
-      await api(`/api/staff/cash/${id}/collect`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
+      await api(`/api/staff/cash/${id}/collect`, { method: "POST", body: JSON.stringify({}) });
+      setSuccess("Cash recorded. Bitrix lead timeline and assigned agent were notified.");
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Collect failed");
@@ -84,126 +85,121 @@ function EmployeeDesk({ userId }: { userId: number }) {
     }
   }
 
+  const open = items.filter((i) => i.status === "open");
+  const mine = items.filter((i) => i.status === "claimed" && i.claimed_by_id === userId);
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="font-serif text-3xl text-teal-950">Cash collections</h1>
-        <p className="mt-1 text-stone-600">
-          Claim open cash cases, collect the installment due, then deposit from Deposits.
-        </p>
-      </div>
+    <div className="space-y-8">
+      <PageHeader
+        title="Collections"
+        description="Claim a cash case, collect from the customer, then record the deposit when you hand cash to the office."
+      />
 
       <div className="grid gap-4 sm:grid-cols-3">
-        {[
-          { label: "Cash in hand", value: summary?.on_hand },
-          { label: "Deposited", value: summary?.deposited },
-          { label: "Left to deposit", value: summary?.left_to_deposit },
-        ].map((card) => (
-          <Card key={card.label}>
-            <CardHeader>
-              <CardDescription>{card.label}</CardDescription>
-              <CardTitle className="text-2xl">
-                {money(card.value, summary?.currency || "AED")}
-              </CardTitle>
-            </CardHeader>
-          </Card>
-        ))}
+        <StatCard label="Cash in hand" value={money(summary?.on_hand, summary?.currency)} icon={HandCoins} accent="amber" />
+        <StatCard label="Deposited" value={money(summary?.deposited, summary?.currency)} icon={PiggyBank} accent="teal" />
+        <StatCard label="Left to deposit" value={money(summary?.left_to_deposit, summary?.currency)} icon={Wallet} accent="stone" />
       </div>
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {success ? (
+        <p className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          <CheckCircle2 className="h-4 w-4 shrink-0" />
+          {success}
+        </p>
+      ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Queue</CardTitle>
-          <CardDescription>Open cases and your claimed collections</CardDescription>
-        </CardHeader>
-        <CardContent className="px-0 pb-0">
-          <Table>
-            <THead>
-              <TR>
-                <TH>Customer / course</TH>
-                <TH>Installment</TH>
-                <TH>To collect</TH>
-                <TH>Balance</TH>
-                <TH>Status</TH>
-                <TH></TH>
-              </TR>
-            </THead>
-            <TBody>
-              {items.length === 0 ? (
-                <TR>
-                  <TD colSpan={6} className="py-8 text-center text-stone-500">
-                    No cash collections waiting
-                  </TD>
-                </TR>
-              ) : (
-                items.map((row) => {
-                  const mine = row.claimed_by_id === userId;
-                  return (
-                    <TR key={row.id}>
-                      <TD>
-                        <div className="font-medium">{row.customer_name || "—"}</div>
-                        <div className="text-xs text-stone-500">
-                          Lead #{row.bitrix_lead_id} · {row.course_title || "Course"}
-                        </div>
-                        {row.customer_phone ? (
-                          <div className="text-xs text-stone-500">{row.customer_phone}</div>
-                        ) : null}
-                      </TD>
-                      <TD>
-                        I{row.installment_number}
-                        <div className="text-xs text-stone-500">
-                          Total {money(row.course_total, row.currency)}
-                        </div>
-                      </TD>
-                      <TD className="font-medium">{money(row.due_amount, row.currency)}</TD>
-                      <TD>
-                        Paid {money(row.amount_paid, row.currency)}
-                        <div className="text-xs text-stone-500">
-                          Left {money(row.remaining_balance, row.currency)}
-                        </div>
-                      </TD>
-                      <TD>
-                        <Badge
-                          variant={
-                            row.status === "claimed"
-                              ? "warning"
-                              : row.status === "collected"
-                                ? "success"
-                                : "muted"
-                          }
-                        >
-                          {row.status}
-                        </Badge>
-                      </TD>
-                      <TD className="text-right">
-                        {row.status === "open" ? (
-                          <Button
-                            size="sm"
-                            disabled={busyId === row.id}
-                            onClick={() => claim(row.id)}
-                          >
-                            Claim
-                          </Button>
-                        ) : null}
-                        {row.status === "claimed" && mine ? (
-                          <Button
-                            size="sm"
-                            disabled={busyId === row.id}
-                            onClick={() => collect(row.id)}
-                          >
-                            Mark collected
-                          </Button>
-                        ) : null}
-                      </TD>
-                    </TR>
-                  );
-                })
-              )}
-            </TBody>
-          </Table>
-        </CardContent>
-      </Card>
+      {mine.length > 0 ? (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">Your claimed cases</h2>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {mine.map((row) => (
+              <Card key={row.id} className="border-amber-200/80 bg-amber-50/30">
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-lg">{row.customer_name || "Customer"}</CardTitle>
+                      <CardDescription>
+                        Lead #{row.bitrix_lead_id} · {row.course_title || "Course"}
+                      </CardDescription>
+                    </div>
+                    <Badge variant="warning">claimed</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-stone-500">Installment</p>
+                      <p className="font-medium">I{row.installment_number}</p>
+                    </div>
+                    <div>
+                      <p className="text-stone-500">Collect now</p>
+                      <p className="text-lg font-semibold text-teal-900">
+                        {money(row.due_amount, row.currency)}
+                      </p>
+                    </div>
+                  </div>
+                  {row.customer_phone ? (
+                    <p className="text-sm text-stone-600">Phone: {row.customer_phone}</p>
+                  ) : null}
+                  <Button className="w-full" disabled={busyId === row.id} onClick={() => collect(row.id)}>
+                    Confirm cash received
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">Open queue</h2>
+        {open.length === 0 ? (
+          <Card>
+            <CardContent className="py-10 text-center text-stone-500">No open cash cases right now</CardContent>
+          </Card>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {open.map((row) => (
+              <Card key={row.id}>
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-lg">{row.customer_name || "Customer"}</CardTitle>
+                      <CardDescription>
+                        Lead #{row.bitrix_lead_id} · {row.course_title || "Course"}
+                      </CardDescription>
+                    </div>
+                    <Badge variant="muted">open</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-stone-500">Installment</p>
+                      <p className="font-medium">I{row.installment_number}</p>
+                    </div>
+                    <div>
+                      <p className="text-stone-500">Amount due</p>
+                      <p className="font-semibold">{money(row.due_amount, row.currency)}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <p className="text-stone-500">Course total / paid / left</p>
+                      <p>
+                        {money(row.course_total, row.currency)} · {money(row.amount_paid, row.currency)} paid ·{" "}
+                        {money(row.remaining_balance, row.currency)} left
+                      </p>
+                    </div>
+                  </div>
+                  <Button variant="outline" className="w-full" disabled={busyId === row.id} onClick={() => claim(row.id)}>
+                    Claim this collection
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
