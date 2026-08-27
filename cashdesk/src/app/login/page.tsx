@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, setToken, type StaffUser } from "@/lib/api";
+import { api, API_BASE, setToken, type StaffUser } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
@@ -26,7 +26,9 @@ export default function LoginPage() {
       setToken(res.token);
       router.replace(res.user.role === "manager" ? "/manager" : "/employee");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      const message = err instanceof Error ? err.message : "Login failed";
+      console.error("[Cash Desk login]", { api: API_BASE, email, error: message });
+      setError(`${message} (API: ${API_BASE})`);
     } finally {
       setLoading(false);
     }
@@ -39,7 +41,10 @@ export default function LoginPage() {
         <CardHeader>
           <p className="font-serif text-3xl text-teal-950">Cash Desk</p>
           <CardTitle className="text-lg">Sign in</CardTitle>
-          <CardDescription>Employees collect cash. Managers oversee deposits and ledger.</CardDescription>
+          <CardDescription>
+            Employees collect cash. Managers oversee deposits and ledger. Sign in with the manager
+            email set in Railway as <code className="text-xs">STAFF_BOOTSTRAP_MANAGER_EMAIL</code>.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={onSubmit}>

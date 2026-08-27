@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -14,6 +15,7 @@ from app.deps.staff import STAFF_COOKIE, get_current_staff
 from app.models.staff_user import StaffUser
 from app.services.staff_auth import authenticate_staff, create_access_token
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 
 
@@ -34,10 +36,20 @@ def _user_public(user: StaffUser) -> dict[str, Any]:
 
 @router.post("/login")
 def staff_login(body: LoginBody, response: Response, db: Session = Depends(get_db)) -> dict[str, Any]:
-    user = authenticate_staff(db, body.email, body.password)
+    email = body.email.strip().lower()
+    logger.info("Staff login attempt email=%s", email)
+    user = authenticate_staff(db, email, body.password)
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_access_token(user)
+        logger.warning("Staff login failed email=%s reason=invalid_credentials", email)
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password. Use the Cash Desk manager email from STAFF_BOOTSTRAP_MANAGER_EMAIL.",
+        )
+    try:
+        token = create_access_token(user)
+    except RuntimeError as exc:
+        logger.exception("Staff login failed email=%s reason=jwt_not_configured", email)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     settings = get_settings()
     response.set_cookie(
         key=STAFF_COOKIE,
@@ -48,6 +60,7 @@ def staff_login(body: LoginBody, response: Response, db: Session = Depends(get_d
         max_age=max(1, settings.staff_jwt_ttl_hours) * 3600,
         path="/",
     )
+    logger.info("Staff login ok email=%s role=%s user_id=%s", user.email, user.role, user.id)
     return {"token": token, "user": _user_public(user)}
 
 

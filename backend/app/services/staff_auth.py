@@ -76,8 +76,8 @@ def authenticate_staff(db: Session, email: str, password: str) -> StaffUser | No
     return user
 
 
-def bootstrap_manager_if_needed(db: Session, settings: Settings | None = None) -> StaffUser | None:
-    """Create the first manager from env when no manager exists yet."""
+def sync_bootstrap_manager_credentials(db: Session, settings: Settings | None = None) -> StaffUser | None:
+    """Ensure bootstrap manager exists and password matches env (safe for redeploy password reset)."""
     settings = settings or get_settings()
     email = (settings.staff_bootstrap_manager_email or "").strip().lower()
     password = settings.staff_bootstrap_manager_password or ""
@@ -85,19 +85,16 @@ def bootstrap_manager_if_needed(db: Session, settings: Settings | None = None) -
     if not email or not password:
         return None
 
-    existing_manager = db.scalar(select(StaffUser).where(StaffUser.role == ROLE_MANAGER).limit(1))
-    if existing_manager:
-        return None
-
-    existing = db.scalar(select(StaffUser).where(StaffUser.email == email))
-    if existing:
-        existing.role = ROLE_MANAGER
-        existing.is_active = True
-        existing.password_hash = hash_password(password)
-        existing.name = name or existing.name
+    user = db.scalar(select(StaffUser).where(StaffUser.email == email))
+    if user:
+        user.role = ROLE_MANAGER
+        user.is_active = True
+        user.password_hash = hash_password(password)
+        if name:
+            user.name = name
         db.commit()
-        db.refresh(existing)
-        return existing
+        db.refresh(user)
+        return user
 
     user = StaffUser(
         email=email,
@@ -110,3 +107,8 @@ def bootstrap_manager_if_needed(db: Session, settings: Settings | None = None) -
     db.commit()
     db.refresh(user)
     return user
+
+
+def bootstrap_manager_if_needed(db: Session, settings: Settings | None = None) -> StaffUser | None:
+    """Create or refresh the bootstrap manager from env."""
+    return sync_bootstrap_manager_credentials(db, settings)

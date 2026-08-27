@@ -68,6 +68,11 @@ async def lifespan(_app: FastAPI):
             created = bootstrap_manager_if_needed(db, settings)
             if created:
                 logger.info("Cash Desk bootstrap manager ready email=%s", created.email)
+            elif (settings.staff_bootstrap_manager_email or "").strip():
+                logger.info(
+                    "Cash Desk bootstrap manager email=%s (existing manager kept if different)",
+                    settings.staff_bootstrap_manager_email.strip().lower(),
+                )
         finally:
             db.close()
     except Exception:
