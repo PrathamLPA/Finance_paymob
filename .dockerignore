@@ -1,0 +1,14 @@
+**/.git
+**/.next
+**/node_modules
+**/__pycache__
+**/.venv
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.local.example
+cashdesk/out
+frontend/app/cashdesk_static
+backend/storage
+_ui_ref
+*.zip

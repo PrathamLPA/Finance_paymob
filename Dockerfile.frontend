@@ -1,0 +1,19 @@
+# Frontend + Cash Desk static export (build context = repository root)
+FROM node:20-alpine AS cashdesk-build
+WORKDIR /build/cashdesk
+COPY cashdesk/package.json cashdesk/package-lock.json ./
+RUN npm ci
+COPY cashdesk/ ./
+ARG NEXT_PUBLIC_API_BASE_URL=https://b2c-finance-and-ops-backend-production.up.railway.app
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+RUN npm run build
+
+FROM python:3.11-slim
+WORKDIR /app
+COPY frontend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY frontend/ .
+COPY --from=cashdesk-build /build/cashdesk/out ./app/cashdesk_static
+RUN chmod +x start.sh
+EXPOSE 3000
+CMD ["sh", "start.sh"]
