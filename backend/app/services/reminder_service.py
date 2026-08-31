@@ -150,11 +150,14 @@ class ReminderService:
             installment_number = 1
 
         from app.services.cash_collection_service import CashCollectionService
-        from app.services.payment_mode import is_cash_payment_mode
+        from app.services.payment_mode import resolve_is_cash_payment_mode
 
         number_for_mode = installment_number or 1
-        if is_cash_payment_mode(
-            lead, installment_number=number_for_mode, settings=self.settings
+        if await resolve_is_cash_payment_mode(
+            lead,
+            installment_number=number_for_mode,
+            settings=self.settings,
+            bitrix=self.bitrix,
         ):
             CashCollectionService(self.db, self.settings).enqueue_from_workflow(
                 workflow,

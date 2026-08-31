@@ -389,12 +389,15 @@ async def bitrix24_webhook(
         active_session = orchestrator.session_service.get_active_session_for_workflow(workflow)
         if active_session:
             from app.services.installment_plan import charge_installment_number_for_workflow
-            from app.services.payment_mode import is_cash_payment_mode
+            from app.services.payment_mode import resolve_is_cash_payment_mode
 
             await orchestrator.sync_workflow_from_lead(workflow, lead)
             mode_installment = charge_installment_number_for_workflow(workflow) or 1
-            if is_cash_payment_mode(
-                lead, installment_number=mode_installment, settings=settings
+            if await resolve_is_cash_payment_mode(
+                lead,
+                installment_number=mode_installment,
+                settings=settings,
+                bitrix=orchestrator.bitrix,
             ):
                 expired = orchestrator.session_service.expire_active_sessions_for_workflow(
                     workflow

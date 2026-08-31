@@ -649,14 +649,17 @@ class WorkflowOrchestrator:
             CashCollectionService,
         )
         from app.services.installment_plan import charge_installment_number_for_workflow
-        from app.services.payment_mode import is_cash_payment_mode
+        from app.services.payment_mode import resolve_is_cash_payment_mode
 
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
         number_for_mode = installment_number or 1
-        if is_cash_payment_mode(
-            lead, installment_number=number_for_mode, settings=self.settings
+        if await resolve_is_cash_payment_mode(
+            lead,
+            installment_number=number_for_mode,
+            settings=self.settings,
+            bitrix=self.bitrix,
         ):
             expired = self.session_service.expire_active_sessions_for_workflow(workflow)
             if expired:
@@ -1380,14 +1383,17 @@ class WorkflowOrchestrator:
             CashCollectionService,
         )
         from app.services.installment_plan import charge_installment_number_for_workflow
-        from app.services.payment_mode import is_cash_payment_mode
+        from app.services.payment_mode import resolve_is_cash_payment_mode
 
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
         number_for_mode = installment_number or 1
-        if is_cash_payment_mode(
-            lead, installment_number=number_for_mode, settings=self.settings
+        if await resolve_is_cash_payment_mode(
+            lead,
+            installment_number=number_for_mode,
+            settings=self.settings,
+            bitrix=self.bitrix,
         ):
             expired = self.session_service.expire_active_sessions_for_workflow(workflow)
             if expired:

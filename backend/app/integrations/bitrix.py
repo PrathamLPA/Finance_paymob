@@ -187,6 +187,20 @@ class MockBitrixClient:
             "STATUS_ID": self.settings.bitrix_lead_payment_stage_id,
         }
 
+    async def get_lead_userfield_enum_map(self, field_name: str) -> dict[str, str]:
+        """Mock Payment Mode enums including the live Cash ID 5774."""
+        if not field_name:
+            return {}
+        return {
+            "5774": "cash",
+            "5786": "cash",
+            "5788": "online",
+            "5790": "bank_transfer",
+            "5792": "purchase_order",
+            "5794": "tabby",
+            "5796": "others",
+        }
+
     async def get_deal(self, deal_id: int) -> dict[str, Any]:
         if deal_id in self._mock_deals:
             return self._mock_deals[deal_id]
@@ -501,6 +515,46 @@ class RealBitrixClient:
 
     async def get_lead(self, lead_id: int) -> dict[str, Any]:
         return await self._call("crm.lead.get", {"id": lead_id})
+
+    async def get_lead_userfield_enum_map(self, field_name: str) -> dict[str, str]:
+        """Return {enum_id: label_lower} for a lead UF enumeration field (cached)."""
+        if not field_name:
+            return {}
+        cache: dict[str, dict[str, str]] = getattr(self, "_uf_enum_cache", {})
+        if not hasattr(self, "_uf_enum_cache"):
+            self._uf_enum_cache = cache
+        if field_name in cache:
+            return cache[field_name]
+
+        result = await self._call(
+            "crm.lead.userfield.list",
+            {"filter": {"FIELD_NAME": field_name}},
+        )
+        rows: Any = result
+        if isinstance(result, dict) and "result" in result:
+            rows = result.get("result")
+        if not isinstance(rows, list):
+            rows = [rows] if rows else []
+
+        labels: dict[str, str] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            for item in row.get("LIST") or []:
+                if not isinstance(item, dict):
+                    continue
+                enum_id = str(item.get("ID") or "").strip()
+                value = str(item.get("VALUE") or "").strip().lower()
+                if enum_id and value:
+                    labels[enum_id] = value
+
+        cache[field_name] = labels
+        logger.info(
+            "Loaded Bitrix lead userfield enums | field=%s count=%s",
+            field_name,
+            len(labels),
+        )
+        return labels
 
     async def get_deal(self, deal_id: int) -> dict[str, Any]:
         return await self._call("crm.deal.get", {"id": deal_id})

@@ -86,11 +86,14 @@ class Settings(BaseSettings):
     bitrix_field_payment_3_mode: str = "UF_CRM_1684374256836"
     bitrix_field_payment_4_mode: str = "UF_CRM_1684374451274"
     # Payment mode list enum IDs → labels (Cash / Online / …)
+    # Include both historic and current Bitrix list IDs when the list was recreated.
     bitrix_payment_mode_enum_map: str = (
-        "5786:cash,5788:online,5790:bank_transfer,5792:purchase_order,5794:tabby,5796:others"
+        "5774:cash,5786:cash,5788:online,5790:bank_transfer,"
+        "5792:purchase_order,5794:tabby,5796:others"
     )
     # Comma-separated Bitrix enum IDs treated as Cash (skip Paymob, enqueue cash desk)
-    cash_mode_enum_ids: str = "5786"
+    # 5774 is the Cash ID currently returned by Learners Point Bitrix for Payment 1 Mode.
+    cash_mode_enum_ids: str = "5774,5786"
     # Cash Desk staff JWT + bootstrap manager
     staff_jwt_secret: str = ""
     staff_jwt_ttl_hours: int = 12
