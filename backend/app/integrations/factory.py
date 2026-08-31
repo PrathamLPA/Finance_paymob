@@ -29,9 +29,12 @@ def get_paymob_client(settings: Settings | None = None):
 
 def get_zoho_client(settings: Settings | None = None):
     settings = settings or get_settings()
-    if settings.use_mock_integrations or not settings.zoho_refresh_token:
+    if settings.use_mock_integrations:
         return MockZohoBooksClient(settings)
-    return RealZohoBooksClient(settings)
+    # Real client even without refresh token so OAuth setup endpoints work.
+    if settings.zoho_client_id or settings.zoho_refresh_token:
+        return RealZohoBooksClient(settings)
+    return MockZohoBooksClient(settings)
 
 
 def get_email_client(settings: Settings | None = None):

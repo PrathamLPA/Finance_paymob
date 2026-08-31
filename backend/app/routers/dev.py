@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.config import get_settings
 from app.integrations.factory import get_bitrix_client
 from app.services.seed_mock_data import seed_mock_data
 from app.services.workflow_orchestrator import WorkflowOrchestrator
@@ -128,3 +129,148 @@ async def process_reminders(db: Session = Depends(get_db)) -> dict[str, Any]:
 async def seed_mock_customers(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Seed mock customers with Paymob-shaped payment data for Supabase visualization."""
     return seed_mock_data(db)
+
+
+class ZohoExchangeCodeRequest(BaseModel):
+    code: str = Field(..., description="Authorization code returned by Zoho OAuth redirect")
+
+
+@router.get("/zoho/status")
+async def zoho_status() -> dict[str, Any]:
+    """Check Zoho Books connection and list organizations when credentials work."""
+    from app.integrations.factory import get_zoho_client
+    from app.integrations.zoho import ZohoBooksApiError
+
+    settings = get_settings()
+    client = get_zoho_client(settings)
+    try:
+        result = await client.test_connection()
+    except ZohoBooksApiError as exc:
+        return {
+            "ok": False,
+            "mode": "live_error",
+            "error_code": exc.code,
+            "message": exc.message,
+            "status_code": exc.status_code,
+            "use_mock_integrations": settings.use_mock_integrations,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "mode": "error",
+            "message": str(exc),
+            "use_mock_integrations": settings.use_mock_integrations,
+        }
+    result["use_mock_integrations"] = settings.use_mock_integrations
+    result["has_client_id"] = bool(settings.zoho_client_id)
+    result["has_refresh_token"] = bool(settings.zoho_refresh_token)
+    result["has_organization_id"] = bool(settings.zoho_organization_id)
+    return result
+
+
+@router.get("/zoho/oauth-url")
+async def zoho_oauth_url(state: str = "zoho-books-connect") -> dict[str, Any]:
+    """Build the Zoho OAuth authorize URL (open in browser to connect Books)."""
+    from app.integrations.zoho import RealZohoBooksClient
+
+    settings = get_settings()
+    if settings.use_mock_integrations:
+        raise HTTPException(
+            status_code=400,
+            detail="Set USE_MOCK_INTEGRATIONS=false before connecting real Zoho Books.",
+        )
+    try:
+        client = RealZohoBooksClient(settings)
+        url = client.build_authorization_url(state=state)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "authorization_url": url,
+        "redirect_uri": settings.zoho_oauth_redirect_uri,
+        "scopes": settings.zoho_oauth_scopes,
+        "accounts_url": settings.zoho_accounts_url,
+        "instructions": [
+            "1. Register a Server-based client at https://api-console.zoho.com/ (or .ae for UAE).",
+            "2. Add the same Redirect URI as ZOHO_OAUTH_REDIRECT_URI.",
+            "3. Open authorization_url, approve access, copy ?code= from the redirect.",
+            "4. POST /api/dev/zoho/exchange-code with that code.",
+            "5. Put refresh_token into ZOHO_REFRESH_TOKEN on Railway.",
+            "6. GET /api/dev/zoho/status and set ZOHO_ORGANIZATION_ID from organizations list.",
+        ],
+    }
+
+
+@router.post("/zoho/exchange-code")
+async def zoho_exchange_code(body: ZohoExchangeCodeRequest) -> dict[str, Any]:
+    """Exchange Zoho authorization code for refresh_token (paste into Railway env)."""
+    from app.integrations.zoho import RealZohoBooksClient, ZohoBooksApiError
+
+    settings = get_settings()
+    if settings.use_mock_integrations:
+        raise HTTPException(
+            status_code=400,
+            detail="Set USE_MOCK_INTEGRATIONS=false before connecting real Zoho Books.",
+        )
+    client = RealZohoBooksClient(settings)
+    try:
+        tokens = await client.exchange_authorization_code(body.code)
+    except (RuntimeError, ZohoBooksApiError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    orgs: list[dict[str, Any]] = []
+    org_error = None
+    try:
+        orgs = await client.list_organizations()
+    except Exception as exc:
+        org_error = str(exc)
+
+    return {
+        "ok": True,
+        "refresh_token": tokens["refresh_token"],
+        "expires_in": tokens.get("expires_in"),
+        "api_domain": tokens.get("api_domain"),
+        "organizations": orgs,
+        "organization_list_error": org_error,
+        "next_steps": [
+            "Set ZOHO_REFRESH_TOKEN to refresh_token on Railway (keep secret).",
+            "Set ZOHO_ORGANIZATION_ID from organizations[].organization_id.",
+            "If api_domain suggests .ae/.eu, set ZOHO_ACCOUNTS_URL and ZOHO_BOOKS_API_URL for that DC.",
+            "Redeploy backend, then GET /api/dev/zoho/status.",
+        ],
+    }
+
+
+@router.get("/zoho/oauth-callback")
+async def zoho_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Landing page for Zoho OAuth redirect — shows the code to exchange next."""
+    if error:
+        return {"ok": False, "error": error, "state": state}
+    if not code:
+        return {
+            "ok": False,
+            "message": "Missing code. Use /api/dev/zoho/oauth-url to start OAuth again.",
+        }
+    return {
+        "ok": True,
+        "code": code,
+        "state": state,
+        "next": "POST /api/dev/zoho/exchange-code with JSON {\"code\": \"...\"}",
+    }
+
+
+@router.get("/zoho/organizations")
+async def zoho_organizations() -> dict[str, Any]:
+    """List Zoho Books organizations for the connected refresh token."""
+    from app.integrations.factory import get_zoho_client
+    from app.integrations.zoho import ZohoBooksApiError
+
+    client = get_zoho_client()
+    try:
+        orgs = await client.list_organizations()
+    except (RuntimeError, ZohoBooksApiError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"organizations": orgs}

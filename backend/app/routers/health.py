@@ -49,8 +49,10 @@ async def ready(db: Session = Depends(get_db)) -> dict:
 
     checks["payment_required_percent"] = str(settings.payment_required_percent)
     checks["reminders"] = "enabled" if settings.reminder_enabled else "disabled"
-    if settings.zoho_refresh_token and not settings.use_mock_integrations:
+    if settings.zoho_refresh_token and settings.zoho_organization_id and not settings.use_mock_integrations:
         checks["zoho"] = "configured"
+    elif settings.zoho_client_id and not settings.use_mock_integrations:
+        checks["zoho"] = "client_only_incomplete"
     else:
         checks["zoho"] = "mock_or_unset"
 

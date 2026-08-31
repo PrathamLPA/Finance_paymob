@@ -128,13 +128,21 @@ class Settings(BaseSettings):
     paymob_base_url: str = "https://accept.paymob.com"
     paymob_checkout_base_url: str = "https://accept.paymob.com/unifiedcheckout/"
 
-    # Zoho Books
+    # Zoho Books (https://www.zoho.com/books/api/v3/oauth/)
     zoho_client_id: str = ""
     zoho_client_secret: str = ""
     zoho_refresh_token: str = ""
     zoho_organization_id: str = ""
+    # Data center: .com / .ae / .eu / .in — must match the Zoho Books org region
     zoho_accounts_url: str = "https://accounts.zoho.com"
     zoho_books_api_url: str = "https://www.zohoapis.com/books/v3"
+    # Must match the redirect URI registered on the Zoho API Console client
+    zoho_oauth_redirect_uri: str = ""
+    zoho_oauth_scopes: str = (
+        "ZohoBooks.contacts.CREATE,ZohoBooks.contacts.READ,"
+        "ZohoBooks.invoices.CREATE,ZohoBooks.invoices.READ,ZohoBooks.invoices.UPDATE,"
+        "ZohoBooks.customerpayments.CREATE,ZohoBooks.settings.READ"
+    )
     # Optional catalog item; if empty, invoices use ad-hoc line items
     zoho_default_item_id: str = ""
 
