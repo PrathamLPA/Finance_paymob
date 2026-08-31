@@ -658,6 +658,13 @@ class WorkflowOrchestrator:
         if is_cash_payment_mode(
             lead, installment_number=number_for_mode, settings=self.settings
         ):
+            expired = self.session_service.expire_active_sessions_for_workflow(workflow)
+            if expired:
+                logger.info(
+                    "Expired %s online payment session(s) before cash queue | lead_id=%s",
+                    expired,
+                    lead_id,
+                )
             cash = CashCollectionService(self.db, self.settings)
             collection = cash.enqueue_from_workflow(
                 workflow,
@@ -1382,6 +1389,13 @@ class WorkflowOrchestrator:
         if is_cash_payment_mode(
             lead, installment_number=number_for_mode, settings=self.settings
         ):
+            expired = self.session_service.expire_active_sessions_for_workflow(workflow)
+            if expired:
+                logger.info(
+                    "Expired %s online payment session(s) before cash queue | lead_id=%s",
+                    expired,
+                    lead_id,
+                )
             cash = CashCollectionService(self.db, self.settings)
             collection = cash.enqueue_from_workflow(
                 workflow,

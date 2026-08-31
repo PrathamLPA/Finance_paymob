@@ -85,6 +85,18 @@ def payment_mode_label(
     return enum_id.lower()
 
 
+def _mode_fields_snapshot(lead: dict[str, Any] | None, settings: Settings) -> dict[str, Any]:
+    """Debug helper: raw values for all installment payment-mode fields."""
+    out: dict[str, Any] = {}
+    if not lead:
+        return out
+    for n in (1, 2, 3, 4):
+        field = payment_mode_field_for_installment(settings, n)
+        if field:
+            out[f"{n}:{field}"] = lead.get(field)
+    return out
+
+
 def is_cash_payment_mode(
     lead: dict[str, Any] | None,
     *,
@@ -96,27 +108,55 @@ def is_cash_payment_mode(
     enum_id = payment_mode_enum_id(
         lead, installment_number=installment_number, settings=settings
     )
+    checked_installment = installment_number
+
+    # If the charge installment mode is blank, fall back to any Cash mode on 1-4.
+    if not enum_id and lead:
+        for n in (1, 2, 3, 4):
+            if n == installment_number:
+                continue
+            alt = payment_mode_enum_id(lead, installment_number=n, settings=settings)
+            if not alt:
+                continue
+            alt_label = payment_mode_label(lead, installment_number=n, settings=settings)
+            if alt in cash_mode_enum_ids(settings) or (alt_label or "").strip().lower() == "cash":
+                enum_id = alt
+                checked_installment = n
+                field = payment_mode_field_for_installment(settings, n)
+                raw = lead.get(field) if field else None
+                logger.info(
+                    "Payment mode fallback | charge_installment=%s used_installment=%s "
+                    "field=%s raw=%r",
+                    installment_number,
+                    n,
+                    field or "-",
+                    raw,
+                )
+                break
+
     if not enum_id:
         logger.info(
             "Payment mode check | installment=%s field=%s raw=%r result=not_cash "
-            "reason=missing_or_empty",
+            "reason=missing_or_empty modes=%s",
             installment_number,
             field or "-",
             raw,
+            _mode_fields_snapshot(lead, settings),
         )
         return False
 
     cash_ids = cash_mode_enum_ids(settings)
     label = payment_mode_label(
-        lead, installment_number=installment_number, settings=settings
+        lead, installment_number=checked_installment, settings=settings
     )
     by_id = enum_id in cash_ids
     by_label = (label or "").strip().lower() == "cash"
     is_cash = by_id or by_label
     logger.info(
-        "Payment mode check | installment=%s field=%s raw=%r enum=%s label=%s "
-        "cash_ids=%s result=%s",
+        "Payment mode check | installment=%s checked=%s field=%s raw=%r enum=%s "
+        "label=%s cash_ids=%s result=%s",
         installment_number,
+        checked_installment,
         field or "-",
         raw,
         enum_id,

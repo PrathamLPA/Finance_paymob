@@ -135,6 +135,24 @@ class PaymentSessionService:
         self.db.commit()
         return None
 
+    def expire_active_sessions_for_workflow(self, workflow: CustomerWorkflow) -> int:
+        """Mark pending/terms-accepted sessions expired (e.g. switching to Cash)."""
+        sessions = list(
+            self.db.scalars(
+                select(PaymentSession).where(
+                    PaymentSession.workflow_id == workflow.id,
+                    PaymentSession.status.in_((SESSION_PENDING, SESSION_TERMS_ACCEPTED)),
+                )
+            ).all()
+        )
+        count = 0
+        for session in sessions:
+            session.status = SESSION_EXPIRED
+            count += 1
+        if count:
+            self.db.commit()
+        return count
+
     async def get_or_create_reusable_session(
         self,
         workflow: CustomerWorkflow,
