@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,8 @@ from app.models.payment_session import (
     PaymentSession,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -39,6 +42,42 @@ class PaymentSessionService:
         self.db = db
         self.settings = settings or get_settings()
         self.paymob = get_paymob_client(self.settings)
+
+    async def _create_paymob_session(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        amount: Decimal,
+        currency: str,
+        merchant_reference: str,
+        trigger: str,
+    ):
+        try:
+            return await self.paymob.create_payment_session(
+                amount=amount,
+                currency=currency,
+                merchant_reference=merchant_reference,
+                customer_email=workflow.customer_email,
+                customer_name=workflow.customer_name,
+            )
+        except ValueError as exc:
+            msg = str(exc)
+            if "Paymob intention failed" in msg:
+                from app.services.workflow_orchestrator import WorkflowOrchestrator
+
+                orchestrator = WorkflowOrchestrator(self.db, self.settings)
+                try:
+                    await orchestrator.notify_paymob_link_failure(
+                        workflow,
+                        reason=msg,
+                        trigger=trigger,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to notify Bitrix about Paymob error for lead %s",
+                        workflow.bitrix_lead_id,
+                    )
+            raise
 
     def get_session_by_token(self, token: str) -> PaymentSession | None:
         return self.db.scalar(select(PaymentSession).where(PaymentSession.token == token))
@@ -163,12 +202,12 @@ class PaymentSessionService:
         amount = Decimal(amount).quantize(Decimal("0.01"))
 
         merchant_reference = f"WF-{workflow.id}-{uuid.uuid4().hex[:8]}"
-        paymob_session = await self.paymob.create_payment_session(
+        paymob_session = await self._create_paymob_session(
+            workflow,
             amount=amount,
             currency=workflow.currency,
             merchant_reference=merchant_reference,
-            customer_email=workflow.customer_email,
-            customer_name=workflow.customer_name,
+            trigger="new payment session",
         )
 
         token = secrets.token_urlsafe(32)
@@ -203,12 +242,12 @@ class PaymentSessionService:
         if amount is not None:
             session.charge_amount = amount
         new_reference = f"WF-{workflow.id}-{uuid.uuid4().hex[:8]}"
-        paymob_session = await self.paymob.create_payment_session(
+        paymob_session = await self._create_paymob_session(
+            workflow,
             amount=session.charge_amount,
             currency=session.currency,
             merchant_reference=new_reference,
-            customer_email=workflow.customer_email,
-            customer_name=workflow.customer_name,
+            trigger="payment link refresh",
         )
         session.merchant_reference = new_reference
         session.paymob_session_id = paymob_session.session_id

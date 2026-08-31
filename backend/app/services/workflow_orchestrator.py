@@ -604,6 +604,19 @@ class WorkflowOrchestrator:
                 f"(or BITRIX_FIELD_LEAD_AMOUNT) in Bitrix before requesting payment"
             )
 
+        # Refresh from Bitrix before cash/online branching so Payment Mode is current.
+        # Stale lead payloads caused Paymob emails when mode was Cash.
+        try:
+            fresh_lead = await self.bitrix.get_lead(lead_id)
+            if fresh_lead:
+                lead_data = fresh_lead
+                workflow.bitrix_lead_payload = fresh_lead
+                self.db.commit()
+        except Exception:
+            logger.exception(
+                "Could not refresh Bitrix lead %s before payment-mode check", lead_id
+            )
+
         lead = lead_data or workflow.bitrix_lead_payload or {}
         await self._capture_first_payment_snapshots(
             workflow,
@@ -852,6 +865,13 @@ class WorkflowOrchestrator:
             workflow.bitrix_estimate_id,
             approval.id,
         )
+        try:
+            lead = await self.bitrix.get_lead(approval.bitrix_lead_id) or lead
+        except Exception:
+            logger.exception(
+                "Could not refresh lead %s after manager approve",
+                approval.bitrix_lead_id,
+            )
         return await self.initiate_payment_from_lead(
             approval.bitrix_lead_id,
             lead_data=lead,
@@ -1686,6 +1706,53 @@ class WorkflowOrchestrator:
             f"({pct:.0f}%)\n"
             f"Remaining: {workflow.remaining_balance} {workflow.currency}\n"
             f"Status: {workflow.payment_status}"
+        )
+
+    @staticmethod
+    def _paymob_failure_summary(reason: str) -> str:
+        lower = reason.lower()
+        if "valid email" in lower or ('billing_data' in lower and '"email"' in lower):
+            return "Invalid customer email — Paymob rejected the billing email."
+        return reason
+
+    async def notify_paymob_link_failure(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        reason: str,
+        trigger: str = "payment link",
+    ) -> None:
+        """Alert the lead owner in Bitrix when Paymob refuses to create a checkout session."""
+        email_on_file = (workflow.customer_email or "").strip() or "(missing or blank)"
+        summary = self._paymob_failure_summary(reason)
+        if "valid email" in reason.lower():
+            comment = (
+                f"Payment link blocked — invalid customer email\n"
+                f"Paymob rejected the billing email: {email_on_file}\n"
+                f"Trigger: {trigger}\n"
+                f"Please correct the email on the lead and generate a new payment link."
+            )
+        else:
+            comment = (
+                f"Payment link could not be created\n"
+                f"Trigger: {trigger}\n"
+                f"Issue: {summary}\n"
+                f"Email on file: {email_on_file}\n"
+                f"Action: Fix the issue on the lead, then re-open the payment stage "
+                f"or use Send payment link."
+            )
+        logger.warning(
+            "Paymob link failure | lead_id=%s trigger=%s email=%s reason=%s",
+            workflow.bitrix_lead_id,
+            trigger,
+            email_on_file,
+            summary,
+        )
+        await self._comment_on_workflow_entities(workflow, comment)
+        await self._notify_assigned_agent(
+            workflow,
+            subject=f"Payment link failed — Lead {workflow.bitrix_lead_id}",
+            body=comment,
         )
 
     async def _comment_on_workflow_entities(self, workflow: CustomerWorkflow, comment: str) -> None:

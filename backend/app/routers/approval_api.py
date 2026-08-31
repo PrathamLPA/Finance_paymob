@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.services.cash_collection_service import CashCollectionQueued
 from app.services.price_approval_service import PriceApprovalService
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
@@ -51,12 +52,29 @@ async def approve_price(token: str, body: DecisionBody, db: Session = Depends(ge
             product_prices=[p.model_dump() for p in body.product_prices],
             installment_overrides=[i.model_dump() for i in body.installments],
         )
+    except CashCollectionQueued as exc:
+        collection = exc.collection
+        return {
+            "status": "approved",
+            "cash_queued": True,
+            "collection_id": collection.id,
+            "installment_number": collection.installment_number,
+            "due_amount": str(collection.due_amount),
+            "currency": collection.currency,
+            "lead_id": collection.bitrix_lead_id,
+            "payment_url": None,
+            "message": (
+                "Payment mode is Cash — no Paymob link was sent. "
+                "Collect cash in Cash Desk."
+            ),
+        }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     payment_url = orchestrator.session_service.build_payment_url(session.token)
     return {
         "status": "approved",
+        "cash_queued": False,
         "payment_url": payment_url,
         "lead_id": session.source_id if session.source_type == "lead" else None,
         "workflow_id": session.workflow_id,
