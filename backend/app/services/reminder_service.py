@@ -129,12 +129,12 @@ class ReminderService:
         refreshing_expired = self._needs_expired_link_refresh(workflow)
 
         lead = self._lead_payload(workflow)
+        orchestrator = WorkflowOrchestrator(self.db, self.settings)
         try:
             fresh = await self.bitrix.get_lead(workflow.bitrix_lead_id)
             if fresh:
                 lead = fresh
-                workflow.bitrix_lead_payload = fresh
-                self.db.commit()
+                await orchestrator.sync_workflow_from_lead(workflow, lead=fresh)
         except Exception:
             logger.exception("Could not refresh Bitrix lead %s for reminder", workflow.bitrix_lead_id)
 
@@ -186,14 +186,46 @@ class ReminderService:
         ):
             channel = CHANNEL_BANK_TRANSFER
 
-        session = await self.session_service.get_or_create_reusable_session(
-            workflow,
-            charge_amount=plan.amount,
-            charge_source=plan.source,
-            amount_locked=plan.locked,
-            installment_number=installment_number,
-            channel=channel,
-        )
+        if channel == CHANNEL_ONLINE and orchestrator.is_known_invalid_paymob_email(workflow):
+            logger.info(
+                "Reminder skipped quietly — known invalid Paymob email | "
+                "workflow_id=%s lead_id=%s email=%s",
+                workflow.id,
+                workflow.bitrix_lead_id,
+                (workflow.customer_email or "").strip() or "(missing)",
+            )
+            workflow.last_reminder_at = self._utcnow()
+            self.db.commit()
+            return None
+
+        try:
+            session = await self.session_service.get_or_create_reusable_session(
+                workflow,
+                charge_amount=plan.amount,
+                charge_source=plan.source,
+                amount_locked=plan.locked,
+                installment_number=installment_number,
+                channel=channel,
+            )
+        except ValueError as exc:
+            reason = str(exc)
+            if (
+                channel == CHANNEL_ONLINE
+                and "Paymob intention failed" in reason
+                and WorkflowOrchestrator._is_invalid_email_paymob_reason(reason)
+            ):
+                # notify_paymob_link_failure already ran inside session create
+                logger.warning(
+                    "Reminder deferred — Paymob rejected billing email | "
+                    "workflow_id=%s lead_id=%s email=%s",
+                    workflow.id,
+                    workflow.bitrix_lead_id,
+                    (workflow.customer_email or "").strip() or "(missing)",
+                )
+                workflow.last_reminder_at = self._utcnow()
+                self.db.commit()
+                return None
+            raise
         if channel == CHANNEL_BANK_TRANSFER:
             BankTransferService(self.db, self.settings).enqueue_for_session(
                 session, lead=lead
@@ -299,7 +331,11 @@ class ReminderService:
             try:
                 lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
                 if lead:
-                    workflow.bitrix_lead_payload = lead
+                    from app.services.workflow_orchestrator import WorkflowOrchestrator
+
+                    await WorkflowOrchestrator(self.db, self.settings).sync_workflow_from_lead(
+                        workflow, lead=lead
+                    )
             except Exception:
                 logger.exception("Could not refresh Bitrix lead %s before reminder scan", workflow.bitrix_lead_id)
         self.db.commit()

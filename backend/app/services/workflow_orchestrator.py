@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -195,8 +195,15 @@ class WorkflowOrchestrator:
         email, name = self.bitrix.extract_customer_details(lead)
         previous_email = (workflow.customer_email or "").strip().lower()
         new_email = (email or "").strip().lower()
-        if previous_email and new_email != previous_email:
+        if new_email != previous_email:
+            had_paymob_block = bool(workflow.last_paymob_failure_hash)
             workflow.last_paymob_failure_hash = None
+            # Email changed after a Paymob block — retry on the next reminder scan.
+            if had_paymob_block:
+                interval_hours = max(int(self.settings.reminder_interval_hours or 24), 1)
+                workflow.last_reminder_at = datetime.now(timezone.utc) - timedelta(
+                    hours=interval_hours
+                )
         workflow.customer_email = email
         workflow.customer_name = name
         phones = lead.get("PHONE") or []
@@ -1788,6 +1795,27 @@ class WorkflowOrchestrator:
         else:
             kind = "paymob_error"
         return f"{kind}:{normalized_email}"
+
+    @staticmethod
+    def _is_invalid_email_paymob_reason(reason: str) -> bool:
+        lower = (reason or "").lower()
+        return "valid email" in lower or ('billing_data' in lower and '"email"' in lower)
+
+    @classmethod
+    def invalid_email_failure_digest(cls, email: str) -> str:
+        state_key = cls._paymob_failure_state_key(
+            'billing_data":{"email":["Enter a valid email address."]}',
+            email,
+        )
+        return hashlib.sha256(state_key.encode("utf-8")).hexdigest()
+
+    def is_known_invalid_paymob_email(self, workflow: CustomerWorkflow) -> bool:
+        """True when Paymob already rejected this exact billing email (alert was sent)."""
+        if not workflow.last_paymob_failure_hash:
+            return False
+        return workflow.last_paymob_failure_hash == self.invalid_email_failure_digest(
+            workflow.customer_email or ""
+        )
 
     async def notify_paymob_link_failure(
         self,

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment — Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=8">
+    <link rel="stylesheet" href="/static/styles.css?v=9">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -193,7 +193,7 @@
                         <div>
                             <h2 class="section-heading" id="candidates-heading">Course candidates</h2>
                             <p class="terms-divider-hint">
-                                Assign every seat on this order. Picking a course reduces the seats left.
+                                Enter each candidate’s name and email. Courses on this order are shown below — no need to pick a course.
                             </p>
                         </div>
                     </div>
@@ -203,7 +203,7 @@
                         <li class="course-chip" data-product-id="{{ course.product_id }}">
                             <span class="course-chip-name">{{ course.product_name }}</span>
                             <span class="course-chip-qty">
-                                <span data-remaining>{{ course.quantity }}</span> of {{ course.quantity }} left
+                                {{ course.quantity }} seat{% if course.quantity != 1 %}s{% endif %}
                             </span>
                         </li>
                         {% endfor %}
@@ -418,64 +418,28 @@
             return '';
         }
 
-        function remainingExcluding(selectToIgnore) {
-            const remaining = {};
-            courses.forEach((c) => { remaining[String(c.product_id)] = Number(c.quantity); });
-            if (!seatCards) return remaining;
-            seatCards.querySelectorAll('.seat-course').forEach((select) => {
-                if (select === selectToIgnore) return;
-                const id = select.value;
-                if (id && remaining[id] !== undefined) remaining[id] -= 1;
+        function expandSeats() {
+            const seats = [];
+            courses.forEach((course) => {
+                const qty = Number(course.quantity) || 0;
+                for (let i = 0; i < qty; i++) {
+                    seats.push({
+                        product_id: Number(course.product_id),
+                        product_name: String(course.product_name || ''),
+                    });
+                }
             });
-            return remaining;
-        }
-
-        function refreshCourseInventory() {
-            const remaining = remainingExcluding(null);
-            document.querySelectorAll('.course-chip').forEach((chip) => {
-                const id = chip.getAttribute('data-product-id');
-                const left = remaining[String(id)] ?? 0;
-                const el = chip.querySelector('[data-remaining]');
-                if (el) el.textContent = Math.max(0, left);
-                chip.classList.toggle('depleted', left <= 0);
-            });
-        }
-
-        function rebuildCourseOptions() {
-            if (!seatCards) return;
-            seatCards.querySelectorAll('.seat-course').forEach((select) => {
-                const current = select.value || select.getAttribute('data-prior') || '';
-                const remaining = remainingExcluding(select);
-                const options = ['<option value="">Select course</option>'];
-                courses.forEach((course) => {
-                    const id = String(course.product_id);
-                    const left = remaining[id] ?? 0;
-                    if (left <= 0 && current !== id) return;
-                    options.push(
-                        '<option value="' + id + '"' + (current === id ? ' selected' : '') + '>' +
-                        course.product_name + ' (' + Math.max(left, 0) + ' left)' +
-                        '</option>'
-                    );
-                });
-                select.innerHTML = options.join('');
-                select.value = Array.from(select.options).some((o) => o.value === current) ? current : '';
-                select.removeAttribute('data-prior');
-            });
-            refreshCourseInventory();
+            return seats;
         }
 
         function collectParticipants() {
             if (!seatCards || !seatsRequired()) return [];
-            const names = Object.fromEntries(courses.map((c) => [String(c.product_id), c.product_name]));
-            return Array.from(seatCards.querySelectorAll('.seat-card')).map((card) => {
-                const productId = card.querySelector('.seat-course').value;
-                return {
-                    name: card.querySelector('.seat-name').value.trim(),
-                    email: card.querySelector('.seat-email').value.trim(),
-                    product_id: productId ? Number(productId) : 0,
-                    product_name: names[productId] || '',
-                };
-            });
+            return Array.from(seatCards.querySelectorAll('.seat-card')).map((card) => ({
+                name: card.querySelector('.seat-name').value.trim(),
+                email: card.querySelector('.seat-email').value.trim(),
+                product_id: Number(card.getAttribute('data-product-id') || 0),
+                product_name: card.getAttribute('data-product-name') || '',
+            }));
         }
 
         function seatsError() {
@@ -487,13 +451,6 @@
                 if (!person.name) return 'Enter the name for candidate ' + (i + 1) + '.';
                 if (!person.email || !person.email.includes('@')) {
                     return 'Enter a valid email for candidate ' + (i + 1) + '.';
-                }
-                if (!person.product_id) return 'Choose a course for candidate ' + (i + 1) + '.';
-            }
-            const remaining = remainingExcluding(null);
-            for (const course of courses) {
-                if ((remaining[String(course.product_id)] || 0) !== 0) {
-                    return '"' + course.product_name + '" still has seats left to assign.';
                 }
             }
             return '';
@@ -557,34 +514,41 @@
             );
         }
 
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
         function renderSeatCards() {
             if (!seatCards || totalSeats <= 0) return;
-            const html = [];
-            for (let i = 0; i < totalSeats; i++) {
+            const seats = expandSeats();
+            const html = seats.map((seat, i) => {
                 const prior = restored[i] || {};
-                const priorName = String(prior.name || '').replace(/"/g, '&quot;');
-                const priorEmail = String(prior.email || '').replace(/"/g, '&quot;');
-                html.push(
-                    '<article class="seat-card">' +
-                    '<div class="seat-card-header"><span class="seat-badge">Candidate ' + (i + 1) + '</span></div>' +
+                const priorName = escapeHtml(prior.name || '');
+                const priorEmail = escapeHtml(prior.email || '');
+                const courseName = escapeHtml(seat.product_name);
+                return (
+                    '<article class="seat-card" data-product-id="' + seat.product_id +
+                    '" data-product-name="' + courseName + '">' +
+                    '<div class="seat-card-header">' +
+                    '<span class="seat-badge">Candidate ' + (i + 1) + '</span>' +
+                    '</div>' +
                     '<div class="form-fields seat-fields">' +
                     '<label class="field field-full"><span class="field-label">Candidate name</span>' +
                     '<input type="text" class="field-input seat-name" placeholder="Full name" value="' + priorName + '"></label>' +
-                    '<label class="field"><span class="field-label">Candidate email</span>' +
+                    '<label class="field field-full"><span class="field-label">Candidate email</span>' +
                     '<input type="email" class="field-input seat-email" placeholder="name@example.com" value="' + priorEmail + '"></label>' +
-                    '<label class="field"><span class="field-label">Course</span>' +
-                    '<select class="field-input seat-course" data-prior="' + String(prior.product_id || '') + '"></select></label>' +
+                    '<div class="seat-course-detail">' +
+                    '<span class="field-label">Course on this order</span>' +
+                    '<p class="seat-course-name">' + courseName + '</p>' +
+                    '</div>' +
                     '</div></article>'
                 );
-            }
-            seatCards.innerHTML = html.join('');
-            seatCards.querySelectorAll('.seat-course').forEach((select) => {
-                select.addEventListener('change', () => {
-                    rebuildCourseOptions();
-                    updateSubmitState();
-                });
             });
-            rebuildCourseOptions();
+            seatCards.innerHTML = html.join('');
         }
 
         function bindToggleGroup(selector) {

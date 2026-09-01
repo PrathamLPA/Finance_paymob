@@ -559,6 +559,28 @@ body.error-page-body {
     margin: 0;
 }
 
+.seat-course-detail {
+    grid-column: 1 / -1;
+    margin-top: 0.15rem;
+    padding: 0.65rem 0.75rem;
+    background: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.seat-course-detail .field-label {
+    display: block;
+    margin-bottom: 0.2rem;
+}
+
+.seat-course-name {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--foreground);
+    line-height: 1.4;
+}
+
 /* ── Amount ── */
 .amount-summary {
     margin: 0 0 1.15rem;

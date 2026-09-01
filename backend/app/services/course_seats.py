@@ -114,7 +114,7 @@ def validate_participants(
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
             return f"Please enter a valid email for candidate {index}."
         if product_id not in allowed:
-            return f"Please choose a course for candidate {index}."
+            return f"Course assignment missing for candidate {index}."
         assigned[product_id] += 1
 
     for product_id, quantity in allowed.items():

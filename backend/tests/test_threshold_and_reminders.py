@@ -154,15 +154,17 @@ def test_expired_unpaid_link_is_refreshed_immediately(client, seed_lead, db_sess
 
 
 def test_reminder_paymob_invalid_email_notifies_bitrix(client, seed_lead, db_session):
-    """When Paymob rejects billing email, Bitrix gets a timeline comment and agent alert."""
+    """First invalid-email failure alerts Bitrix; later cycles skip quietly (no ERROR)."""
     from unittest.mock import AsyncMock, patch
 
-    seed_lead(320, email="good@test.com", amount=Decimal("1000"))
+    from app.models.payment_session import SESSION_EXPIRED, PaymentSession
+
+    seed_lead(320, email="not-a-valid-email", amount=Decimal("1000"))
     link = client.post(
         "/api/dev/send-payment-link",
         json={
             "lead_id": 320,
-            "customer_email": "good@test.com",
+            "customer_email": "not-a-valid-email",
             "customer_name": "Bad Email User",
             "total_amount": "1000",
         },
@@ -171,7 +173,10 @@ def test_reminder_paymob_invalid_email_notifies_bitrix(client, seed_lead, db_ses
 
     workflow = db_session.scalar(select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 320))
     assert workflow is not None
-    workflow.customer_email = "not-a-valid-email"
+    for session in db_session.scalars(
+        select(PaymentSession).where(PaymentSession.workflow_id == workflow.id)
+    ).all():
+        session.status = SESSION_EXPIRED
     workflow.last_reminder_at = datetime.now(timezone.utc) - timedelta(hours=48)
     db_session.commit()
 
@@ -194,8 +199,8 @@ def test_reminder_paymob_invalid_email_notifies_bitrix(client, seed_lead, db_ses
     assert result.status_code == 200
     body = result.json()
     assert body["due"] >= 1
-    assert body["sent"] == 0
-    assert any("320" in err for err in body["errors"])
+    assert body["sent"] >= 1
+    assert body["errors"] == []
 
     comments = bitrix._mock_comments.get(("LEAD", 320), [])
     assert len(comments) > comments_before
@@ -205,8 +210,14 @@ def test_reminder_paymob_invalid_email_notifies_bitrix(client, seed_lead, db_ses
         "invalid customer email" in n["message"].lower() for n in bitrix._mock_notifications
     )
 
-    comments_after_first = len(comments)
+    db_session.refresh(workflow)
+    assert workflow.last_paymob_failure_hash
+
+    comments_after_first = len(bitrix._mock_comments.get(("LEAD", 320), []))
     notifications_after_first = len(bitrix._mock_notifications)
+    workflow.last_reminder_at = datetime.now(timezone.utc) - timedelta(hours=48)
+    db_session.commit()
+
     with patch(
         "app.services.payment_session_service.get_paymob_client",
     ) as mock_factory:
@@ -217,5 +228,80 @@ def test_reminder_paymob_invalid_email_notifies_bitrix(client, seed_lead, db_ses
         repeat = client.post("/api/dev/process-reminders")
 
     assert repeat.status_code == 200
+    repeat_body = repeat.json()
+    assert repeat_body["errors"] == []
+    assert mock_paymob.create_payment_session.await_count == 0
     assert len(bitrix._mock_comments.get(("LEAD", 320), [])) == comments_after_first
     assert len(bitrix._mock_notifications) == notifications_after_first
+
+
+def test_reminder_retries_paymob_after_email_fixed(client, seed_lead, db_session):
+    """After Bitrix email changes, known-invalid block clears and Paymob is tried again."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.integrations.base import PaymobSession
+    from app.models.payment_session import SESSION_EXPIRED, PaymentSession
+
+    seed_lead(321, email="not-a-valid-email", amount=Decimal("1000"))
+    link = client.post(
+        "/api/dev/send-payment-link",
+        json={
+            "lead_id": 321,
+            "customer_email": "not-a-valid-email",
+            "customer_name": "Fix Email User",
+            "total_amount": "1000",
+        },
+    )
+    assert link.status_code == 200
+
+    workflow = db_session.scalar(select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 321))
+    assert workflow is not None
+    for session in db_session.scalars(
+        select(PaymentSession).where(PaymentSession.workflow_id == workflow.id)
+    ).all():
+        session.status = SESSION_EXPIRED
+    workflow.last_reminder_at = datetime.now(timezone.utc) - timedelta(hours=48)
+    db_session.commit()
+
+    paymob_error = ValueError(
+        'Paymob intention failed (400): {"billing_data":{"email":["Enter a valid email address."]}}'
+    )
+    with patch(
+        "app.services.payment_session_service.get_paymob_client",
+    ) as mock_factory:
+        mock_paymob = AsyncMock()
+        mock_paymob.create_payment_session.side_effect = paymob_error
+        mock_factory.return_value = mock_paymob
+        client.post("/api/dev/process-reminders")
+
+    db_session.refresh(workflow)
+    assert workflow.last_paymob_failure_hash
+
+    seed_lead(321, email="fixed@example.com", amount=Decimal("1000"))
+    for session in db_session.scalars(
+        select(PaymentSession).where(PaymentSession.workflow_id == workflow.id)
+    ).all():
+        session.status = SESSION_EXPIRED
+    workflow.last_reminder_at = datetime.now(timezone.utc) - timedelta(hours=48)
+    db_session.commit()
+
+    with patch(
+        "app.services.payment_session_service.get_paymob_client",
+    ) as mock_factory:
+        mock_paymob = AsyncMock()
+        mock_paymob.create_payment_session.return_value = PaymobSession(
+            session_id="sess-fixed",
+            checkout_url="https://paymob.test/checkout/fixed",
+            order_id="ORD-fixed",
+        )
+        mock_factory.return_value = mock_paymob
+
+        result = client.post("/api/dev/process-reminders")
+
+    assert result.status_code == 200
+    body = result.json()
+    assert body["errors"] == []
+    assert mock_paymob.create_payment_session.await_count >= 1
+    db_session.refresh(workflow)
+    assert (workflow.customer_email or "").lower() == "fixed@example.com"
+    assert workflow.last_paymob_failure_hash is None
