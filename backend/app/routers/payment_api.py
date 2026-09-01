@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import get_settings
 from app.db.session import get_db
 from app.integrations.factory import get_bitrix_client
-from app.models.payment_session import PaymentSession
+from app.models.payment_session import CHANNEL_BANK_TRANSFER, PaymentSession, SESSION_TERMS_ACCEPTED
+from app.services.bank_transfer_service import BankTransferService
 from app.services.course_seats import load_lead_courses, total_seats
 from app.services.installment_plan import schedule_payload
 from app.services.payment_session_service import PaymentSessionService
@@ -84,6 +85,7 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
     locked = bool(getattr(session, "amount_locked", True))
     charge_source = getattr(session, "charge_source", None) or "full"
     installment_number = getattr(session, "installment_number", None)
+    channel = getattr(session, "channel", None) or "online"
     schedule = schedule_payload(workflow)
     installment_count = len(schedule) or None
     current_due_date = None
@@ -104,11 +106,26 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
     payment_amount = Decimal(session.charge_amount)
     balance_after = max(workflow.remaining_balance - payment_amount, Decimal("0.00"))
 
+    bank_transfer: dict[str, Any] | None = None
+    if channel == CHANNEL_BANK_TRANSFER:
+        bt = BankTransferService(db)
+        submission = bt.get_by_session(session)
+        settings = session_service.settings
+        bank_transfer = {
+            "status": submission.status if submission else "awaiting_upload",
+            "instructions": settings.bank_transfer_instructions,
+            "has_proof": bool(submission and submission.proof_path),
+            "receipt_upload_url": session_service.build_receipt_upload_url(token),
+            "submission_id": submission.id if submission else None,
+        }
+
     bitrix = get_bitrix_client(session_service.settings)
     courses = await load_lead_courses(bitrix, workflow.bitrix_lead_id)
     return {
         "token": token,
         "status": session.status,
+        "channel": channel,
+        "bank_transfer": bank_transfer,
         "terms_version": context["terms_version"],
         "terms_html": context["terms_html"],
         "refund_policy_url": context["refund_policy_url"],
@@ -163,3 +180,100 @@ async def accept_payment_terms(
         participants=[p.model_dump() for p in body.participants],
     )
     return {"checkout_url": checkout_url}
+
+
+@router.get("/{token}/receipt")
+async def get_receipt_upload_context(
+    token: str, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    session_service = PaymentSessionService(db)
+    session = session_service.get_active_session_by_token(token)
+    if not session:
+        raise HTTPException(
+            status_code=404,
+            detail=session_service.describe_inactive_token(token),
+        )
+    if (getattr(session, "channel", None) or "") != CHANNEL_BANK_TRANSFER:
+        raise HTTPException(status_code=400, detail="This payment link is not for bank transfer.")
+    if session.status not in (SESSION_TERMS_ACCEPTED,):
+        raise HTTPException(
+            status_code=400,
+            detail="Please accept the Terms and Conditions before uploading a receipt.",
+        )
+
+    bt = BankTransferService(db, session_service.settings)
+    submission = bt.get_by_session(session) or bt.enqueue_for_session(session)
+    workflow = session.workflow
+    return {
+        "token": token,
+        "status": submission.status,
+        "channel": CHANNEL_BANK_TRANSFER,
+        "instructions": session_service.settings.bank_transfer_instructions,
+        "currency": session.currency,
+        "payment_amount": str(session.charge_amount),
+        "customer_name": workflow.customer_name if workflow else None,
+        "customer_email": workflow.customer_email if workflow else None,
+        "has_proof": bool(submission.proof_path),
+        "proof_original_name": submission.proof_original_name,
+        "review_note": submission.review_note,
+        "charge_label": (
+            f"Installment {session.installment_number}"
+            if session.installment_number
+            else "Payment amount"
+        ),
+    }
+
+
+@router.post("/{token}/receipt")
+async def upload_bank_transfer_receipt(
+    token: str,
+    db: Session = Depends(get_db),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    session_service = PaymentSessionService(db)
+    session = session_service.get_active_session_by_token(token)
+    if not session:
+        raise HTTPException(
+            status_code=404,
+            detail=session_service.describe_inactive_token(token),
+        )
+    if (getattr(session, "channel", None) or "") != CHANNEL_BANK_TRANSFER:
+        raise HTTPException(status_code=400, detail="This payment link is not for bank transfer.")
+    if session.status not in (SESSION_TERMS_ACCEPTED,):
+        raise HTTPException(
+            status_code=400,
+            detail="Please accept the Terms and Conditions before uploading a receipt.",
+        )
+
+    data = await file.read()
+    bt = BankTransferService(db, session_service.settings)
+    submission = bt.get_by_session(session) or bt.enqueue_for_session(session)
+    try:
+        submission = bt.save_proof(
+            submission,
+            filename=file.filename or "receipt.jpg",
+            content_type=file.content_type,
+            data=data,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        await bt.notify_proof_submitted(submission)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Bank transfer Bitrix notify failed after upload submission_id=%s",
+            submission.id,
+        )
+
+    return {
+        "ok": True,
+        "status": submission.status,
+        "submission_id": submission.id,
+        "message": (
+            "Receipt uploaded. Finance will review it shortly. "
+            "You can close this page."
+        ),
+    }

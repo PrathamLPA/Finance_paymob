@@ -150,7 +150,12 @@ class ReminderService:
             installment_number = 1
 
         from app.services.cash_collection_service import CashCollectionService
-        from app.services.payment_mode import resolve_is_cash_payment_mode
+        from app.services.payment_mode import (
+            resolve_is_bank_transfer_payment_mode,
+            resolve_is_cash_payment_mode,
+        )
+        from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_ONLINE
+        from app.services.bank_transfer_service import BankTransferService
 
         number_for_mode = installment_number or 1
         if await resolve_is_cash_payment_mode(
@@ -172,13 +177,27 @@ class ReminderService:
             )
             return None
 
+        channel = CHANNEL_ONLINE
+        if await resolve_is_bank_transfer_payment_mode(
+            lead,
+            installment_number=number_for_mode,
+            settings=self.settings,
+            bitrix=self.bitrix,
+        ):
+            channel = CHANNEL_BANK_TRANSFER
+
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,
             charge_source=plan.source,
             amount_locked=plan.locked,
             installment_number=installment_number,
+            channel=channel,
         )
+        if channel == CHANNEL_BANK_TRANSFER:
+            BankTransferService(self.db, self.settings).enqueue_for_session(
+                session, lead=lead
+            )
         replaced = bool(getattr(session, "_replaced_previous_link", False)) or refreshing_expired
         if replaced:
             session._replaced_previous_link = True  # type: ignore[attr-defined]

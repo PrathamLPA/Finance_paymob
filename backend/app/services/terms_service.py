@@ -253,48 +253,73 @@ class TermsService:
             session.workflow, payment_amount, session=session
         )
 
-        if session.status == SESSION_TERMS_ACCEPTED and session.paymob_checkout_url:
+        from app.models.payment_session import CHANNEL_BANK_TRANSFER
+
+        is_bank_transfer = (
+            getattr(session, "channel", None) or ""
+        ).strip().lower() == CHANNEL_BANK_TRANSFER
+
+        if (
+            not is_bank_transfer
+            and session.status == SESSION_TERMS_ACCEPTED
+            and session.paymob_checkout_url
+        ):
             return await self.session_service.refresh_paymob_checkout(session, amount=amount)
 
-        pdf_path = self.generate_acceptance_pdf(
-            session,
-            course_for=course_for,
-            registrant_name=registrant_name.strip(),
-            registrant_email=registrant_email.strip(),
-            registrant_phone=registrant_phone.strip(),
-            participants=cleaned_participants,
-        )
+        if session.status != SESSION_TERMS_ACCEPTED:
+            pdf_path = self.generate_acceptance_pdf(
+                session,
+                course_for=course_for,
+                registrant_name=registrant_name.strip(),
+                registrant_email=registrant_email.strip(),
+                registrant_phone=registrant_phone.strip(),
+                participants=cleaned_participants,
+            )
 
-        acceptance = TermsAcceptance(
-            payment_session_id=session.id,
-            ip_address=ip_address,
-            pdf_path=pdf_path,
-            terms_version=self.settings.terms_version,
-            course_for=course_for,
-            registrant_name=registrant_name.strip(),
-            registrant_email=registrant_email.strip(),
-            registrant_phone=registrant_phone.strip(),
-            participants_json=cleaned_participants or None,
-        )
-        self.db.add(acceptance)
-        self.session_service.mark_terms_accepted(session)
-
-        workflow = session.workflow
-        workflow.customer_name = registrant_name.strip()
-        workflow.customer_email = registrant_email.strip()
-        workflow.customer_phone = registrant_phone.strip()
-        self.db.commit()
-        self.db.refresh(workflow)
-
-        await self._sync_registrant_to_bitrix(workflow)
-
-        if workflow.customer_email:
-            self.email.send_terms_acceptance(
-                to_email=workflow.customer_email,
-                customer_name=workflow.customer_name,
+            acceptance = TermsAcceptance(
+                payment_session_id=session.id,
+                ip_address=ip_address,
                 pdf_path=pdf_path,
                 terms_version=self.settings.terms_version,
+                course_for=course_for,
+                registrant_name=registrant_name.strip(),
+                registrant_email=registrant_email.strip(),
+                registrant_phone=registrant_phone.strip(),
+                participants_json=cleaned_participants or None,
             )
+            self.db.add(acceptance)
+            self.session_service.mark_terms_accepted(session)
+
+            workflow = session.workflow
+            workflow.customer_name = registrant_name.strip()
+            workflow.customer_email = registrant_email.strip()
+            workflow.customer_phone = registrant_phone.strip()
+            self.db.commit()
+            self.db.refresh(workflow)
+
+            await self._sync_registrant_to_bitrix(workflow)
+
+            if workflow.customer_email:
+                self.email.send_terms_acceptance(
+                    to_email=workflow.customer_email,
+                    customer_name=workflow.customer_name,
+                    pdf_path=pdf_path,
+                    terms_version=self.settings.terms_version,
+                )
+        else:
+            # Already accepted — keep charge amount in sync
+            if amount != session.charge_amount:
+                session.charge_amount = amount
+                self.db.commit()
+
+        if is_bank_transfer:
+            if amount != session.charge_amount:
+                session.charge_amount = amount
+                self.db.commit()
+            from app.services.bank_transfer_service import BankTransferService
+
+            BankTransferService(self.db, self.settings).enqueue_for_session(session)
+            return self.session_service.build_receipt_upload_url(session.token)
 
         if amount != session.charge_amount or not session.paymob_checkout_url:
             return await self.session_service.refresh_paymob_checkout(session, amount=amount)

@@ -96,6 +96,7 @@ class BitrixIntegration(Protocol):
         entity_type: str,
         entity_id: int,
         comment: str,
+        files: list[tuple[str, bytes]] | None = None,
     ) -> int | None: ...
 
     async def set_deal_stage(self, deal_id: int, stage_id: str) -> None: ...

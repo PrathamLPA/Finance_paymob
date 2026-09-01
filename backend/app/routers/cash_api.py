@@ -40,6 +40,11 @@ class DepositBody(BaseModel):
     employee_id: int | None = None
 
 
+class BankTransferReviewBody(BaseModel):
+    note: str | None = None
+    amount: Decimal | None = None
+
+
 @router.get("/cash/queue")
 def cash_queue(
     db: Session = Depends(get_db),
@@ -237,3 +242,93 @@ def manager_transactions(
         channel=channel, employee_id=employee_id, q=q
     )
     return {"items": items}
+
+
+@router.get("/bank-transfers")
+def bank_transfers_list(
+    status: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _manager: StaffUser = Depends(require_manager),
+) -> dict[str, Any]:
+    from app.services.bank_transfer_service import BankTransferService
+
+    service = BankTransferService(db)
+    rows = service.list_for_manager(status=status)
+    return {"items": [service.submission_to_dict(r) for r in rows]}
+
+
+@router.get("/bank-transfers/{submission_id}")
+def bank_transfer_detail(
+    submission_id: int,
+    db: Session = Depends(get_db),
+    _manager: StaffUser = Depends(require_manager),
+) -> dict[str, Any]:
+    from app.models.bank_transfer import BankTransferSubmission
+    from app.services.bank_transfer_service import BankTransferService
+
+    service = BankTransferService(db)
+    row = db.get(BankTransferSubmission, submission_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Bank transfer not found")
+    return service.submission_to_dict(row)
+
+
+@router.get("/bank-transfers/{submission_id}/proof")
+def bank_transfer_proof(
+    submission_id: int,
+    db: Session = Depends(get_db),
+    _manager: StaffUser = Depends(require_manager),
+):
+    from fastapi.responses import Response
+
+    from app.models.bank_transfer import BankTransferSubmission
+    from app.services.bank_transfer_service import BankTransferService
+
+    row = db.get(BankTransferSubmission, submission_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Bank transfer not found")
+    try:
+        data, ctype, name = BankTransferService(db).read_proof_bytes(row)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=data,
+        media_type=ctype,
+        headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
+
+
+@router.post("/bank-transfers/{submission_id}/approve")
+async def bank_transfer_approve(
+    submission_id: int,
+    body: BankTransferReviewBody,
+    db: Session = Depends(get_db),
+    manager: StaffUser = Depends(require_manager),
+) -> dict[str, Any]:
+    from app.services.bank_transfer_service import BankTransferService
+
+    service = BankTransferService(db)
+    try:
+        row = await service.approve(
+            submission_id, staff=manager, note=body.note, amount=body.amount
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return service.submission_to_dict(row)
+
+
+@router.post("/bank-transfers/{submission_id}/reject")
+async def bank_transfer_reject(
+    submission_id: int,
+    body: BankTransferReviewBody,
+    db: Session = Depends(get_db),
+    manager: StaffUser = Depends(require_manager),
+) -> dict[str, Any]:
+    from app.services.bank_transfer_service import BankTransferService
+
+    service = BankTransferService(db)
+    try:
+        row = await service.reject(submission_id, staff=manager, note=body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return service.submission_to_dict(row)

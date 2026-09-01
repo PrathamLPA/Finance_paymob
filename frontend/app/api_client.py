@@ -52,6 +52,29 @@ async def accept_payment(token: str, payload: dict[str, Any]) -> dict[str, Any]:
     return response.json()
 
 
+async def get_receipt(token: str) -> dict[str, Any]:
+    settings = get_settings()
+    url = f"{settings.api_base_url.rstrip('/')}/api/payment/{token}/receipt"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url)
+    if response.status_code >= 400:
+        detail = _extract_detail(response)
+        raise BackendApiError(response.status_code, detail)
+    return response.json()
+
+
+async def upload_receipt(token: str, *, filename: str, content: bytes, content_type: str | None) -> dict[str, Any]:
+    settings = get_settings()
+    url = f"{settings.api_base_url.rstrip('/')}/api/payment/{token}/receipt"
+    files = {"file": (filename, content, content_type or "application/octet-stream")}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(url, files=files)
+    if response.status_code >= 400:
+        detail = _extract_detail(response)
+        raise BackendApiError(response.status_code, detail)
+    return response.json()
+
+
 async def get_approval(token: str) -> dict[str, Any]:
     settings = get_settings()
     url = f"{settings.api_base_url.rstrip('/')}/api/approvals/{token}"

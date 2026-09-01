@@ -293,15 +293,20 @@ class MockBitrixClient:
         entity_type: str,
         entity_id: int,
         comment: str,
+        files: list[tuple[str, bytes]] | None = None,
     ) -> int | None:
         comments = self._mock_comments.setdefault((entity_type.upper(), entity_id), [])
         comment_id = len(comments) + 1
-        comments.append({"id": comment_id, "COMMENT": comment})
+        entry: dict[str, Any] = {"id": comment_id, "COMMENT": comment}
+        if files:
+            entry["FILES"] = [name for name, _ in files]
+        comments.append(entry)
         logger.info(
-            "[MockBitrix] Timeline comment on %s %s: %s",
+            "[MockBitrix] Timeline comment on %s %s: %s files=%s",
             entity_type,
             entity_id,
             comment[:120],
+            len(files or []),
         )
         return comment_id
 
@@ -700,16 +705,23 @@ class RealBitrixClient:
         entity_type: str,
         entity_id: int,
         comment: str,
+        files: list[tuple[str, bytes]] | None = None,
     ) -> int | None:
+        import base64
+
+        fields: dict[str, Any] = {
+            "ENTITY_TYPE": entity_type.upper(),
+            "ENTITY_ID": entity_id,
+            "COMMENT": comment,
+        }
+        if files:
+            # Bitrix expects [[filename, base64content], ...]
+            fields["FILES"] = [
+                [name, base64.b64encode(data).decode("ascii")] for name, data in files
+            ]
         result = await self._call(
             "crm.timeline.comment.add",
-            {
-                "fields": {
-                    "ENTITY_TYPE": entity_type.upper(),
-                    "ENTITY_ID": entity_id,
-                    "COMMENT": comment,
-                }
-            },
+            {"fields": fields},
         )
         raw = self._scalar(result)
         try:
@@ -717,10 +729,11 @@ class RealBitrixClient:
         except (TypeError, ValueError):
             comment_id = None
         logger.info(
-            "Added Bitrix timeline comment id=%s on %s %s",
+            "Added Bitrix timeline comment id=%s on %s %s files=%s",
             comment_id if comment_id is not None else "-",
             entity_type,
             entity_id,
+            len(files or []),
         )
         return comment_id
 

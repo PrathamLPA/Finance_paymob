@@ -388,8 +388,12 @@ async def bitrix24_webhook(
         entered_stage = (workflow.bitrix_lead_stage_id or "") != stage_id
         active_session = orchestrator.session_service.get_active_session_for_workflow(workflow)
         if active_session:
+            from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_ONLINE
             from app.services.installment_plan import charge_installment_number_for_workflow
-            from app.services.payment_mode import resolve_is_cash_payment_mode
+            from app.services.payment_mode import (
+                resolve_is_bank_transfer_payment_mode,
+                resolve_is_cash_payment_mode,
+            )
 
             await orchestrator.sync_workflow_from_lead(workflow, lead)
             mode_installment = charge_installment_number_for_workflow(workflow) or 1
@@ -412,30 +416,54 @@ async def bitrix24_webhook(
                 )
                 active_session = None
             else:
-                payment_url = orchestrator.session_service.build_payment_url(
-                    active_session.token
+                want_bt = await resolve_is_bank_transfer_payment_mode(
+                    lead,
+                    installment_number=mode_installment,
+                    settings=settings,
+                    bitrix=orchestrator.bitrix,
                 )
-                commented = await orchestrator.announce_payment_link(
-                    active_session,
-                    entity_type="LEAD",
-                    entity_id=lead_id,
-                    force=entered_stage,
+                want_channel = CHANNEL_BANK_TRANSFER if want_bt else CHANNEL_ONLINE
+                current_channel = (
+                    getattr(active_session, "channel", None) or CHANNEL_ONLINE
                 )
-                logger.info(
-                    "SKIP new link | lead_id=%s title=%s | reason=link_already_active "
-                    "estimate_id=%s commented=%s url=%s",
-                    lead_id,
-                    summary["title"],
-                    workflow.bitrix_estimate_id or "-",
-                    "yes" if commented else "already",
-                    payment_url,
-                )
-                return {
-                    "status": "ignored",
-                    "reason": "payment_link_already_active",
-                    "lead_id": lead_id,
-                    "payment_url": payment_url,
-                }
+                if current_channel != want_channel:
+                    expired = orchestrator.session_service.expire_active_sessions_for_workflow(
+                        workflow
+                    )
+                    logger.info(
+                        "REPLACE payment channel | lead_id=%s from=%s to=%s expired=%s",
+                        lead_id,
+                        current_channel,
+                        want_channel,
+                        expired,
+                    )
+                    active_session = None
+                else:
+                    payment_url = orchestrator.session_service.build_payment_url(
+                        active_session.token
+                    )
+                    commented = await orchestrator.announce_payment_link(
+                        active_session,
+                        entity_type="LEAD",
+                        entity_id=lead_id,
+                        force=entered_stage,
+                    )
+                    logger.info(
+                        "SKIP new link | lead_id=%s title=%s | reason=link_already_active "
+                        "estimate_id=%s channel=%s commented=%s url=%s",
+                        lead_id,
+                        summary["title"],
+                        workflow.bitrix_estimate_id or "-",
+                        current_channel,
+                        "yes" if commented else "already",
+                        payment_url,
+                    )
+                    return {
+                        "status": "ignored",
+                        "reason": "payment_link_already_active",
+                        "lead_id": lead_id,
+                        "payment_url": payment_url,
+                    }
 
         try:
             session = await orchestrator.initiate_payment_from_lead(lead_id, lead_data=lead)

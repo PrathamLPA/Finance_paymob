@@ -23,6 +23,9 @@ SESSION_EXPIRED = "expired"
 SOURCE_LEAD = "lead"
 SOURCE_FINANCE_DEAL = "finance_deal"
 
+CHANNEL_ONLINE = "online"
+CHANNEL_BANK_TRANSFER = "bank_transfer"
+
 
 class PaymentSession(Base):
     __tablename__ = "payment_sessions"
@@ -40,6 +43,8 @@ class PaymentSession(Base):
     # Set when this session charges a specific installment from the persisted plan
     installment_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     currency: Mapped[str] = mapped_column(String(10), default="AED")
+    # online (Paymob) | bank_transfer (receipt upload after Terms)
+    channel: Mapped[str] = mapped_column(String(30), default=CHANNEL_ONLINE, index=True)
     paymob_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     paymob_checkout_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     merchant_reference: Mapped[str] = mapped_column(String(100), index=True)

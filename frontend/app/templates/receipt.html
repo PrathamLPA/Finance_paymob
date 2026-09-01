@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Bank Transfer Receipt</title>
+    <link rel="stylesheet" href="/static/styles.css?v=7">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="paymob-page">
+    <div class="page-bg"></div>
+
+    <header class="site-header">
+        <div class="brand">
+            <div class="brand-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path d="M8 12l3 3 5-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div>
+                <span class="brand-name">Finance Automation</span>
+                <span class="brand-tagline">Bank transfer</span>
+            </div>
+        </div>
+        <div class="secure-badge">
+            <span>SSL Secured</span>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <article class="terms-card">
+            <div class="card-hero">
+                <div class="card-hero-text">
+                    <div class="card-header">
+                        <h1>Upload transfer receipt</h1>
+                    </div>
+                    <p class="card-subtitle">
+                        Transfer the amount below, then upload a clear photo or PDF of the receipt.
+                        Finance will review and confirm your payment.
+                    </p>
+                </div>
+            </div>
+
+            {% if error %}
+            <div class="alert alert-error" role="alert">{{ error }}</div>
+            {% endif %}
+            {% if success %}
+            <div class="alert alert-success" role="alert">{{ success }}</div>
+            {% endif %}
+
+            <div class="amount-summary" style="margin: 1.25rem 0;">
+                <div class="amount-row">
+                    <span>{{ charge_label or "Amount due" }}</span>
+                    <strong>{{ payment_amount }} {{ currency }}</strong>
+                </div>
+                {% if customer_name %}
+                <div class="amount-row">
+                    <span>Name</span>
+                    <span>{{ customer_name }}</span>
+                </div>
+                {% endif %}
+                {% if status %}
+                <div class="amount-row">
+                    <span>Status</span>
+                    <span>{{ status }}</span>
+                </div>
+                {% endif %}
+            </div>
+
+            {% if instructions %}
+            <div class="terms-body" style="margin-bottom: 1.25rem;">
+                <p>{{ instructions }}</p>
+            </div>
+            {% endif %}
+
+            {% if review_note and status == "rejected" %}
+            <div class="alert alert-error" role="alert">
+                Finance rejected the previous upload: {{ review_note }}
+            </div>
+            {% endif %}
+
+            {% if status == "pending_review" and has_proof and not error %}
+            <p class="form-footer-note">
+                Your receipt{% if proof_original_name %} ({{ proof_original_name }}){% endif %}
+                is with finance for review. You can upload a replacement file below if needed.
+            </p>
+            {% endif %}
+
+            {% if status != "approved" %}
+            <form method="post" action="/payment/{{ token }}/receipt" enctype="multipart/form-data" class="terms-form">
+                <label class="field-label" for="receipt">Receipt / screenshot (JPG, PNG, WEBP, or PDF — max 8MB)</label>
+                <input id="receipt" name="receipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" required>
+                <button type="submit" class="btn-paymob" style="margin-top: 1rem;">Submit receipt</button>
+            </form>
+            {% else %}
+            <p class="form-footer-note">This bank transfer has already been approved. Thank you.</p>
+            {% endif %}
+        </article>
+    </main>
+</body>
+</html>

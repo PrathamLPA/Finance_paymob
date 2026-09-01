@@ -15,6 +15,8 @@ from app.config import Settings, get_settings
 from app.integrations.factory import get_paymob_client
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import (
+    CHANNEL_BANK_TRANSFER,
+    CHANNEL_ONLINE,
     SESSION_COMPLETED,
     SESSION_EXPIRED,
     SESSION_PENDING,
@@ -161,6 +163,7 @@ class PaymentSessionService:
         charge_source: str = "full",
         amount_locked: bool = True,
         installment_number: int | None = None,
+        channel: str = CHANNEL_ONLINE,
     ) -> PaymentSession:
         """Reuse a non-expired payment session when charge amount still matches."""
         expected = charge_amount
@@ -169,6 +172,7 @@ class PaymentSessionService:
         if expected <= 0 and workflow.total_amount > 0:
             expected = workflow.total_amount
         expected = Decimal(expected).quantize(Decimal("0.01"))
+        channel = (channel or CHANNEL_ONLINE).strip().lower() or CHANNEL_ONLINE
 
         existing = self.get_active_session_for_workflow(workflow)
         if (
@@ -176,6 +180,7 @@ class PaymentSessionService:
             and existing.charge_amount == expected
             and (existing.charge_source or "full") == charge_source
             and existing.installment_number == installment_number
+            and (getattr(existing, "channel", None) or CHANNEL_ONLINE) == channel
         ):
             return existing
         replaced_old = False
@@ -196,6 +201,7 @@ class PaymentSessionService:
             charge_source=charge_source,
             amount_locked=amount_locked,
             installment_number=installment_number,
+            channel=channel,
         )
         # Mark so callers know Bitrix must be updated with the replacement URL.
         session._replaced_previous_link = replaced_old  # type: ignore[attr-defined]
@@ -211,6 +217,7 @@ class PaymentSessionService:
         charge_source: str = "full",
         amount_locked: bool = True,
         installment_number: int | None = None,
+        channel: str = CHANNEL_ONLINE,
     ) -> PaymentSession:
         amount = charge_amount
         if amount is None:
@@ -218,15 +225,21 @@ class PaymentSessionService:
         if amount <= 0 and workflow.total_amount > 0:
             amount = workflow.total_amount
         amount = Decimal(amount).quantize(Decimal("0.01"))
+        channel = (channel or CHANNEL_ONLINE).strip().lower() or CHANNEL_ONLINE
 
         merchant_reference = f"WF-{workflow.id}-{uuid.uuid4().hex[:8]}"
-        paymob_session = await self._create_paymob_session(
-            workflow,
-            amount=amount,
-            currency=workflow.currency,
-            merchant_reference=merchant_reference,
-            trigger="new payment session",
-        )
+        paymob_session_id = None
+        paymob_checkout_url = None
+        if channel != CHANNEL_BANK_TRANSFER:
+            paymob_session = await self._create_paymob_session(
+                workflow,
+                amount=amount,
+                currency=workflow.currency,
+                merchant_reference=merchant_reference,
+                trigger="new payment session",
+            )
+            paymob_session_id = paymob_session.session_id
+            paymob_checkout_url = paymob_session.checkout_url
 
         token = secrets.token_urlsafe(32)
         session = PaymentSession(
@@ -239,8 +252,9 @@ class PaymentSessionService:
             amount_locked=amount_locked,
             installment_number=installment_number,
             currency=workflow.currency,
-            paymob_session_id=paymob_session.session_id,
-            paymob_checkout_url=paymob_session.checkout_url,
+            channel=channel,
+            paymob_session_id=paymob_session_id,
+            paymob_checkout_url=paymob_checkout_url,
             merchant_reference=merchant_reference,
             status=SESSION_PENDING,
             expires_at=_utcnow() + timedelta(hours=self.settings.payment_session_ttl_hours),
@@ -256,6 +270,8 @@ class PaymentSessionService:
         *,
         amount: Decimal | None = None,
     ) -> str:
+        if (getattr(session, "channel", None) or CHANNEL_ONLINE) == CHANNEL_BANK_TRANSFER:
+            raise ValueError("Bank transfer sessions do not use Paymob checkout")
         workflow = session.workflow
         if amount is not None:
             session.charge_amount = amount
@@ -273,6 +289,10 @@ class PaymentSessionService:
         self.db.commit()
         self.db.refresh(session)
         return session.paymob_checkout_url
+
+    def build_receipt_upload_url(self, token: str) -> str:
+        base = self.settings.payment_frontend_base_url or self.settings.public_base_url
+        return f"{base.rstrip('/')}/payment/{token}/receipt"
 
     def mark_terms_accepted(self, session: PaymentSession) -> None:
         session.status = SESSION_TERMS_ACCEPTED

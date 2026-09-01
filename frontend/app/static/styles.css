@@ -1041,6 +1041,12 @@ select.field-input {
     color: var(--destructive);
 }
 
+.alert-success {
+    background: color-mix(in oklab, var(--success) 10%, var(--card));
+    border-color: color-mix(in oklab, var(--success) 35%, var(--border));
+    color: color-mix(in oklab, var(--success) 70%, black);
+}
+
 .powered-by {
     text-align: center;
     margin-top: 1.5rem;

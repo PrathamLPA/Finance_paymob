@@ -27,6 +27,11 @@ def cash_mode_enum_ids(settings: Settings) -> set[str]:
     return {p.strip() for p in raw.split(",") if p.strip()}
 
 
+def bank_transfer_mode_enum_ids(settings: Settings) -> set[str]:
+    raw = (getattr(settings, "bank_transfer_mode_enum_ids", None) or "5790").strip()
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
 def payment_mode_field_for_installment(settings: Settings, installment_number: int) -> str:
     mapping = {
         1: settings.bitrix_field_payment_1_mode,
@@ -105,6 +110,17 @@ def _label_means_cash(label: str | None) -> bool:
         return False
     normalized = label.strip().lower().replace("_", " ").replace("-", " ")
     return normalized == "cash" or normalized.startswith("cash ")
+
+
+def _label_means_bank_transfer(label: str | None) -> bool:
+    if not label:
+        return False
+    normalized = label.strip().lower().replace("_", " ").replace("-", " ")
+    return (
+        normalized in ("bank transfer", "banktransfer", "wire transfer", "wire")
+        or normalized.startswith("bank transfer")
+        or normalized.startswith("banktransfer")
+    )
 
 
 def is_cash_payment_mode(
@@ -210,14 +226,93 @@ def is_cash_payment_mode(
     return is_cash
 
 
-async def resolve_is_cash_payment_mode(
+def is_bank_transfer_payment_mode(
     lead: dict[str, Any] | None,
     *,
     installment_number: int,
     settings: Settings,
-    bitrix: Any,
+    bitrix_enum_labels: dict[str, str] | None = None,
 ) -> bool:
-    """Cash check with live Bitrix enumeration labels for the payment-mode field."""
+    """True when mode is bank transfer. Cash takes precedence if both would match."""
+    if is_cash_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_enum_labels,
+    ):
+        return False
+
+    field = payment_mode_field_for_installment(settings, installment_number)
+    raw = lead.get(field) if lead and field else None
+    enum_id = payment_mode_enum_id(
+        lead, installment_number=installment_number, settings=settings
+    )
+    checked_installment = installment_number
+    bt_ids = bank_transfer_mode_enum_ids(settings)
+
+    if not enum_id and lead:
+        for n in (1, 2, 3, 4):
+            if n == installment_number:
+                continue
+            alt = payment_mode_enum_id(lead, installment_number=n, settings=settings)
+            if not alt:
+                continue
+            alt_label = payment_mode_label(
+                lead,
+                installment_number=n,
+                settings=settings,
+                bitrix_enum_labels=bitrix_enum_labels,
+            )
+            if alt in bt_ids or _label_means_bank_transfer(alt_label):
+                enum_id = alt
+                checked_installment = n
+                field = payment_mode_field_for_installment(settings, n)
+                raw = lead.get(field) if field else None
+                logger.info(
+                    "Payment mode bank_transfer fallback | charge_installment=%s "
+                    "used_installment=%s field=%s raw=%r",
+                    installment_number,
+                    n,
+                    field or "-",
+                    raw,
+                )
+                break
+
+    if not enum_id:
+        return False
+
+    label = payment_mode_label(
+        lead,
+        installment_number=checked_installment,
+        settings=settings,
+        bitrix_enum_labels=bitrix_enum_labels,
+    )
+    by_id = enum_id in bt_ids
+    by_label = _label_means_bank_transfer(label)
+    is_bt = by_id or by_label
+    logger.info(
+        "Payment mode bank_transfer check | installment=%s checked=%s field=%s "
+        "raw=%r enum=%s label=%s bt_ids=%s by_id=%s by_label=%s result=%s",
+        installment_number,
+        checked_installment,
+        field or "-",
+        raw,
+        enum_id,
+        label or "-",
+        sorted(bt_ids),
+        by_id,
+        by_label,
+        "bank_transfer" if is_bt else "not_bank_transfer",
+    )
+    return is_bt
+
+
+async def _load_payment_mode_bitrix_labels(
+    *,
+    installment_number: int,
+    settings: Settings,
+    bitrix: Any,
+) -> dict[str, str]:
     field = payment_mode_field_for_installment(settings, installment_number)
     bitrix_labels: dict[str, str] = {}
     if field and hasattr(bitrix, "get_lead_userfield_enum_map"):
@@ -233,7 +328,44 @@ async def resolve_is_cash_payment_mode(
             logger.exception(
                 "Could not load Bitrix enum labels for payment-mode field %s", field
             )
+    return bitrix_labels
+
+
+async def resolve_is_cash_payment_mode(
+    lead: dict[str, Any] | None,
+    *,
+    installment_number: int,
+    settings: Settings,
+    bitrix: Any,
+) -> bool:
+    """Cash check with live Bitrix enumeration labels for the payment-mode field."""
+    bitrix_labels = await _load_payment_mode_bitrix_labels(
+        installment_number=installment_number,
+        settings=settings,
+        bitrix=bitrix,
+    )
     return is_cash_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_labels or None,
+    )
+
+
+async def resolve_is_bank_transfer_payment_mode(
+    lead: dict[str, Any] | None,
+    *,
+    installment_number: int,
+    settings: Settings,
+    bitrix: Any,
+) -> bool:
+    """Bank transfer check with live Bitrix enumeration labels."""
+    bitrix_labels = await _load_payment_mode_bitrix_labels(
+        installment_number=installment_number,
+        settings=settings,
+        bitrix=bitrix,
+    )
+    return is_bank_transfer_payment_mode(
         lead,
         installment_number=installment_number,
         settings=settings,

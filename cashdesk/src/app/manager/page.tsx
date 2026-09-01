@@ -7,6 +7,7 @@ import {
   Banknote,
   Coins,
   PiggyBank,
+  Receipt,
   TrendingUp,
   Users,
   Wallet,
@@ -31,6 +32,7 @@ type Dashboard = {
 const quickLinks = [
   { href: "/manager/transactions", label: "All transactions", icon: ArrowLeftRight },
   { href: "/manager/cash-queue", label: "Cash queue", icon: Banknote },
+  { href: "/manager/bank-transfers", label: "Bank transfers", icon: Receipt },
   { href: "/manager/deposits", label: "Deposits", icon: Wallet },
   { href: "/manager/employees", label: "Team", icon: Users },
 ];

@@ -10,7 +10,14 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from app.api_client import BackendApiError, accept_payment, get_payment, lookup_payment_by_reference
+from app.api_client import (
+    BackendApiError,
+    accept_payment,
+    get_payment,
+    get_receipt,
+    lookup_payment_by_reference,
+    upload_receipt,
+)
 
 router = APIRouter(prefix="/payment", tags=["payment-ui"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
@@ -204,7 +211,89 @@ async def payment_terms_page(token: str, request: Request) -> HTMLResponse:
             status_code=exc.status_code if exc.status_code in (404, 400) else 404,
         )
 
+    # Bank transfer: after Terms, resume on receipt upload page
+    if (
+        data.get("channel") == "bank_transfer"
+        and data.get("status") == "terms_accepted"
+        and data.get("bank_transfer")
+    ):
+        return RedirectResponse(url=f"/payment/{token}/receipt", status_code=303)
+
     return templates.TemplateResponse("terms.html", _form_context(request, token, data))
+
+
+@router.get("/{token}/receipt", response_class=HTMLResponse)
+async def payment_receipt_page(token: str, request: Request) -> HTMLResponse:
+    try:
+        data = await get_receipt(token)
+    except BackendApiError as exc:
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": exc.detail},
+            status_code=exc.status_code if exc.status_code in (404, 400) else 404,
+        )
+    return templates.TemplateResponse(
+        "receipt.html",
+        {
+            "request": request,
+            "token": token,
+            "error": None,
+            "success": None,
+            **data,
+        },
+    )
+
+
+@router.post("/{token}/receipt", response_model=None)
+async def payment_receipt_upload(token: str, request: Request) -> Response:
+    form = await request.form()
+    upload = form.get("receipt")
+    try:
+        data = await get_receipt(token)
+    except BackendApiError as exc:
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": exc.detail},
+            status_code=404,
+        )
+
+    def _render(*, error: str | None = None, success: str | None = None) -> HTMLResponse:
+        return templates.TemplateResponse(
+            "receipt.html",
+            {
+                "request": request,
+                "token": token,
+                "error": error,
+                "success": success,
+                **data,
+            },
+            status_code=400 if error else 200,
+        )
+
+    if upload is None or not getattr(upload, "filename", None):
+        return _render(error="Please choose a receipt photo or PDF to upload.")
+
+    content = await upload.read()
+    try:
+        result = await upload_receipt(
+            token,
+            filename=str(upload.filename),
+            content=content,
+            content_type=getattr(upload, "content_type", None),
+        )
+    except BackendApiError as exc:
+        return _render(error=exc.detail)
+
+    return templates.TemplateResponse(
+        "receipt.html",
+        {
+            "request": request,
+            "token": token,
+            "error": None,
+            "success": result.get("message") or "Receipt uploaded successfully.",
+            **{**data, "status": result.get("status") or "pending_review", "has_proof": True},
+        },
+    )
 
 
 @router.post("/{token}/accept", response_model=None)

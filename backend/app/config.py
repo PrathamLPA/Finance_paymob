@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     # Comma-separated Bitrix enum IDs treated as Cash (skip Paymob, enqueue cash desk)
     # 5774 is the Cash ID currently returned by Learners Point Bitrix for Payment 1 Mode.
     cash_mode_enum_ids: str = "5774,5786"
+    # Comma-separated Bitrix enum IDs treated as Bank Transfer (payment link + receipt upload)
+    bank_transfer_mode_enum_ids: str = "5790"
+    # Shown on the candidate receipt-upload page after Terms
+    bank_transfer_instructions: str = (
+        "Please transfer the amount to the Learners Point bank account, "
+        "then upload a clear photo or PDF of the transfer receipt."
+    )
     # Cash Desk staff JWT + bootstrap manager
     staff_jwt_secret: str = ""
     staff_jwt_ttl_hours: int = 12

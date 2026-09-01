@@ -649,7 +649,12 @@ class WorkflowOrchestrator:
             CashCollectionService,
         )
         from app.services.installment_plan import charge_installment_number_for_workflow
-        from app.services.payment_mode import resolve_is_cash_payment_mode
+        from app.services.payment_mode import (
+            resolve_is_bank_transfer_payment_mode,
+            resolve_is_cash_payment_mode,
+        )
+        from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_ONLINE
+        from app.services.bank_transfer_service import BankTransferService
 
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
@@ -701,13 +706,27 @@ class WorkflowOrchestrator:
             )
             raise CashCollectionQueued(collection)
 
+        channel = CHANNEL_ONLINE
+        if await resolve_is_bank_transfer_payment_mode(
+            lead,
+            installment_number=number_for_mode,
+            settings=self.settings,
+            bitrix=self.bitrix,
+        ):
+            channel = CHANNEL_BANK_TRANSFER
+
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,
             charge_source=plan.source,
             amount_locked=plan.locked,
             installment_number=installment_number,
+            channel=channel,
         )
+        if channel == CHANNEL_BANK_TRANSFER:
+            BankTransferService(self.db, self.settings).enqueue_for_session(
+                session, lead=lead
+            )
         payment_url = self.session_service.build_payment_url(session.token)
 
         await self.announce_payment_link(session, entity_type="LEAD", entity_id=lead_id)
@@ -722,9 +741,10 @@ class WorkflowOrchestrator:
             self.db.commit()
 
         logger.info(
-            "Payment link created for lead %s — estimate_id=%s token %s...",
+            "Payment link created for lead %s — estimate_id=%s channel=%s token %s...",
             lead_id,
             workflow.bitrix_estimate_id or "-",
+            channel,
             session.token[:8],
         )
         return session
@@ -1383,7 +1403,12 @@ class WorkflowOrchestrator:
             CashCollectionService,
         )
         from app.services.installment_plan import charge_installment_number_for_workflow
-        from app.services.payment_mode import resolve_is_cash_payment_mode
+        from app.services.payment_mode import (
+            resolve_is_bank_transfer_payment_mode,
+            resolve_is_cash_payment_mode,
+        )
+        from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_ONLINE
+        from app.services.bank_transfer_service import BankTransferService
 
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
@@ -1400,7 +1425,7 @@ class WorkflowOrchestrator:
                 logger.info(
                     "Expired %s online payment session(s) before cash queue | lead_id=%s",
                     expired,
-                    lead_id,
+                    workflow.bitrix_lead_id,
                 )
             cash = CashCollectionService(self.db, self.settings)
             collection = cash.enqueue_from_workflow(
@@ -1427,13 +1452,27 @@ class WorkflowOrchestrator:
                 )
             raise CashCollectionQueued(collection)
 
+        channel = CHANNEL_ONLINE
+        if await resolve_is_bank_transfer_payment_mode(
+            lead,
+            installment_number=number_for_mode,
+            settings=self.settings,
+            bitrix=self.bitrix,
+        ):
+            channel = CHANNEL_BANK_TRANSFER
+
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,
             charge_source=plan.source,
             amount_locked=plan.locked,
             installment_number=installment_number,
+            channel=channel,
         )
+        if channel == CHANNEL_BANK_TRANSFER:
+            BankTransferService(self.db, self.settings).enqueue_for_session(
+                session, lead=lead
+            )
 
         payment_url = self.session_service.build_payment_url(session.token)
         # Write link to Bitrix deal field so Bitrix can email it (no SendGrid).

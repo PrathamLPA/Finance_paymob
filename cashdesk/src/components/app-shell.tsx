@@ -32,6 +32,7 @@ export function AppShell({
     { href: "/manager", label: "Overview", icon: LayoutDashboard },
     { href: "/manager/transactions", label: "Transactions", icon: ArrowLeftRight },
     { href: "/manager/cash-queue", label: "Cash queue", icon: Banknote },
+    { href: "/manager/bank-transfers", label: "Bank transfers", icon: Receipt },
     { href: "/manager/deposits", label: "Deposits", icon: Wallet },
     { href: "/manager/employees", label: "Employees", icon: Users },
   ];
