@@ -40,6 +40,8 @@ class CustomerWorkflow(Base):
     # Fingerprint of the last price-gate comment, so re-running the stage does not
     # post an identical comment (which would retrigger the Bitrix update webhook).
     last_gate_comment_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Same idea for Paymob checkout failures (invalid email, etc.) — one alert per email.
+    last_paymob_failure_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     customer_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     customer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     customer_phone: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)

@@ -193,6 +193,10 @@ class WorkflowOrchestrator:
         lead = lead or await self.bitrix.get_lead(workflow.bitrix_lead_id)
         workflow.total_amount = self.bitrix.extract_lead_amount(lead)
         email, name = self.bitrix.extract_customer_details(lead)
+        previous_email = (workflow.customer_email or "").strip().lower()
+        new_email = (email or "").strip().lower()
+        if previous_email and new_email != previous_email:
+            workflow.last_paymob_failure_hash = None
         workflow.customer_email = email
         workflow.customer_name = name
         phones = lead.get("PHONE") or []
@@ -1774,6 +1778,17 @@ class WorkflowOrchestrator:
             return "Invalid customer email — Paymob rejected the billing email."
         return reason
 
+    @staticmethod
+    def _paymob_failure_state_key(reason: str, email: str) -> str:
+        """Stable key for deduping Paymob failure alerts (same issue + same email)."""
+        normalized_email = (email or "").strip().lower() or "(missing)"
+        lower = reason.lower()
+        if "valid email" in lower or ('billing_data' in lower and '"email"' in lower):
+            kind = "invalid_email"
+        else:
+            kind = "paymob_error"
+        return f"{kind}:{normalized_email}"
+
     async def notify_paymob_link_failure(
         self,
         workflow: CustomerWorkflow,
@@ -1783,6 +1798,16 @@ class WorkflowOrchestrator:
     ) -> None:
         """Alert the lead owner in Bitrix when Paymob refuses to create a checkout session."""
         email_on_file = (workflow.customer_email or "").strip() or "(missing or blank)"
+        state_key = self._paymob_failure_state_key(reason, workflow.customer_email or "")
+        digest = hashlib.sha256(state_key.encode("utf-8")).hexdigest()
+        if workflow.last_paymob_failure_hash == digest:
+            logger.info(
+                "SKIP paymob failure notify | lead_id=%s email=%s reason=already_notified",
+                workflow.bitrix_lead_id,
+                email_on_file,
+            )
+            return
+
         summary = self._paymob_failure_summary(reason)
         if "valid email" in reason.lower():
             comment = (
@@ -1813,6 +1838,8 @@ class WorkflowOrchestrator:
             subject=f"Payment link failed — Lead {workflow.bitrix_lead_id}",
             body=comment,
         )
+        workflow.last_paymob_failure_hash = digest
+        self.db.commit()
 
     async def _comment_on_workflow_entities(self, workflow: CustomerWorkflow, comment: str) -> None:
         targets: list[tuple[str, int]] = [("LEAD", workflow.bitrix_lead_id)]

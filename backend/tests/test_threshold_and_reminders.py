@@ -204,3 +204,18 @@ def test_reminder_paymob_invalid_email_notifies_bitrix(client, seed_lead, db_ses
     assert any(
         "invalid customer email" in n["message"].lower() for n in bitrix._mock_notifications
     )
+
+    comments_after_first = len(comments)
+    notifications_after_first = len(bitrix._mock_notifications)
+    with patch(
+        "app.services.payment_session_service.get_paymob_client",
+    ) as mock_factory:
+        mock_paymob = AsyncMock()
+        mock_paymob.create_payment_session.side_effect = paymob_error
+        mock_factory.return_value = mock_paymob
+
+        repeat = client.post("/api/dev/process-reminders")
+
+    assert repeat.status_code == 200
+    assert len(bitrix._mock_comments.get(("LEAD", 320), [])) == comments_after_first
+    assert len(bitrix._mock_notifications) == notifications_after_first
