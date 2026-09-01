@@ -194,6 +194,15 @@ class ReminderService:
                 workflow.bitrix_lead_id,
                 (workflow.customer_email or "").strip() or "(missing)",
             )
+            # Keep Bitrix timeline visible for agents (deduped inside notify).
+            await orchestrator.notify_paymob_link_failure(
+                workflow,
+                reason=(
+                    'Paymob intention failed (400): '
+                    '{"billing_data":{"email":["Enter a valid email address."]}}'
+                ),
+                trigger="reminder (deferred)",
+            )
             workflow.last_reminder_at = self._utcnow()
             self.db.commit()
             return None

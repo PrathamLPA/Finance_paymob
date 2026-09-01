@@ -1794,7 +1794,7 @@ class WorkflowOrchestrator:
             kind = "invalid_email"
         else:
             kind = "paymob_error"
-        return f"{kind}:{normalized_email}"
+        return f"{kind}:{normalized_email}:v2"
 
     @staticmethod
     def _is_invalid_email_paymob_reason(reason: str) -> bool:
@@ -1869,15 +1869,25 @@ class WorkflowOrchestrator:
         workflow.last_paymob_failure_hash = digest
         self.db.commit()
 
-    async def _comment_on_workflow_entities(self, workflow: CustomerWorkflow, comment: str) -> None:
+    async def _comment_on_workflow_entities(
+        self,
+        workflow: CustomerWorkflow,
+        comment: str,
+        *,
+        files: list[tuple[str, bytes]] | None = None,
+    ) -> int:
+        """Post a timeline comment on lead, estimate (quote), and deals. Returns success count."""
         targets: list[tuple[str, int]] = [("LEAD", workflow.bitrix_lead_id)]
+        if workflow.bitrix_estimate_id:
+            targets.append(("quote", int(workflow.bitrix_estimate_id)))
         for deal_id in (workflow.sales_deal_id, workflow.finance_deal_id, workflow.b2c_deal_id):
             if deal_id:
                 targets.append(("DEAL", deal_id))
 
+        posted = 0
         seen: set[tuple[str, int]] = set()
         for entity_type, entity_id in targets:
-            key = (entity_type, entity_id)
+            key = (entity_type.upper(), entity_id)
             if key in seen:
                 continue
             seen.add(key)
@@ -1886,7 +1896,9 @@ class WorkflowOrchestrator:
                     entity_type=entity_type,
                     entity_id=entity_id,
                     comment=comment,
+                    files=files,
                 )
+                posted += 1
                 logger.info(
                     "Payment comment posted on Bitrix %s %s",
                     entity_type.lower(),
@@ -1898,6 +1910,7 @@ class WorkflowOrchestrator:
                     entity_type,
                     entity_id,
                 )
+        return posted
 
     async def _notify_assigned_agent(
         self,

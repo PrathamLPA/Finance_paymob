@@ -1,7 +1,5 @@
 # Payment Terms and Conditions
 
-**Version 1.1**
-
 1. What Information We Collect
 
 When you create an account on our website, register for a course, or fill out a form to enquire about certain courses, you must submit credentials such as your name, email address, phone number, and any other pertinent data. The data is usually kept with us for one year for future reference.

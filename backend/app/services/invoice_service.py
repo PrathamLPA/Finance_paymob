@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ class InvoiceService:
         workflow: CustomerWorkflow,
         transaction: PaymentTransaction,
     ) -> InvoiceReference:
+        created_new = False
         if workflow.zoho_invoice_id:
             if workflow.zoho_customer_id:
                 customer_map = getattr(self.zoho, "_customer_ids", None)
@@ -58,6 +59,7 @@ class InvoiceService:
             if zoho_customer:
                 workflow.zoho_customer_id = zoho_customer
             self.db.commit()
+            created_new = True
 
         document = await self.zoho.get_invoice_document(invoice.invoice_id)
         if document.pdf_path:
@@ -72,15 +74,35 @@ class InvoiceService:
                 currency=invoice.currency,
             )
 
-        await self._attach_to_all_deals(workflow, invoice, transaction)
+        await self._publish_invoice_to_bitrix(
+            workflow, invoice, transaction, created_new=created_new
+        )
         self._email_invoice_to_customer(workflow, invoice, document.pdf_path)
         return invoice
 
-    async def _attach_to_all_deals(
+    def _invoice_pdf_files(self, invoice: InvoiceReference) -> list[tuple[str, bytes]] | None:
+        if not invoice.pdf_path:
+            return None
+        path = Path(invoice.pdf_path)
+        if not path.is_file():
+            logger.warning(
+                "Zoho invoice PDF missing on disk | invoice=%s path=%s",
+                invoice.invoice_id,
+                invoice.pdf_path,
+            )
+            return None
+        safe_number = "".join(
+            ch if ch.isalnum() or ch in "-_" else "_" for ch in (invoice.invoice_number or "invoice")
+        )
+        return [(f"Invoice_{safe_number}.pdf", path.read_bytes())]
+
+    async def _publish_invoice_to_bitrix(
         self,
         workflow: CustomerWorkflow,
         invoice: InvoiceReference,
         transaction: PaymentTransaction,
+        *,
+        created_new: bool,
     ) -> None:
         summary = PaymentSummary(
             total_amount=workflow.total_amount,
@@ -94,12 +116,64 @@ class InvoiceService:
 
         deal_ids = [workflow.sales_deal_id, workflow.finance_deal_id, workflow.b2c_deal_id]
         for deal_id in deal_ids:
+            if not deal_id:
+                continue
+            try:
+                await self.bitrix.attach_invoice_reference(deal_id, invoice)
+                await self.bitrix.update_deal_payment_summary(deal_id, summary)
+                logger.info(
+                    "Invoice fields updated on Bitrix deal %s | invoice=%s",
+                    deal_id,
+                    invoice.invoice_number,
+                )
+            except Exception:
+                logger.exception("Failed to attach invoice to deal %s", deal_id)
+
+        action = "created" if created_new else "updated"
+        lines = [
+            f"Zoho invoice {action}: {invoice.invoice_number}",
+            f"Paid this payment: {transaction.amount} {transaction.currency}",
+            f"Total paid: {invoice.amount_paid} / {invoice.total_amount} {invoice.currency}",
+            f"Remaining: {invoice.remaining_balance} {invoice.currency}",
+        ]
+        if invoice.pdf_url:
+            lines.append(f"Invoice link: {invoice.pdf_url}")
+        comment = "\n".join(lines)
+        files = self._invoice_pdf_files(invoice)
+
+        targets: list[tuple[str, int]] = [("LEAD", workflow.bitrix_lead_id)]
+        if workflow.bitrix_estimate_id:
+            targets.append(("quote", int(workflow.bitrix_estimate_id)))
+        for deal_id in deal_ids:
             if deal_id:
-                try:
-                    await self.bitrix.attach_invoice_reference(deal_id, invoice)
-                    await self.bitrix.update_deal_payment_summary(deal_id, summary)
-                except Exception:
-                    logger.exception("Failed to attach invoice to deal %s", deal_id)
+                targets.append(("DEAL", int(deal_id)))
+
+        seen: set[tuple[str, int]] = set()
+        for entity_type, entity_id in targets:
+            key = (entity_type.upper(), entity_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                await self.bitrix.add_timeline_comment(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    comment=comment,
+                    files=files,
+                )
+                logger.info(
+                    "Invoice timeline comment posted on Bitrix %s %s | invoice=%s files=%s",
+                    entity_type.lower(),
+                    entity_id,
+                    invoice.invoice_number,
+                    len(files or []),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed invoice timeline comment on Bitrix %s %s",
+                    entity_type,
+                    entity_id,
+                )
 
     def _email_invoice_to_customer(
         self,

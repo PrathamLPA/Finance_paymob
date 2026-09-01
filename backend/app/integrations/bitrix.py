@@ -710,7 +710,11 @@ class RealBitrixClient:
         import base64
 
         fields: dict[str, Any] = {
-            "ENTITY_TYPE": entity_type.upper(),
+            "ENTITY_TYPE": (
+                "quote"
+                if entity_type.strip().upper() == "QUOTE"
+                else entity_type.strip().upper()
+            ),
             "ENTITY_ID": entity_id,
             "COMMENT": comment,
         }

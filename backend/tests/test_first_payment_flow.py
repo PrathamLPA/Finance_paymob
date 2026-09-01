@@ -68,6 +68,23 @@ def test_first_payment_creates_three_deals_and_invoice(client, seed_lead, db_ses
     assert workflow.first_payment_at is not None
     assert len(workflow.transactions) == 1
 
+    from app.integrations.factory import get_bitrix_client
+
+    bitrix = get_bitrix_client()
+    lead_comments = bitrix._mock_comments.get(("LEAD", 202), [])
+    assert any("Zoho invoice" in item["COMMENT"] for item in lead_comments)
+    if workflow.finance_deal_id:
+        deal_comments = bitrix._mock_comments.get(("DEAL", workflow.finance_deal_id), [])
+        assert any("Zoho invoice" in item["COMMENT"] for item in deal_comments)
+    if workflow.bitrix_estimate_id:
+        estimate_comments = bitrix._mock_comments.get(("QUOTE", workflow.bitrix_estimate_id), [])
+        assert any("Zoho invoice" in item["COMMENT"] for item in estimate_comments)
+        assert any(
+            "Invoice_" in name
+            for item in estimate_comments
+            for name in (item.get("FILES") or [])
+        )
+
 
 def test_duplicate_transaction_is_ignored(client, seed_lead):
     seed_lead(203, email="dup@test.com")
