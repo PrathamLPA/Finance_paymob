@@ -924,10 +924,14 @@ select.field-input {
 }
 
 .external-policy-link {
-    margin: 0.85rem 0 0;
-    font-size: 0.8125rem;
+    margin: 0.25rem 0 0;
+    padding: 0.9rem 1rem;
+    font-size: 0.875rem;
     color: var(--muted-foreground);
     line-height: 1.5;
+    background: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
 }
 
 .external-policy-link a,

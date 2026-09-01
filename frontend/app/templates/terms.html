@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment — Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=9">
+    <link rel="stylesheet" href="/static/styles.css?v=10">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -327,23 +327,20 @@
                     <div class="panel-header">
                         <span class="panel-step-badge muted" id="badge-terms">Step 4</span>
                         <div>
-                            <h2 class="terms-divider-title" id="terms-heading">Payment terms &amp; conditions</h2>
-                            <p class="terms-divider-hint">Scroll through and read carefully before accepting.</p>
+                            <h2 class="terms-divider-title" id="terms-heading">Terms &amp; refund policy</h2>
+                            <p class="terms-divider-hint">Open and review the policy before accepting.</p>
                         </div>
                     </div>
 
-                    <div class="terms-scroll" tabindex="0">
-                        {{ terms_html | safe }}
-                    </div>
-
                     <p class="external-policy-link">
-                        For the complete refund and data protection policy, see
+                        Please read our
                         <a href="{{ refund_policy_url }}" target="_blank" rel="noopener noreferrer">
-                            Refund Policy
+                            Terms and Conditions &amp; Refund Policy
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                 <path d="M14 4h6v6M10 14L20 4M15 9h5v10H4V9h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
-                        </a>.
+                        </a>
+                        before continuing.
                     </p>
                 </section>
 
@@ -351,9 +348,8 @@
                     <label class="consent-box">
                         <input type="checkbox" name="accepted" value="yes" id="accept-checkbox" required>
                         <span class="consent-text">
-                            I have read and agree to the Terms and Conditions,
-                            including the
-                            <a href="{{ refund_policy_url }}" target="_blank" rel="noopener noreferrer">Refund Policy</a>.
+                            I have read and agree to the
+                            <a href="{{ refund_policy_url }}" target="_blank" rel="noopener noreferrer">Terms and Conditions &amp; Refund Policy</a>.
                             I understand I will be redirected to <strong>Paymob</strong> to complete payment securely.
                         </span>
                     </label>
