@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment — Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=13">
+    <link rel="stylesheet" href="/static/styles.css?v=14">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -13,18 +13,22 @@
     <div class="page-bg"></div>
 
     <header class="site-header">
-        <div class="brand">
-            <div class="brand-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                    <path d="M8 12l3 3 5-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-            </div>
+        <a class="brand brand-learners" href="https://learnerspoint.org" target="_blank" rel="noopener noreferrer">
+            <picture>
+                <source srcset="/static/brand/learners-point-logo.avif" type="image/avif">
+                <img
+                    class="brand-logo"
+                    src="/static/brand/learners-point-logo.png"
+                    width="40"
+                    height="40"
+                    alt="Learners Point"
+                >
+            </picture>
             <div>
-                <span class="brand-name">Finance Automation</span>
-                <span class="brand-tagline">Secure payment gateway</span>
+                <span class="brand-name">Learners Point</span>
+                <span class="brand-tagline">Secure course payment</span>
             </div>
-        </div>
+        </a>
         <div class="secure-badge">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
@@ -53,25 +57,28 @@
             <div class="step-line" aria-hidden="true"></div>
             <div class="step">
                 <span class="step-num" id="nav-num-pay">4</span>
-                <span class="step-label">Terms &amp; Conditions</span>
+                <span class="step-label">Terms</span>
             </div>
         </nav>
 
         <article class="terms-card">
             <div class="card-hero">
-                <div class="card-hero-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none">
-                        <rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
-                        <path d="M2 10h20" stroke="currentColor" stroke-width="1.5"/>
-                        <path d="M6 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                    </svg>
-                </div>
+                <picture>
+                    <source srcset="/static/brand/learners-point-logo.avif" type="image/avif">
+                    <img
+                        class="card-hero-logo"
+                        src="/static/brand/learners-point-logo.png"
+                        width="48"
+                        height="48"
+                        alt=""
+                    >
+                </picture>
                 <div class="card-hero-text">
                     <div class="card-header">
                         <h1>Secure Payment</h1>
                     </div>
                     <p class="card-subtitle">
-                        Confirm who this purchase is for, review the terms, then continue to Paymob.
+                        Confirm purchase details, review terms at the bottom, then continue to Paymob.
                     </p>
                 </div>
             </div>
@@ -323,33 +330,36 @@
                     </label>
                 </section>
 
-                <div class="form-footer" id="terms-accept-section">
+                <section class="terms-accept-panel" id="terms-accept-section" aria-labelledby="terms-heading">
                     <div class="panel-header">
                         <span class="panel-step-badge muted" id="badge-terms">Step 4</span>
-                        <h2 class="section-heading" id="terms-heading">Terms &amp; Conditions</h2>
+                        <div>
+                            <h2 class="section-heading" id="terms-heading">Terms &amp; Conditions</h2>
+                            <p class="terms-divider-hint">Open the policy, scroll to the end, then accept to continue.</p>
+                        </div>
                     </div>
-                    <label class="consent-box" id="consent-box">
+                    <div class="consent-row" id="consent-box">
                         <input type="checkbox" name="accepted" value="yes" id="accept-checkbox" required>
-                        <span class="consent-text">
+                        <p class="consent-text">
                             I have read and agree to the
                             <button type="button" class="terms-link-btn" id="open-terms-modal">
                                 Terms and Conditions &amp; Refund Policy
                             </button>.
                             I understand I will be redirected to <strong>Paymob</strong> to complete payment securely.
-                        </span>
-                    </label>
+                        </p>
+                    </div>
                     <button type="submit" class="btn-paymob" id="submit-btn" disabled>
                         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                             <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
                             <path d="M8 11V8a4 4 0 118 0v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                         </svg>
-                        <span>Accept &amp; continue to payment</span>
+                        <span>Continue to payment</span>
                         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                             <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </button>
                     <p class="form-footer-note">You'll be redirected to Paymob's secure checkout to complete your payment.</p>
-                </div>
+                </section>
             </form>
         </article>
 
@@ -694,7 +704,10 @@
                 ) {
                     return;
                 }
-                if (termsAccepted && (event.target === checkbox || checkbox.contains(event.target))) {
+                if (event.target === checkbox) {
+                    if (termsAccepted) return;
+                    event.preventDefault();
+                    openTermsModal();
                     return;
                 }
                 event.preventDefault();

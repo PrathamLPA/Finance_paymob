@@ -107,6 +107,30 @@ body.error-page-body {
     display: flex;
     align-items: center;
     gap: 0.65rem;
+    text-decoration: none;
+    color: inherit;
+}
+
+.brand-learners:hover .brand-name {
+    color: color-mix(in oklab, var(--foreground) 80%, #2ec4b6);
+}
+
+.brand-logo,
+.card-hero-logo {
+    width: 2.5rem;
+    height: 2.5rem;
+    object-fit: contain;
+    border-radius: var(--radius-md);
+    background: #000;
+    padding: 0.28rem;
+    box-shadow: var(--shadow-xs);
+    flex-shrink: 0;
+}
+
+.card-hero-logo {
+    width: 3rem;
+    height: 3rem;
+    padding: 0.35rem;
 }
 
 .brand-icon {
@@ -936,67 +960,94 @@ select.field-input {
 
 .consent-text a,
 .terms-link-btn {
+    all: unset;
     display: inline;
-    padding: 0;
-    border: 0;
-    background: none;
     color: var(--foreground);
     font: inherit;
-    font-weight: 500;
+    font-weight: 600;
     text-decoration: underline;
-    text-underline-offset: 4px;
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
     cursor: pointer;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0;
+    border-radius: 0 !important;
+    appearance: none;
+    -webkit-appearance: none;
 }
 
 .external-policy-link a:hover,
 .consent-text a:hover,
 .terms-link-btn:hover {
+    color: color-mix(in oklab, var(--foreground) 75%, #2ec4b6);
     text-decoration-thickness: 2px;
 }
 
+.terms-link-btn:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
 /* ── Footer / consent ── */
-.form-footer {
-    margin-top: 1.5rem;
-    padding-top: 1.25rem;
+.form-footer,
+.terms-accept-panel {
+    margin-top: 1.75rem;
+    padding-top: 1.35rem;
     border-top: 1px solid var(--border);
 }
 
-.consent-box {
+.terms-accept-panel .panel-header {
+    margin-bottom: 0.95rem;
+}
+
+.consent-box,
+.consent-row {
     display: flex;
     align-items: flex-start;
-    gap: 0.7rem;
-    padding: 0.9rem 1rem;
-    background: var(--card);
-    border: 1px solid var(--input);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-xs);
-    cursor: pointer;
-    margin-bottom: 1rem;
-    transition: background 0.15s, border-color 0.15s;
+    gap: 0.75rem;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    cursor: default;
+    margin-bottom: 1.1rem;
 }
 
-.consent-box:hover {
-    background: var(--accent);
+.consent-box:hover,
+.consent-row:hover {
+    background: transparent;
 }
 
-.consent-box:has(input:checked) {
-    border-color: var(--foreground);
-    background: var(--accent);
+.consent-box:has(input:checked),
+.consent-row:has(input:checked) {
+    border-color: transparent;
+    background: transparent;
 }
 
-.consent-box input {
-    margin: 0.15rem 0 0;
-    width: 16px;
-    height: 16px;
-    accent-color: var(--primary);
+.consent-box input,
+.consent-row input {
+    margin: 0.2rem 0 0;
+    width: 1rem;
+    height: 1rem;
+    accent-color: var(--foreground);
     flex-shrink: 0;
     cursor: pointer;
+    border-radius: 0.25rem;
 }
 
 .consent-text {
-    font-size: 0.8125rem;
-    color: var(--foreground);
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--muted-foreground);
     line-height: 1.55;
+}
+
+.consent-text strong {
+    color: var(--foreground);
+    font-weight: 600;
 }
 
 .btn-paymob {
