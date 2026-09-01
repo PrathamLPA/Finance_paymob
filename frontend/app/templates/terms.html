@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment — Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=14">
+    <link rel="stylesheet" href="/static/styles.css?v=15">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -384,14 +384,15 @@
                         <img
                             class="terms-modal-logo"
                             src="/static/brand/learners-point-logo.png"
-                            width="40"
-                            height="40"
+                            width="44"
+                            height="44"
                             alt=""
                         >
                     </picture>
-                    <div>
-                        <h2 class="terms-modal-title" id="terms-modal-title">Terms and Conditions &amp; Refund Policy</h2>
-                        <p class="terms-modal-hint" id="terms-scroll-hint">Scroll to the end to continue</p>
+                    <div class="terms-modal-heading">
+                        <p class="terms-modal-eyebrow">Learners Point</p>
+                        <h2 class="terms-modal-title" id="terms-modal-title">Terms &amp; Refund Policy</h2>
+                        <p class="terms-modal-hint" id="terms-scroll-hint">Scroll through the policy to unlock accept</p>
                     </div>
                 </div>
                 <button type="button" class="terms-modal-close" data-close-terms aria-label="Close">
@@ -400,16 +401,25 @@
                     </svg>
                 </button>
             </header>
+            <div class="terms-modal-progress" aria-hidden="true">
+                <div class="terms-modal-progress-bar" id="terms-scroll-progress"></div>
+            </div>
             <div class="terms-modal-body" id="terms-modal-body" tabindex="0">
                 <article class="policy-article terms-modal-article">
                     {% include "_policy_body.html" %}
                 </article>
+                <p class="terms-modal-end" id="terms-modal-end">End of policy</p>
             </div>
-            <footer class="terms-modal-footer">
-                <button type="button" class="btn-secondary" data-close-terms>Close</button>
-                <button type="button" class="btn-paymob terms-modal-accept" id="terms-modal-accept" disabled>
-                    Accept &amp; continue
-                </button>
+            <footer class="terms-modal-footer" id="terms-modal-footer">
+                <p class="terms-modal-footer-note" id="terms-footer-note">
+                    Keep scrolling to enable Accept &amp; continue
+                </p>
+                <div class="terms-modal-actions">
+                    <button type="button" class="btn-secondary" data-close-terms>Not now</button>
+                    <button type="button" class="btn-paymob terms-modal-accept" id="terms-modal-accept" disabled>
+                        Accept &amp; continue
+                    </button>
+                </div>
             </footer>
         </div>
     </div>
@@ -630,6 +640,9 @@
         const termsModalBody = document.getElementById('terms-modal-body');
         const termsModalAccept = document.getElementById('terms-modal-accept');
         const termsScrollHint = document.getElementById('terms-scroll-hint');
+        const termsFooterNote = document.getElementById('terms-footer-note');
+        const termsModalFooter = document.getElementById('terms-modal-footer');
+        const termsScrollProgress = document.getElementById('terms-scroll-progress');
         const openTermsBtn = document.getElementById('open-terms-modal');
         const consentBox = document.getElementById('consent-box');
         let termsAccepted = false;
@@ -644,20 +657,32 @@
 
         function setTermsAcceptEnabled(enabled) {
             termsScrolledToEnd = enabled;
-            if (!termsModalAccept) return;
-            termsModalAccept.disabled = !enabled;
+            if (termsModalAccept) termsModalAccept.disabled = !enabled;
+            if (termsModalFooter) termsModalFooter.classList.toggle('is-ready', enabled);
             if (termsScrollHint) {
                 termsScrollHint.textContent = enabled
-                    ? 'Ready to accept'
-                    : 'Scroll to the end to continue';
+                    ? 'You can accept and continue'
+                    : 'Scroll through the policy to unlock accept';
+            }
+            if (termsFooterNote) {
+                termsFooterNote.textContent = enabled
+                    ? 'You have reached the end. Accept to continue payment.'
+                    : 'Keep scrolling to enable Accept & continue';
             }
         }
 
         function checkTermsScroll() {
             if (!termsModalBody) return;
-            const remaining =
-                termsModalBody.scrollHeight - termsModalBody.scrollTop - termsModalBody.clientHeight;
-            setTermsAcceptEnabled(remaining <= 24);
+            const maxScroll = Math.max(
+                termsModalBody.scrollHeight - termsModalBody.clientHeight,
+                0
+            );
+            const ratio = maxScroll <= 0 ? 1 : termsModalBody.scrollTop / maxScroll;
+            if (termsScrollProgress) {
+                termsScrollProgress.style.width = Math.min(100, Math.round(ratio * 100)) + '%';
+            }
+            const remaining = maxScroll - termsModalBody.scrollTop;
+            setTermsAcceptEnabled(remaining <= 28);
         }
 
         function openTermsModal() {
@@ -665,6 +690,7 @@
             termsModal.hidden = false;
             document.body.classList.add('terms-modal-open');
             setTermsAcceptEnabled(false);
+            if (termsScrollProgress) termsScrollProgress.style.width = '0%';
             if (termsModalBody) {
                 termsModalBody.scrollTop = 0;
                 requestAnimationFrame(() => {
