@@ -1325,3 +1325,178 @@ body.error-page-body {
         transform: none;
     }
 }
+
+/* ── Learners Point policy page ── */
+.policy-page {
+    --policy-teal: #2ec4b6;
+    --policy-teal-deep: #1aa896;
+    --policy-ink: #0c1220;
+    --policy-paper: #f7faf9;
+    --policy-muted: #5b677a;
+    min-height: 100vh;
+    margin: 0;
+    color: var(--policy-ink);
+    background: var(--policy-paper);
+    font-family: "DM Sans", system-ui, sans-serif;
+}
+
+.policy-bg {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, color-mix(in srgb, var(--policy-teal) 28%, transparent), transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, color-mix(in srgb, var(--policy-teal) 14%, transparent), transparent 50%),
+        linear-gradient(180deg, #eef7f5 0%, var(--policy-paper) 42%, #f3f1ec 100%);
+}
+
+.policy-header {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 1.5rem 1.25rem 0.5rem;
+}
+
+.policy-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.85rem;
+    text-decoration: none;
+    color: inherit;
+}
+
+.policy-logo {
+    width: 3.25rem;
+    height: 3.25rem;
+    object-fit: contain;
+    border-radius: 0.75rem;
+    background: #000;
+    padding: 0.35rem;
+    box-shadow: 0 10px 30px rgb(12 18 32 / 0.12);
+}
+
+.policy-brand-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.policy-brand-name {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+}
+
+.policy-brand-tag {
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--policy-muted);
+}
+
+.policy-main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 1.25rem 1.25rem 3rem;
+}
+
+.policy-hero {
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--policy-teal) 25%, #d7e0dc);
+}
+
+.policy-eyebrow {
+    margin: 0 0 0.65rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--policy-teal-deep);
+}
+
+.policy-title {
+    margin: 0 0 0.75rem;
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: clamp(1.75rem, 4vw, 2.35rem);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+}
+
+.policy-lead {
+    margin: 0;
+    max-width: 38rem;
+    font-size: 1.05rem;
+    line-height: 1.55;
+    color: var(--policy-muted);
+}
+
+.policy-article {
+    display: grid;
+    gap: 1.75rem;
+}
+
+.policy-section h2 {
+    margin: 0 0 0.65rem;
+    font-size: 1.125rem;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+}
+
+.policy-section p,
+.policy-section li {
+    margin: 0;
+    font-size: 0.975rem;
+    line-height: 1.65;
+    color: color-mix(in srgb, var(--policy-ink) 88%, var(--policy-muted));
+}
+
+.policy-section p + p,
+.policy-section p + ul,
+.policy-section ul + p {
+    margin-top: 0.85rem;
+}
+
+.policy-section ul {
+    margin: 0;
+    padding-left: 1.15rem;
+}
+
+.policy-section li + li {
+    margin-top: 0.45rem;
+}
+
+.policy-section a {
+    color: var(--policy-teal-deep);
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.policy-section a:hover {
+    color: var(--policy-ink);
+}
+
+.policy-footer {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 1.25rem 2.5rem;
+    font-size: 0.8125rem;
+    color: var(--policy-muted);
+}
+
+.policy-footer p {
+    margin: 0;
+    padding-top: 1.25rem;
+    border-top: 1px solid color-mix(in srgb, var(--policy-teal) 20%, #d7e0dc);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .policy-page * {
+        animation: none !important;
+        transition: none !important;
+    }
+}

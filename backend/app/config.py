@@ -160,7 +160,9 @@ class Settings(BaseSettings):
 
     # Workflow
     terms_version: str = "1.0"
-    refund_policy_url: str = "https://learnerspoint.org/refund-policy"
+    refund_policy_url: str = (
+        "https://financepaymob-frontend-production.up.railway.app/terms-and-conditions"
+    )
     # After a successful "for myself" payment, thank-you page links here
     lms_login_url: str = (
         "https://learn.learnerspoint.org/auth/login"
