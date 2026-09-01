@@ -318,30 +318,38 @@ function BankTransfersPage() {
 
       {fullscreen && proofUrl && !isPdf ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/90 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 bg-stone-950/92 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           aria-label="Receipt full screen"
-          onClick={() => setFullscreen(false)}
         >
-          <button
-            type="button"
-            className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20"
+          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/10 bg-stone-950/80 px-4 py-3 backdrop-blur">
+            <p className="truncate text-sm text-white/80">
+              {selected?.proof_original_name || "Receipt"} — scroll to see full image
+            </p>
+            <button
+              type="button"
+              className="shrink-0 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20"
+              onClick={() => setFullscreen(false)}
+              aria-label="Close full screen"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div
+            className="h-[calc(100vh-3.5rem)] overflow-auto overscroll-contain p-4"
             onClick={() => setFullscreen(false)}
-            aria-label="Close full screen"
           >
-            <X className="h-5 w-5" />
-          </button>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={proofUrl}
-            alt="Bank transfer receipt full screen"
-            className="max-h-[92vh] max-w-[96vw] rounded-md object-contain shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          />
-          <p className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-white/70">
-            Press Esc or click outside to close
-          </p>
+            <div className="mx-auto flex min-h-full w-full max-w-5xl justify-center py-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={proofUrl}
+                alt="Bank transfer receipt full screen"
+                className="h-auto w-full max-w-full rounded-md object-contain shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              />
+            </div>
+          </div>
         </div>
       ) : null}
     </div>
