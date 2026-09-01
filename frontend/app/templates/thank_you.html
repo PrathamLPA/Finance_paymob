@@ -4,15 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ page_title }}</title>
-    <link rel="stylesheet" href="/static/styles.css?v=7">
+    <link rel="stylesheet" href="/static/styles.css?v=8">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body class="error-page-body">
-    <div class="error-card">
+<body class="error-page-body thank-you-page">
+    <div class="page-bg"></div>
+    <div class="error-card thank-you-card animate-rise">
+        <div class="thank-you-icon {% if variant == 'failed' %}is-failed{% else %}is-success{% endif %}" aria-hidden="true">
+            {% if variant == 'failed' %}
+            <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"/>
+                <path d="M15 9l-6 6M9 9l6 6" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+            </svg>
+            {% else %}
+            <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"/>
+                <path d="M8 12.5l2.5 2.5L16 9.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            {% endif %}
+        </div>
         <h1>{{ heading }}</h1>
         <p>{{ message }}</p>
         {% if amount_display %}
-        <p><strong>Amount:</strong> {{ amount_display }}</p>
+        <p class="thank-you-amount"><strong>Amount:</strong> {{ amount_display }}</p>
         {% endif %}
         {% if merchant_order_id %}
         <p class="form-footer-note">Reference: {{ merchant_order_id }}</p>

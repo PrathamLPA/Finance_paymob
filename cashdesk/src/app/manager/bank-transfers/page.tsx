@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Expand, X } from "lucide-react";
 import { API_BASE, api, getToken } from "@/lib/api";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
@@ -51,6 +52,7 @@ function BankTransfersPage() {
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const refresh = useCallback(async () => {
     const res = await api<{ items: Submission[] }>("/api/staff/bank-transfers");
@@ -67,6 +69,7 @@ function BankTransfersPage() {
 
     async function loadProof() {
       setProofUrl(null);
+      setFullscreen(false);
       if (!selected?.proof_url) return;
       try {
         const token = getToken();
@@ -91,6 +94,20 @@ function BankTransfersPage() {
     };
   }, [selected]);
 
+  useEffect(() => {
+    if (!fullscreen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setFullscreen(false);
+    }
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [fullscreen]);
+
   async function act(action: "approve" | "reject") {
     if (!selected) return;
     setBusy(true);
@@ -111,6 +128,7 @@ function BankTransfersPage() {
   }
 
   const pending = items.filter((i) => i.status === "pending_review").length;
+  const isPdf = selected?.proof_content_type === "application/pdf";
 
   return (
     <div className="space-y-6">
@@ -211,27 +229,55 @@ function BankTransfersPage() {
                 </div>
 
                 {selected.has_proof ? (
-                  <div className="overflow-hidden rounded-lg border border-stone-200 bg-stone-50">
-                    {selected.proof_content_type === "application/pdf" ? (
-                      <a
-                        className="block px-4 py-6 text-center text-sm text-teal-800 underline"
-                        href={proofUrl || "#"}
-                        target="_blank"
-                        rel="noreferrer"
+                  <div className="space-y-2">
+                    <div className="overflow-hidden rounded-lg border border-stone-200 bg-stone-50">
+                      {isPdf ? (
+                        <a
+                          className="block px-4 py-6 text-center text-sm text-teal-800 underline"
+                          href={proofUrl || "#"}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open PDF receipt
+                          {selected.proof_original_name
+                            ? ` (${selected.proof_original_name})`
+                            : ""}
+                        </a>
+                      ) : proofUrl ? (
+                        <button
+                          type="button"
+                          className="group relative block w-full cursor-zoom-in text-left"
+                          onClick={() => setFullscreen(true)}
+                          aria-label="View receipt full screen"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={proofUrl}
+                            alt="Bank transfer receipt"
+                            className="max-h-80 w-full object-contain transition group-hover:opacity-95"
+                          />
+                          <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-stone-900/50 to-transparent px-3 py-2 text-center text-xs font-medium text-white opacity-0 transition group-hover:opacity-100">
+                            Click to view full screen
+                          </span>
+                        </button>
+                      ) : (
+                        <p className="px-4 py-6 text-center text-sm text-stone-500">
+                          Loading receipt…
+                        </p>
+                      )}
+                    </div>
+                    {proofUrl && !isPdf ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => setFullscreen(true)}
                       >
-                        Open PDF receipt
-                        {selected.proof_original_name ? ` (${selected.proof_original_name})` : ""}
-                      </a>
-                    ) : proofUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={proofUrl}
-                        alt="Bank transfer receipt"
-                        className="max-h-80 w-full object-contain"
-                      />
-                    ) : (
-                      <p className="px-4 py-6 text-center text-sm text-stone-500">Loading receipt…</p>
-                    )}
+                        <Expand className="mr-2 h-4 w-4" />
+                        View full screen
+                      </Button>
+                    ) : null}
                   </div>
                 ) : (
                   <p className="text-sm text-stone-500">No receipt uploaded yet.</p>
@@ -269,6 +315,35 @@ function BankTransfersPage() {
           </CardContent>
         </Card>
       </div>
+
+      {fullscreen && proofUrl && !isPdf ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/90 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Receipt full screen"
+          onClick={() => setFullscreen(false)}
+        >
+          <button
+            type="button"
+            className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20"
+            onClick={() => setFullscreen(false)}
+            aria-label="Close full screen"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={proofUrl}
+            alt="Bank transfer receipt full screen"
+            className="max-h-[92vh] max-w-[96vw] rounded-md object-contain shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <p className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-white/70">
+            Press Esc or click outside to close
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

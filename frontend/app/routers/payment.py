@@ -112,8 +112,41 @@ def _form_context(
 
 @router.get("/thank-you", response_class=HTMLResponse)
 async def payment_thank_you(request: Request) -> HTMLResponse:
-    """Paymob redirects here after checkout. UX only — webhook is source of truth."""
+    """Paymob redirects here after checkout; bank transfer after receipt upload."""
     params = request.query_params
+    kind = (params.get("kind") or "").strip().lower()
+
+    if kind == "bank_transfer":
+        amount = (params.get("amount") or "").strip()
+        currency = (params.get("currency") or "AED").upper()
+        amount_display = f"{amount} {currency}" if amount else None
+        name = (params.get("name") or "").strip()
+        return templates.TemplateResponse(
+            "thank_you.html",
+            {
+                "request": request,
+                "page_title": "Receipt received",
+                "heading": "Thank you — receipt received",
+                "message": (
+                    f"Hi {name}, we have received your bank transfer receipt. "
+                    if name
+                    else "We have received your bank transfer receipt. "
+                )
+                + "Our finance team will review it and get back to you shortly.",
+                "footnote": (
+                    "You can safely close this page. "
+                    "If anything is unclear, your sales contact will reach out."
+                ),
+                "amount_display": amount_display,
+                "merchant_order_id": "",
+                "show_lms": False,
+                "lms_url": None,
+                "course_for": None,
+                "auto_redirect_seconds": 0,
+                "variant": "bank_transfer",
+            },
+        )
+
     success_raw = (params.get("success") or params.get("txn_response_code") or "").lower()
     success = success_raw in ("true", "1", "approved", "00")
     failed = success_raw in ("false", "0") or (params.get("error_occured") or "").lower() in (
@@ -163,6 +196,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
         )
         page_title = "Payment Failed"
         footnote = "No amount was recorded in our system for a failed attempt."
+        variant = "failed"
     elif success:
         heading = "Payment submitted"
         message = (
@@ -173,6 +207,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
         footnote = (
             "Confirmation appears as a comment on your Bitrix lead once the Paymob webhook arrives."
         )
+        variant = "success"
     else:
         heading = "Returning from Paymob"
         message = (
@@ -181,6 +216,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
         )
         page_title = "Payment Status"
         footnote = "Final status comes from the Paymob webhook, not this page."
+        variant = "neutral"
 
     return templates.TemplateResponse(
         "thank_you.html",
@@ -196,6 +232,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
             "lms_url": lms_url,
             "course_for": course_for,
             "auto_redirect_seconds": 5 if show_lms and success else 0,
+            "variant": variant,
         },
     )
 
@@ -232,6 +269,19 @@ async def payment_receipt_page(token: str, request: Request) -> HTMLResponse:
             {"request": request, "message": exc.detail},
             status_code=exc.status_code if exc.status_code in (404, 400) else 404,
         )
+    # Already submitted — show thank-you instead of the upload form
+    if data.get("status") == "pending_review" and data.get("has_proof"):
+        from urllib.parse import urlencode
+
+        qs = urlencode(
+            {
+                "kind": "bank_transfer",
+                "amount": str(data.get("payment_amount") or ""),
+                "currency": str(data.get("currency") or "AED"),
+                "name": str(data.get("customer_name") or ""),
+            }
+        )
+        return RedirectResponse(url=f"/payment/thank-you?{qs}", status_code=303)
     return templates.TemplateResponse(
         "receipt.html",
         {
@@ -257,14 +307,14 @@ async def payment_receipt_upload(token: str, request: Request) -> Response:
             status_code=404,
         )
 
-    def _render(*, error: str | None = None, success: str | None = None) -> HTMLResponse:
+    def _render(*, error: str | None = None) -> HTMLResponse:
         return templates.TemplateResponse(
             "receipt.html",
             {
                 "request": request,
                 "token": token,
                 "error": error,
-                "success": success,
+                "success": None,
                 **data,
             },
             status_code=400 if error else 200,
@@ -275,7 +325,7 @@ async def payment_receipt_upload(token: str, request: Request) -> Response:
 
     content = await upload.read()
     try:
-        result = await upload_receipt(
+        await upload_receipt(
             token,
             filename=str(upload.filename),
             content=content,
@@ -284,16 +334,17 @@ async def payment_receipt_upload(token: str, request: Request) -> Response:
     except BackendApiError as exc:
         return _render(error=exc.detail)
 
-    return templates.TemplateResponse(
-        "receipt.html",
+    from urllib.parse import urlencode
+
+    qs = urlencode(
         {
-            "request": request,
-            "token": token,
-            "error": None,
-            "success": result.get("message") or "Receipt uploaded successfully.",
-            **{**data, "status": result.get("status") or "pending_review", "has_proof": True},
-        },
+            "kind": "bank_transfer",
+            "amount": str(data.get("payment_amount") or ""),
+            "currency": str(data.get("currency") or "AED"),
+            "name": str(data.get("customer_name") or ""),
+        }
     )
+    return RedirectResponse(url=f"/payment/thank-you?{qs}", status_code=303)
 
 
 @router.post("/{token}/accept", response_model=None)

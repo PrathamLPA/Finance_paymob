@@ -1176,3 +1176,126 @@ body.error-page-body {
 .lms-cta .form-footer-note {
     margin-top: 0.75rem;
 }
+
+/* ── Motion / polish ── */
+@keyframes rise-in {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes soft-pop {
+    0% {
+        opacity: 0;
+        transform: scale(0.72);
+    }
+    70% {
+        transform: scale(1.06);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes check-draw {
+    from {
+        stroke-dashoffset: 24;
+    }
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+.animate-rise {
+    animation: rise-in 0.45s ease-out both;
+}
+
+.terms-card,
+.approval-card {
+    animation: rise-in 0.45s ease-out both;
+}
+
+.site-header {
+    animation: rise-in 0.35s ease-out both;
+}
+
+.thank-you-page .thank-you-card {
+    position: relative;
+    z-index: 1;
+    max-width: 460px;
+}
+
+.thank-you-icon {
+    width: 3.25rem;
+    height: 3.25rem;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 1rem;
+    animation: soft-pop 0.55s ease-out both;
+}
+
+.thank-you-icon.is-success {
+    color: color-mix(in oklab, var(--success) 75%, black);
+    background: color-mix(in oklab, var(--success) 14%, var(--card));
+    border: 1px solid color-mix(in oklab, var(--success) 35%, var(--border));
+}
+
+.thank-you-icon.is-failed {
+    color: var(--destructive);
+    background: color-mix(in oklab, var(--destructive) 10%, var(--card));
+    border: 1px solid color-mix(in oklab, var(--destructive) 30%, var(--border));
+}
+
+.thank-you-icon.is-success path {
+    stroke-dasharray: 24;
+    animation: check-draw 0.45s ease-out 0.25s both;
+}
+
+.thank-you-amount {
+    margin-top: 0.75rem !important;
+    color: var(--foreground) !important;
+}
+
+.btn-paymob {
+    transition: transform 0.15s ease, opacity 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.btn-paymob:hover {
+    transform: translateY(-1px);
+}
+
+.btn-paymob:active {
+    transform: translateY(0);
+}
+
+.steps .step {
+    transition: color 0.2s ease, opacity 0.2s ease;
+}
+
+.alert {
+    animation: rise-in 0.3s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .animate-rise,
+    .terms-card,
+    .approval-card,
+    .site-header,
+    .thank-you-icon,
+    .thank-you-icon.is-success path,
+    .alert {
+        animation: none !important;
+    }
+
+    .btn-paymob:hover {
+        transform: none;
+    }
+}

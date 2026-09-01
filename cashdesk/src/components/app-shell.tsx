@@ -76,7 +76,7 @@ export function AppShell({
                   key={link.href}
                   href={link.href}
                   className={cn(
-                    "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                    "cashdesk-nav-link flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium",
                     active
                       ? "bg-teal-900 text-white shadow-sm"
                       : "text-stone-600 hover:bg-stone-100 hover:text-stone-900"
@@ -117,7 +117,7 @@ export function AppShell({
                     key={link.href}
                     href={link.href}
                     className={cn(
-                      "whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium",
+                      "cashdesk-nav-link whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium",
                       active ? "bg-teal-900 text-white" : "bg-stone-100 text-stone-600"
                     )}
                   >
@@ -127,7 +127,7 @@ export function AppShell({
               })}
             </nav>
           </header>
-          <main className="flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
+          <main className="cashdesk-page-enter flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
         </div>
       </div>
     </div>
