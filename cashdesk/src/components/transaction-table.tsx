@@ -198,6 +198,12 @@ export function TransactionTable({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    if (!selected) return;
+    const fresh = items.find((item) => item.id === selected.id);
+    if (fresh) setSelected(fresh);
+  }, [items, selected?.id]);
+
   async function retrigger(row: TxnRow) {
     setBusyId(row.id);
     setError("");
