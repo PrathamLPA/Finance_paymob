@@ -1320,33 +1320,59 @@ body.error-page-body {
 .thank-you-page .thank-you-card {
     position: relative;
     z-index: 1;
-    max-width: 520px;
+    max-width: 34rem;
     width: 100%;
     margin: 0 auto;
     text-align: center;
+    padding: 1.75rem 1.5rem 1.5rem;
+}
+
+.thank-you-page .thank-you-card h1 {
+    margin: 0.35rem 0 0.75rem;
+    font-size: clamp(1.35rem, 2.6vw, 1.7rem);
+    letter-spacing: -0.02em;
+    line-height: 1.25;
 }
 
 .thank-you-main {
     display: flex;
     justify-content: center;
-    padding-top: 1.5rem;
-    padding-bottom: 2rem;
+    align-items: flex-start;
+    padding-top: 1.75rem;
+    padding-bottom: 2.5rem;
+    min-height: calc(100vh - 5.5rem);
+}
+
+.thank-you-eyebrow {
+    margin: 0;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--success) 55%, var(--muted-foreground));
 }
 
 .thank-you-message {
     margin: 0 auto;
-    max-width: 36ch;
+    max-width: 38ch;
     color: var(--muted-foreground);
+    line-height: 1.55;
+    font-size: 0.95rem;
+}
+
+.thank-you-message strong {
+    color: var(--foreground);
+    font-weight: 600;
 }
 
 .thank-you-icon {
-    width: 3.25rem;
-    height: 3.25rem;
+    width: 3.5rem;
+    height: 3.5rem;
     border-radius: 999px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    margin: 0 auto 1rem;
+    margin: 0 auto 0.85rem;
     animation: soft-pop 0.55s ease-out both;
 }
 
@@ -1367,9 +1393,108 @@ body.error-page-body {
     animation: check-draw 0.45s ease-out 0.25s both;
 }
 
+.thank-you-amount-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    margin: 1.25rem auto 0;
+    padding: 1rem 1.15rem;
+    width: 100%;
+    max-width: 18rem;
+    border-radius: var(--radius-lg);
+    border: 1px solid color-mix(in oklab, var(--success) 22%, var(--border));
+    background:
+        linear-gradient(
+            165deg,
+            color-mix(in oklab, var(--success) 8%, var(--card)) 0%,
+            color-mix(in oklab, var(--muted) 40%, var(--card)) 100%
+        );
+    animation: rise-in 0.5s ease-out 0.08s both;
+}
+
+.thank-you-amount-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+}
+
+.thank-you-amount-value {
+    font-size: 1.55rem;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    color: var(--foreground);
+    font-variant-numeric: tabular-nums;
+}
+
+.thank-you-steps {
+    list-style: none;
+    margin: 1.35rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.65rem;
+    text-align: left;
+}
+
+.thank-you-steps li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.7rem 0.8rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: color-mix(in oklab, var(--muted) 35%, var(--card));
+    font-size: 0.9rem;
+    line-height: 1.4;
+    color: var(--foreground);
+    animation: rise-in 0.45s ease-out both;
+}
+
+.thank-you-steps li:nth-child(1) { animation-delay: 0.12s; }
+.thank-you-steps li:nth-child(2) { animation-delay: 0.18s; }
+.thank-you-steps li:nth-child(3) { animation-delay: 0.24s; }
+
+.thank-you-step-num {
+    flex-shrink: 0;
+    width: 1.45rem;
+    height: 1.45rem;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: color-mix(in oklab, var(--success) 70%, black);
+    background: color-mix(in oklab, var(--success) 16%, var(--card));
+    border: 1px solid color-mix(in oklab, var(--success) 28%, var(--border));
+}
+
+.thank-you-footnote {
+    margin: 1.25rem 0 0;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--muted-foreground);
+}
+
 .thank-you-amount {
     margin-top: 0.75rem !important;
     color: var(--foreground) !important;
+}
+
+@media (max-width: 540px) {
+    .thank-you-page .thank-you-card {
+        padding: 1.4rem 1.1rem 1.25rem;
+    }
+
+    .thank-you-amount-value {
+        font-size: 1.35rem;
+    }
+
+    .thank-you-main {
+        padding-top: 1rem;
+    }
 }
 
 .receipt-card .card-hero {

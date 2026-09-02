@@ -127,7 +127,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
             {
                 "request": request,
                 "page_title": "Receipt received",
-                "heading": "Thank you - receipt received",
+                "heading": "Thank you — receipt received",
                 "message": (
                     f"Hi {name}, we have received your bank transfer receipt. "
                     if name
@@ -139,6 +139,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
                     "If anything is unclear, your sales contact will reach out."
                 ),
                 "amount_display": amount_display,
+                "customer_name": name,
                 "merchant_order_id": "",
                 "show_lms": False,
                 "lms_url": None,
@@ -157,20 +158,15 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
             "thank_you.html",
             {
                 "request": request,
-                "page_title": "Visit the office desk",
-                "heading": "Thank you — please pay at the office desk",
-                "message": (
-                    f"Hi {name}, your details and terms acceptance are complete. "
-                    if name
-                    else "Your details and terms acceptance are complete. "
-                )
-                + "Please make your cash payment at the Learners Point office desk. "
-                "Our team will confirm your payment there.",
+                "page_title": "Pay at the office desk",
+                "heading": "Pay at the office desk",
+                "message": "",
                 "footnote": (
-                    "You can safely close this page. "
-                    "Bring a payment reference or this confirmation when you visit the desk."
+                    "You can close this page. Keep this screen or your name ready "
+                    "when you reach the desk."
                 ),
                 "amount_display": amount_display,
+                "customer_name": name,
                 "merchant_order_id": "",
                 "show_lms": False,
                 "lms_url": None,

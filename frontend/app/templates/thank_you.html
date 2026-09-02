@@ -4,12 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ page_title }}</title>
-    <link rel="stylesheet" href="/static/styles.css?v=19">
+    <link rel="stylesheet" href="/static/styles.css?v=20">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body class="paymob-page thank-you-page">
+<body class="paymob-page thank-you-page{% if variant %} thank-you-{{ variant }}{% endif %}">
     <div class="page-bg"></div>
 
     <header class="site-header">
@@ -26,7 +26,15 @@
             </picture>
             <div>
                 <span class="brand-name">Learners Point</span>
-                <span class="brand-tagline">Secure course payment</span>
+                <span class="brand-tagline">
+                    {% if variant == 'cash' %}
+                    Cash payment
+                    {% elif variant == 'bank_transfer' %}
+                    Bank transfer
+                    {% else %}
+                    Secure course payment
+                    {% endif %}
+                </span>
             </div>
         </a>
         <div class="secure-badge">
@@ -53,15 +61,69 @@
                 </svg>
                 {% endif %}
             </div>
+
+            {% if variant == 'cash' %}
+            <p class="thank-you-eyebrow">Registration complete</p>
+            <h1>Pay at the office desk</h1>
+            <p class="thank-you-message">
+                {% if customer_name %}
+                Hi <strong>{{ customer_name }}</strong> — your details and terms are saved.
+                {% else %}
+                Your details and terms are saved.
+                {% endif %}
+                Please complete your cash payment with our team at Learners Point.
+            </p>
+
+            {% if amount_display %}
+            <div class="thank-you-amount-panel" aria-label="Amount due at the desk">
+                <span class="thank-you-amount-label">Pay at desk</span>
+                <span class="thank-you-amount-value">{{ amount_display }}</span>
+            </div>
+            {% endif %}
+
+            <ol class="thank-you-steps">
+                <li>
+                    <span class="thank-you-step-num">1</span>
+                    <span>Visit the Learners Point office desk</span>
+                </li>
+                <li>
+                    <span class="thank-you-step-num">2</span>
+                    <span>Show this confirmation or your name to the cashier</span>
+                </li>
+                <li>
+                    <span class="thank-you-step-num">3</span>
+                    <span>Pay cash — our team will confirm it in Cash Desk</span>
+                </li>
+            </ol>
+
+            <p class="thank-you-footnote">{{ footnote }}</p>
+
+            {% elif variant == 'bank_transfer' %}
+            <p class="thank-you-eyebrow">Receipt received</p>
             <h1>{{ heading }}</h1>
             <p class="thank-you-message">{{ message }}</p>
             {% if amount_display %}
-            <p class="thank-you-amount"><strong>Amount:</strong> {{ amount_display }}</p>
+            <div class="thank-you-amount-panel" aria-label="Transfer amount">
+                <span class="thank-you-amount-label">Amount</span>
+                <span class="thank-you-amount-value">{{ amount_display }}</span>
+            </div>
+            {% endif %}
+            <p class="thank-you-footnote">{{ footnote }}</p>
+
+            {% else %}
+            <h1>{{ heading }}</h1>
+            <p class="thank-you-message">{{ message }}</p>
+            {% if amount_display %}
+            <div class="thank-you-amount-panel" aria-label="Payment amount">
+                <span class="thank-you-amount-label">Amount</span>
+                <span class="thank-you-amount-value">{{ amount_display }}</span>
+            </div>
             {% endif %}
             {% if merchant_order_id %}
             <p class="form-footer-note">Reference: {{ merchant_order_id }}</p>
             {% endif %}
-            <p class="form-footer-note">{{ footnote }}</p>
+            <p class="thank-you-footnote">{{ footnote }}</p>
+            {% endif %}
 
             {% if show_lms and lms_url %}
             <div class="lms-cta">
