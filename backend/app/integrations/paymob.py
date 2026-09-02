@@ -253,18 +253,21 @@ class MockPaymobClient:
         merchant_reference: str,
         customer_email: str | None,
         customer_name: str | None,
+        payment_method_ids: list[int] | None = None,
     ) -> PaymobSession:
         session_id = uuid.uuid4().hex[:16]
+        methods = payment_method_ids or [self.settings.paymob_integration_id]
         checkout_url = (
             f"{self.settings.paymob_checkout_base_url.rstrip('/')}"
             f"?publicKey=mock_public_key&clientSecret=mock_{session_id}"
         )
         logger.info(
-            "[MockPaymob] Created intention %s for %s %s (ref=%s)",
+            "[MockPaymob] Created intention %s for %s %s (ref=%s methods=%s)",
             session_id,
             currency,
             amount,
             merchant_reference,
+            methods,
         )
         return PaymobSession(session_id=session_id, checkout_url=checkout_url, order_id=f"ORD-{session_id}")
 
@@ -564,6 +567,7 @@ class RealPaymobClient(MockPaymobClient):
         merchant_reference: str,
         customer_email: str | None,
         customer_name: str | None,
+        payment_method_ids: list[int] | None = None,
     ) -> PaymobSession:
         if not self.settings.paymob_secret_key or self.settings.use_mock_integrations:
             return await super().create_payment_session(
@@ -572,6 +576,7 @@ class RealPaymobClient(MockPaymobClient):
                 merchant_reference=merchant_reference,
                 customer_email=customer_email,
                 customer_name=customer_name,
+                payment_method_ids=payment_method_ids,
             )
 
         amount_cents = int(amount * 100)
@@ -599,11 +604,21 @@ class RealPaymobClient(MockPaymobClient):
                 'Paymob intention failed (400): {"billing_data":{"email":["Enter a valid email address."]}}'
             )
         na = "NA"
+        methods = [int(m) for m in (payment_method_ids or []) if int(m) > 0]
+        if not methods:
+            default_id = int(self.settings.paymob_integration_id or 0)
+            if default_id > 0:
+                methods = [default_id]
+        if not methods:
+            raise ValueError(
+                "Paymob intention failed: no payment_methods configured "
+                "(set PAYMOB_INTEGRATION_ID / CARD / TABBY / TAMARA)."
+            )
 
         intention_payload = {
             "amount": amount_cents,
             "currency": currency,
-            "payment_methods": [self.settings.paymob_integration_id],
+            "payment_methods": methods,
             "special_reference": merchant_reference,
             "items": [
                 {
@@ -645,6 +660,14 @@ class RealPaymobClient(MockPaymobClient):
             "Content-Type": "application/json",
             "Expect": "",
         }
+
+        logger.info(
+            "Paymob intention | ref=%s amount=%s %s methods=%s",
+            merchant_reference,
+            amount,
+            currency,
+            methods,
+        )
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             intention_resp = await client.post(

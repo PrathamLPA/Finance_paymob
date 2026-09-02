@@ -53,7 +53,14 @@ class PaymentSessionService:
         currency: str,
         merchant_reference: str,
         trigger: str,
+        installment_number: int | None = None,
+        payment_method_ids: list[int] | None = None,
     ):
+        methods = payment_method_ids
+        if methods is None:
+            methods = await self._resolve_paymob_methods(
+                workflow, installment_number=installment_number
+            )
         try:
             return await self.paymob.create_payment_session(
                 amount=amount,
@@ -61,6 +68,7 @@ class PaymentSessionService:
                 merchant_reference=merchant_reference,
                 customer_email=workflow.customer_email,
                 customer_name=workflow.customer_name,
+                payment_method_ids=methods,
             )
         except ValueError as exc:
             msg = str(exc)
@@ -80,6 +88,33 @@ class PaymentSessionService:
                         workflow.bitrix_lead_id,
                     )
             raise
+
+    async def _resolve_paymob_methods(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        installment_number: int | None,
+    ) -> list[int]:
+        from app.integrations.factory import get_bitrix_client
+        from app.services.payment_mode import resolve_paymob_payment_method_ids_async
+
+        number = installment_number or 1
+        bitrix = get_bitrix_client(self.settings)
+        lead = workflow.bitrix_lead_payload or {}
+        if workflow.bitrix_lead_id:
+            try:
+                lead = await bitrix.get_lead(workflow.bitrix_lead_id)
+            except Exception:
+                logger.exception(
+                    "Could not refresh Bitrix lead %s for Paymob method resolution",
+                    workflow.bitrix_lead_id,
+                )
+        return await resolve_paymob_payment_method_ids_async(
+            lead,
+            installment_number=number,
+            settings=self.settings,
+            bitrix=bitrix,
+        )
 
     def get_session_by_token(self, token: str) -> PaymentSession | None:
         return self.db.scalar(select(PaymentSession).where(PaymentSession.token == token))
@@ -237,6 +272,7 @@ class PaymentSessionService:
                 currency=workflow.currency,
                 merchant_reference=merchant_reference,
                 trigger="new payment session",
+                installment_number=installment_number,
             )
             paymob_session_id = paymob_session.session_id
             paymob_checkout_url = paymob_session.checkout_url
@@ -282,6 +318,7 @@ class PaymentSessionService:
             currency=session.currency,
             merchant_reference=new_reference,
             trigger="payment link refresh",
+            installment_number=getattr(session, "installment_number", None),
         )
         session.merchant_reference = new_reference
         session.paymob_session_id = paymob_session.session_id

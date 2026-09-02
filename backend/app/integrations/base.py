@@ -173,6 +173,7 @@ class PaymobIntegration(Protocol):
         merchant_reference: str,
         customer_email: str | None,
         customer_name: str | None,
+        payment_method_ids: list[int] | None = None,
     ) -> PaymobSession: ...
 
     def verify_webhook(self, payload: dict[str, Any], signature: str | None) -> bool: ...

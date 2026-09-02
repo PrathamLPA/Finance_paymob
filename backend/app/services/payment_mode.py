@@ -331,6 +331,125 @@ async def _load_payment_mode_bitrix_labels(
     return bitrix_labels
 
 
+def _label_means_tabby(label: str | None) -> bool:
+    if not label:
+        return False
+    normalized = label.strip().lower().replace("_", " ").replace("-", " ")
+    return normalized == "tabby" or normalized.startswith("tabby ")
+
+
+def _label_means_tamara(label: str | None) -> bool:
+    if not label:
+        return False
+    normalized = label.strip().lower().replace("_", " ").replace("-", " ")
+    return normalized == "tamara" or normalized.startswith("tamara ")
+
+
+def _label_means_website_payment(label: str | None) -> bool:
+    if not label:
+        return False
+    normalized = label.strip().lower().replace("_", " ").replace("-", " ")
+    return normalized in (
+        "website payment",
+        "website",
+        "online",
+        "card",
+        "cards",
+    ) or "website payment" in normalized
+
+
+def _card_integration_id(settings: Settings) -> int:
+    card = int(getattr(settings, "paymob_integration_id_card", 0) or 0)
+    if card > 0:
+        return card
+    return int(getattr(settings, "paymob_integration_id", 0) or 0)
+
+
+def resolve_paymob_payment_method_ids(
+    lead: dict[str, Any] | None,
+    *,
+    installment_number: int,
+    settings: Settings,
+    bitrix_enum_labels: dict[str, str] | None = None,
+) -> list[int]:
+    """Map Bitrix payment mode → Paymob Intention payment_methods list.
+
+    - Tabby → Tabby integration only
+    - Tamara → Tamara integration only
+    - Website payment → Card + Tabby + Tamara (customer chooses on Paymob)
+    - Card / online / empty / unknown → Card only
+    """
+    card_id = _card_integration_id(settings)
+    tabby_id = int(getattr(settings, "paymob_integration_id_tabby", 0) or 0)
+    tamara_id = int(getattr(settings, "paymob_integration_id_tamara", 0) or 0)
+
+    label = payment_mode_label(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_enum_labels,
+    )
+    enum_id = payment_mode_enum_id(
+        lead, installment_number=installment_number, settings=settings
+    )
+    configured_map = _parse_mode_enum_map(settings)
+    mapped = (configured_map.get(enum_id) or "").strip().lower() if enum_id else ""
+    effective = (label or mapped or "").strip().lower()
+
+    methods: list[int] = []
+    if _label_means_tabby(effective) or mapped == "tabby":
+        if tabby_id > 0:
+            methods = [tabby_id]
+    elif _label_means_tamara(effective) or mapped == "tamara":
+        if tamara_id > 0:
+            methods = [tamara_id]
+    elif _label_means_website_payment(effective) or mapped in (
+        "website_payment",
+        "website payment",
+        "online",
+    ):
+        # Website payment: offer all enabled BNPL + card on unified checkout.
+        for mid in (card_id, tabby_id, tamara_id):
+            if mid > 0 and mid not in methods:
+                methods.append(mid)
+    else:
+        if card_id > 0:
+            methods = [card_id]
+
+    if not methods and card_id > 0:
+        methods = [card_id]
+
+    logger.info(
+        "Paymob payment methods | installment=%s enum=%s label=%s mapped=%s methods=%s",
+        installment_number,
+        enum_id or "-",
+        label or "-",
+        mapped or "-",
+        methods,
+    )
+    return methods
+
+
+async def resolve_paymob_payment_method_ids_async(
+    lead: dict[str, Any] | None,
+    *,
+    installment_number: int,
+    settings: Settings,
+    bitrix: Any,
+) -> list[int]:
+    bitrix_labels = await _load_payment_mode_bitrix_labels(
+        installment_number=installment_number,
+        settings=settings,
+        bitrix=bitrix,
+    )
+    return resolve_paymob_payment_method_ids(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_labels or None,
+    )
+
+
 async def resolve_is_cash_payment_mode(
     lead: dict[str, Any] | None,
     *,

@@ -130,7 +130,11 @@ class Settings(BaseSettings):
     paymob_api_key: str = ""
     paymob_secret_key: str = ""
     paymob_public_key: str = ""
-    paymob_integration_id: int = 0
+    # Default / card integration (Learners Point UAE Paymob)
+    paymob_integration_id: int = 49586
+    paymob_integration_id_card: int = 49586
+    paymob_integration_id_tabby: int = 52169
+    paymob_integration_id_tamara: int = 52266
     paymob_hmac_secret: str = ""
     paymob_base_url: str = "https://accept.paymob.com"
     paymob_checkout_base_url: str = "https://accept.paymob.com/unifiedcheckout/"
