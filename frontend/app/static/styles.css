@@ -1045,6 +1045,17 @@ select.field-input {
     line-height: 1.55;
 }
 
+.consent-row.is-ready {
+    padding: 0.75rem 0.85rem;
+    border-radius: var(--radius-md);
+    background: color-mix(in oklab, #2ec4b6 8%, var(--card));
+    border: 1px solid color-mix(in oklab, #2ec4b6 25%, var(--border));
+}
+
+.consent-row.is-ready .consent-text {
+    color: var(--foreground);
+}
+
 .consent-text strong {
     color: var(--foreground);
     font-weight: 600;
@@ -1557,15 +1568,22 @@ body.terms-modal-open {
 .terms-modal {
     position: fixed;
     inset: 0;
-    z-index: 80;
-    display: flex;
+    z-index: 9999;
+    display: none;
     align-items: center;
     justify-content: center;
     padding: 1rem;
-    animation: terms-modal-fade 0.18s ease-out;
+    pointer-events: none;
 }
 
-.terms-modal[hidden] {
+.terms-modal.is-open {
+    display: flex;
+    pointer-events: auto;
+    animation: terms-modal-fade 0.2s ease-out;
+}
+
+.terms-modal[hidden],
+.terms-modal[aria-hidden="true"]:not(.is-open) {
     display: none !important;
 }
 
@@ -1577,8 +1595,9 @@ body.terms-modal-open {
 .terms-modal-backdrop {
     position: absolute;
     inset: 0;
-    background: rgb(9 12 18 / 0.62);
-    backdrop-filter: blur(6px);
+    background: rgb(9 12 18 / 0.45);
+    backdrop-filter: blur(12px) saturate(1.2);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2);
 }
 
 .terms-modal-dialog {
@@ -1588,15 +1607,17 @@ body.terms-modal-open {
     flex-direction: column;
     width: min(680px, 100%);
     max-height: min(90vh, 820px);
-    background: var(--card);
+    background: color-mix(in oklab, var(--card) 88%, transparent);
     color: var(--card-foreground);
-    border: 1px solid var(--border);
+    border: 1px solid color-mix(in oklab, var(--border) 70%, white);
     border-radius: calc(var(--radius) + 0.35rem);
     box-shadow:
         0 24px 48px -18px rgb(0 0 0 / 0.35),
         var(--shadow-lg);
     overflow: hidden;
-    animation: terms-dialog-rise 0.22s ease-out;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    animation: terms-dialog-rise 0.24s ease-out;
 }
 
 @keyframes terms-dialog-rise {

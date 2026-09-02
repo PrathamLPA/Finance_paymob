@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment — Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=15">
+    <link rel="stylesheet" href="/static/styles.css?v=16">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -335,7 +335,7 @@
                         <span class="panel-step-badge muted" id="badge-terms">Step 4</span>
                         <div>
                             <h2 class="section-heading" id="terms-heading">Terms &amp; Conditions</h2>
-                            <p class="terms-divider-hint">Open the policy, scroll to the end, then accept to continue.</p>
+                            <p class="terms-divider-hint">Tap the policy link, read it in the popup, accept, then tick the box below.</p>
                         </div>
                     </div>
                     <div class="consent-row" id="consent-box">
@@ -369,8 +369,8 @@
         </p>
     </main>
 
-    <div class="terms-modal" id="terms-modal" hidden>
-        <div class="terms-modal-backdrop" data-close-terms tabindex="-1"></div>
+    <div class="terms-modal" id="terms-modal" aria-hidden="true">
+        <div class="terms-modal-backdrop" data-close-terms tabindex="-1" aria-hidden="true"></div>
         <div
             class="terms-modal-dialog"
             role="dialog"
@@ -417,7 +417,7 @@
                 <div class="terms-modal-actions">
                     <button type="button" class="btn-secondary" data-close-terms>Not now</button>
                     <button type="button" class="btn-paymob terms-modal-accept" id="terms-modal-accept" disabled>
-                        Accept &amp; continue
+                        I've read — return to payment
                     </button>
                 </div>
             </footer>
@@ -442,6 +442,7 @@
         const buyerNameLabel = document.getElementById('buyer-name-label');
         const navStepCandidates = document.getElementById('nav-step-candidates');
         const navLineCandidates = document.getElementById('nav-line-candidates');
+        let termsReadComplete = false;
 
         let restored = [];
         try { restored = JSON.parse(participantsInput.value || '[]') || []; } catch (e) { restored = []; }
@@ -555,7 +556,14 @@
 
             syncParticipantsJson();
             submitBtn.disabled = !(
-                checkbox.checked && courseFor && name && email && phone && !problem && !seatProblem
+                termsReadComplete &&
+                checkbox.checked &&
+                courseFor &&
+                name &&
+                email &&
+                phone &&
+                !problem &&
+                !seatProblem
             );
         }
 
@@ -645,15 +653,15 @@
         const termsScrollProgress = document.getElementById('terms-scroll-progress');
         const openTermsBtn = document.getElementById('open-terms-modal');
         const consentBox = document.getElementById('consent-box');
-        let termsAccepted = false;
         let termsScrolledToEnd = false;
 
         form.addEventListener('input', updateSubmitState);
-        checkbox.addEventListener('change', () => {
-            if (!checkbox.checked) termsAccepted = false;
-            updateSubmitState();
-        });
+        checkbox.addEventListener('change', updateSubmitState);
         form.addEventListener('submit', syncParticipantsJson);
+
+        function modalIsOpen() {
+            return termsModal && termsModal.classList.contains('is-open');
+        }
 
         function setTermsAcceptEnabled(enabled) {
             termsScrolledToEnd = enabled;
@@ -661,13 +669,13 @@
             if (termsModalFooter) termsModalFooter.classList.toggle('is-ready', enabled);
             if (termsScrollHint) {
                 termsScrollHint.textContent = enabled
-                    ? 'You can accept and continue'
+                    ? 'You can confirm and return to payment'
                     : 'Scroll through the policy to unlock accept';
             }
             if (termsFooterNote) {
                 termsFooterNote.textContent = enabled
-                    ? 'You have reached the end. Accept to continue payment.'
-                    : 'Keep scrolling to enable Accept & continue';
+                    ? 'Tap the button below to close this popup and tick the box on the payment page.'
+                    : 'Keep scrolling to enable the button';
             }
         }
 
@@ -687,7 +695,8 @@
 
         function openTermsModal() {
             if (!termsModal) return;
-            termsModal.hidden = false;
+            termsModal.classList.add('is-open');
+            termsModal.setAttribute('aria-hidden', 'false');
             document.body.classList.add('terms-modal-open');
             setTermsAcceptEnabled(false);
             if (termsScrollProgress) termsScrollProgress.style.width = '0%';
@@ -702,15 +711,17 @@
 
         function closeTermsModal() {
             if (!termsModal) return;
-            termsModal.hidden = true;
+            termsModal.classList.remove('is-open');
+            termsModal.setAttribute('aria-hidden', 'true');
             document.body.classList.remove('terms-modal-open');
         }
 
         function acceptTermsFromModal() {
             if (!termsScrolledToEnd) return;
-            termsAccepted = true;
-            checkbox.checked = true;
+            termsReadComplete = true;
             closeTermsModal();
+            if (consentBox) consentBox.classList.add('is-ready');
+            checkbox.focus();
             updateSubmitState();
         }
 
@@ -722,27 +733,8 @@
             });
         }
 
-        if (consentBox) {
-            consentBox.addEventListener('click', (event) => {
-                if (
-                    openTermsBtn &&
-                    (event.target === openTermsBtn || openTermsBtn.contains(event.target))
-                ) {
-                    return;
-                }
-                if (event.target === checkbox) {
-                    if (termsAccepted) return;
-                    event.preventDefault();
-                    openTermsModal();
-                    return;
-                }
-                event.preventDefault();
-                openTermsModal();
-            });
-        }
-
         checkbox.addEventListener('click', (event) => {
-            if (termsAccepted) return;
+            if (termsReadComplete) return;
             event.preventDefault();
             openTermsModal();
         });
@@ -757,7 +749,7 @@
             el.addEventListener('click', closeTermsModal);
         });
         document.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape' && termsModal && !termsModal.hidden) {
+            if (event.key === 'Escape' && modalIsOpen()) {
                 closeTermsModal();
             }
         });
