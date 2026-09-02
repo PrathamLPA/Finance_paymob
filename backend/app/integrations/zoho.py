@@ -8,6 +8,7 @@ https://www.zoho.com/books/api/v3/invoices/#create-an-invoice
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -404,7 +405,45 @@ class RealZohoBooksClient(MockZohoBooksClient):
         if customer_email:
             payload["email"] = customer_email
 
-        response = await self._request("POST", "/contacts", json=payload)
+        try:
+            response = await self._request("POST", "/contacts", json=payload)
+        except ZohoBooksApiError as exc:
+            # 3062 = contact_name already exists — reuse that customer instead of failing invoice.
+            if str(exc.code) != "3062" and "already exists" not in (exc.message or "").lower():
+                raise
+            existing = await self._request(
+                "GET",
+                "/contacts",
+                params={"contact_name": name},
+            )
+            contacts = existing.json().get("contacts") or []
+            if not contacts:
+                # Fallback: unique display name so invoice creation can continue.
+                unique_name = f"{name} ({email_key})" if email_key else f"{name} ({uuid.uuid4().hex[:6]})"
+                payload["contact_name"] = unique_name
+                response = await self._request("POST", "/contacts", json=payload)
+                contact = response.json().get("contact") or {}
+                contact_id = str(contact["contact_id"])
+                if email_key:
+                    self._customer_ids[email_key] = contact_id
+                logger.info(
+                    "Zoho contact created with unique name id=%s name=%s email=%s",
+                    contact_id,
+                    unique_name,
+                    email_key or "-",
+                )
+                return contact_id
+            contact_id = str(contacts[0]["contact_id"])
+            if email_key:
+                self._customer_ids[email_key] = contact_id
+            logger.info(
+                "Zoho contact reused after name conflict id=%s name=%s email=%s",
+                contact_id,
+                name,
+                email_key or "-",
+            )
+            return contact_id
+
         contact = response.json().get("contact") or {}
         contact_id = str(contact["contact_id"])
         if email_key:
