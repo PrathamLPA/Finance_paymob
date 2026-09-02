@@ -248,9 +248,10 @@ class WorkflowOrchestrator:
                 "Failed to comment cash intake on %s %s", entity_type, entity_id
             )
 
-        await self.announce_payment_link(
-            session, entity_type=entity_type, entity_id=entity_id, force=True
-        )
+        # Link already posted in the cash comment above — avoid a second
+        # "Payment reminder" comment that looks like an online Paymob link.
+        session.link_commented_at = datetime.now(timezone.utc)
+        self.db.commit()
 
         if email_client and workflow.customer_email:
             self.email.send_payment_request(

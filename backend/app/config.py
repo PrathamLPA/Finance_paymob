@@ -86,16 +86,21 @@ class Settings(BaseSettings):
     bitrix_field_payment_3_mode: str = "UF_CRM_1684374256836"
     bitrix_field_payment_4_mode: str = "UF_CRM_1684374451274"
     # Payment mode list enum IDs → labels (Cash / Online / …)
-    # Include both historic and current Bitrix list IDs when the list was recreated.
+    # Learners Point live enums (from crm.lead.userfield.list / payment mode field).
     bitrix_payment_mode_enum_map: str = (
-        "5774:cash,5786:cash,5788:online,5790:bank_transfer,"
-        "5792:purchase_order,5794:tabby,5796:others"
+        "5774:cash,5786:cash,"
+        "5776:website_payment,13234:website_payment,"
+        "13156:card,5788:online,"
+        "5778:bank_transfer,5790:bank_transfer,"
+        "5782:tabby,5784:tamara,"
+        "5780:purchase_order,13146:others,"
+        "13178:bank_installment"
     )
     # Comma-separated Bitrix enum IDs treated as Cash (skip Paymob, enqueue cash desk)
     # 5774 is the Cash ID currently returned by Learners Point Bitrix for Payment 1 Mode.
     cash_mode_enum_ids: str = "5774,5786"
     # Comma-separated Bitrix enum IDs treated as Bank Transfer (payment link + receipt upload)
-    bank_transfer_mode_enum_ids: str = "5790"
+    bank_transfer_mode_enum_ids: str = "5778,5790"
     # Shown on the candidate receipt-upload page after Terms
     bank_transfer_instructions: str = (
         "Please transfer the amount to the Learners Point bank account, "

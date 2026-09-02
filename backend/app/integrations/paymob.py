@@ -681,14 +681,60 @@ class RealPaymobClient(MockPaymobClient):
                     detail = intention_resp.json().get("detail", detail)
                 except Exception:
                     pass
+                detail_text = str(detail)
+                card_only = [int(self.settings.paymob_integration_id_card or 0) or int(self.settings.paymob_integration_id or 0)]
+                card_only = [m for m in card_only if m > 0]
+                can_fallback = (
+                    intention_resp.status_code == 404
+                    and "integration" in detail_text.lower()
+                    and len(methods) > 1
+                    and card_only
+                    and methods != card_only
+                )
+                if can_fallback:
+                    logger.warning(
+                        "Paymob intention failed with methods=%s (%s): %s — "
+                        "retrying with card only %s",
+                        methods,
+                        intention_resp.status_code,
+                        detail_text[:300],
+                        card_only,
+                    )
+                    intention_payload["payment_methods"] = card_only
+                    methods = card_only
+                    intention_resp = await client.post(
+                        f"{base}/v1/intention/",
+                        headers=headers,
+                        json=intention_payload,
+                    )
+                    if intention_resp.is_error:
+                        detail = intention_resp.text
+                        try:
+                            detail = intention_resp.json().get("detail", detail)
+                        except Exception:
+                            pass
+                        detail_text = str(detail)
+                    else:
+                        data = intention_resp.json()
+                        client_secret = data.get("client_secret", "")
+                        checkout_url = (
+                            f"{self.settings.paymob_checkout_base_url.rstrip('/')}"
+                            f"?publicKey={self.settings.paymob_public_key}&clientSecret={client_secret}"
+                        )
+                        return PaymobSession(
+                            session_id=str(data.get("id", "")),
+                            checkout_url=checkout_url,
+                            order_id=str(data.get("order_id", "")) if data.get("order_id") else None,
+                        )
+
                 logger.error(
                     "Paymob intention failed (%s): %s | payment_methods=%s",
                     intention_resp.status_code,
-                    str(detail)[:500],
+                    detail_text[:500],
                     methods,
                 )
                 raise ValueError(
-                    f"Paymob intention failed ({intention_resp.status_code}): {detail} "
+                    f"Paymob intention failed ({intention_resp.status_code}): {detail_text} "
                     f"[payment_methods={methods}]"
                 ) from None
             data = intention_resp.json()

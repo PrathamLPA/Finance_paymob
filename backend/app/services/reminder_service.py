@@ -354,8 +354,20 @@ class ReminderService:
                     await WorkflowOrchestrator(self.db, self.settings).sync_workflow_from_lead(
                         workflow, lead=lead
                     )
-            except Exception:
-                logger.exception("Could not refresh Bitrix lead %s before reminder scan", workflow.bitrix_lead_id)
+            except Exception as exc:
+                message = str(exc).lower()
+                if "not found" in message:
+                    logger.warning(
+                        "Disabling reminders — Bitrix lead %s not found (workflow %s)",
+                        workflow.bitrix_lead_id,
+                        workflow.id,
+                    )
+                    workflow.reminders_enabled = False
+                else:
+                    logger.exception(
+                        "Could not refresh Bitrix lead %s before reminder scan",
+                        workflow.bitrix_lead_id,
+                    )
         self.db.commit()
 
         due = self.workflows_due_for_reminder()
