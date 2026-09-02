@@ -17,8 +17,23 @@ def _money(value: Any) -> Decimal:
 
 
 def line_money_breakdown(line: "ProductLine") -> tuple[Decimal, Decimal, Decimal]:
-    """Return (subtotal_ex_vat, vat, line_payable) for one product line."""
+    """Return (subtotal_ex_vat, vat, line_payable) for one product line.
+
+    Bitrix ``price`` is always the final unit amount (discounts + taxes already
+    applied). Prefer ``unit_gross`` when set so we never add VAT on top of that.
+    Legacy rows without ``unit_gross`` keep the old exclusive/inclusive math.
+    """
     qty = line.quantity if line.quantity > 0 else Decimal("1")
+    if line.unit_gross is not None and line.unit_gross > 0:
+        payable = (line.unit_gross * qty).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if line.tax_rate <= 0:
+            return payable, Decimal("0.00"), payable
+        vat = (payable * line.tax_rate / (Decimal("100") + line.tax_rate)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        subtotal = (payable - vat).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return subtotal, vat, payable
+
     gross = (line.selling_price * qty).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if line.tax_rate <= 0:
         return gross, Decimal("0.00"), gross
@@ -39,10 +54,13 @@ class ProductLine:
     product_id: int
     product_name: str
     quantity: Decimal
+    # Ex-VAT unit price used for catalog minimum comparison.
     selling_price: Decimal
     tax_rate: Decimal
     tax_included: bool
     catalog_min_price: Decimal | None = None
+    # Bitrix `price` — final unit amount including discounts and taxes.
+    unit_gross: Decimal | None = None
 
     @property
     def line_total(self) -> Decimal:
@@ -124,13 +142,32 @@ def parse_product_row(row: dict[str, Any]) -> ProductLine:
         or f"Product {product_id or '?'}"
     )
     tax_included_raw = str(row.get("taxIncluded") or row.get("TAX_INCLUDED") or "N").upper()
+    tax_included = tax_included_raw in ("Y", "1", "TRUE")
+    tax_rate = _money(row.get("taxRate") if "taxRate" in row else row.get("TAX_RATE"))
+    # Bitrix docs: `price` is always the final unit amount (discounts + taxes).
+    unit_gross = _money(row.get("price") if "price" in row else row.get("PRICE"))
+    if "priceExclusive" in row or "PRICE_EXCLUSIVE" in row:
+        price_exclusive = _money(
+            row.get("priceExclusive") if "priceExclusive" in row else row.get("PRICE_EXCLUSIVE")
+        )
+    else:
+        price_exclusive = Decimal("0.00")
+
+    if price_exclusive <= 0 and unit_gross > 0 and tax_rate > 0:
+        price_exclusive = (
+            unit_gross * Decimal("100") / (Decimal("100") + tax_rate)
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if price_exclusive <= 0:
+        price_exclusive = unit_gross
+
     return ProductLine(
         product_id=product_id,
         product_name=str(name),
         quantity=_money(row.get("quantity") if "quantity" in row else row.get("QUANTITY") or 1),
-        selling_price=_money(row.get("price") if "price" in row else row.get("PRICE")),
-        tax_rate=_money(row.get("taxRate") if "taxRate" in row else row.get("TAX_RATE")),
-        tax_included=tax_included_raw in ("Y", "1", "TRUE"),
+        selling_price=price_exclusive,
+        tax_rate=tax_rate,
+        tax_included=tax_included,
+        unit_gross=unit_gross if unit_gross > 0 else None,
     )
 
 
@@ -166,6 +203,7 @@ def evaluate_price_gate(
             tax_rate=base.tax_rate,
             tax_included=base.tax_included,
             catalog_min_price=catalog_min,
+            unit_gross=base.unit_gross,
         )
         lines.append(line)
         line_subtotal, line_vat, line_payable = line_money_breakdown(line)
@@ -224,14 +262,17 @@ def evaluate_price_gate(
 def product_rows_for_estimate(lines: list[ProductLine]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for index, line in enumerate(lines, start=1):
+        qty = line.quantity if line.quantity > 0 else Decimal("1")
+        unit_price = line.unit_gross if line.unit_gross and line.unit_gross > 0 else line.selling_price
         rows.append(
             {
                 "productId": line.product_id,
                 "productName": line.product_name,
-                "price": float(line.selling_price),
-                "quantity": float(line.quantity if line.quantity > 0 else Decimal("1")),
+                "price": float(unit_price),
+                "quantity": float(qty),
                 "taxRate": float(line.tax_rate) if line.tax_rate > 0 else None,
-                "taxIncluded": "Y" if line.tax_included else "N",
+                # Bitrix `price` is already final; mark included so Bitrix does not add again.
+                "taxIncluded": "Y",
                 "sort": index * 10,
             }
         )

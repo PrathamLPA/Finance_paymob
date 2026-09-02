@@ -112,6 +112,42 @@ def test_exclusive_vat_line_breakdown():
     assert payable == Decimal("6300.00")
 
 
+def test_bitrix_price_is_final_even_when_tax_included_flag_is_n():
+    """Bitrix `price` already includes tax; do not add 5% again (2500 → 2625 bug)."""
+    rows = [
+        {
+            "productId": 10,
+            "productName": "Revit MEP",
+            "price": 2500,
+            "priceExclusive": 2380.95,
+            "quantity": 1,
+            "taxRate": 5,
+            "taxIncluded": "N",
+        }
+    ]
+    gate = evaluate_price_gate(rows, {10: Decimal("2380.95")})
+    assert gate.total_payable == Decimal("2500.00")
+    assert gate.subtotal == Decimal("2380.95")
+    assert gate.vat_total == Decimal("119.05")
+    assert gate.tax_total == Decimal("119.05")
+    assert gate.ok is True
+
+    # Even without priceExclusive, Bitrix price stays final.
+    rows2 = [
+        {
+            "productId": 10,
+            "productName": "Revit MEP",
+            "price": 2500,
+            "quantity": 1,
+            "taxRate": 5,
+            "taxIncluded": "N",
+        }
+    ]
+    gate2 = evaluate_price_gate(rows2, {10: Decimal("2380.95")})
+    assert gate2.total_payable == Decimal("2500.00")
+    assert gate2.total_payable != Decimal("2625.00")
+
+
 @pytest.mark.asyncio
 async def test_first_link_persists_valid_plan_and_charges_installment_1(db_session, monkeypatch):
     monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "false")

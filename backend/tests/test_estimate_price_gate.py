@@ -33,7 +33,9 @@ def test_evaluate_price_gate_passes_at_or_above_min():
         {
             "productId": 10,
             "productName": "AWS Solutions Architect",
-            "price": 6000,
+            # Bitrix `price` is always the final amount (ex + VAT already applied).
+            "price": 6300,
+            "priceExclusive": 6000,
             "quantity": 1,
             "taxRate": 5,
             "taxIncluded": "N",
@@ -44,7 +46,24 @@ def test_evaluate_price_gate_passes_at_or_above_min():
     assert result.ok is True
     assert result.total_payable == Decimal("6300.00")
     assert result.tax_total == Decimal("300.00")
+    assert result.subtotal == Decimal("6000.00")
 
+
+def test_evaluate_price_gate_does_not_double_add_vat_on_bitrix_price():
+    rows = [
+        {
+            "productId": 10,
+            "productName": "AWS Solutions Architect",
+            "price": 6000,
+            "quantity": 1,
+            "taxRate": 5,
+            "taxIncluded": "N",
+        }
+    ]
+    catalog = {10: Decimal("5714.29")}
+    result = evaluate_price_gate(rows, catalog)
+    assert result.total_payable == Decimal("6000.00")
+    assert result.total_payable != Decimal("6300.00")
 
 def test_evaluate_price_gate_requires_products():
     result = evaluate_price_gate([], {})
