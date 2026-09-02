@@ -54,7 +54,7 @@ class ProductLine:
     product_id: int
     product_name: str
     quantity: Decimal
-    # Ex-VAT unit price used for catalog minimum comparison.
+    # Ex-VAT unit price (Bitrix priceExclusive) — for display / VAT breakdown.
     selling_price: Decimal
     tax_rate: Decimal
     tax_included: bool
@@ -67,10 +67,18 @@ class ProductLine:
         return line_money_breakdown(self)[2]
 
     @property
+    def compare_unit_price(self) -> Decimal:
+        """Unit price compared to catalog min (VAT-inclusive / Bitrix final price)."""
+        if self.unit_gross is not None and self.unit_gross > 0:
+            return self.unit_gross
+        return self.selling_price
+
+    @property
     def is_below_minimum(self) -> bool:
         if self.catalog_min_price is None:
             return True
-        return self.selling_price < self.catalog_min_price
+        # Catalog list prices match Bitrix final/gross amounts (incl. VAT), not ex-VAT.
+        return self.compare_unit_price < self.catalog_min_price
 
 
 @dataclass
@@ -120,7 +128,7 @@ class PriceGateResult:
                 status = "BELOW MINIMUM"
             lines.append(
                 f"- {line.product_name} × {line.quantity:g} | "
-                f"selling {line.selling_price:.2f} | catalog min {catalog} | "
+                f"selling {line.compare_unit_price:.2f} | catalog min {catalog} | "
                 f"tax {line.tax_rate:g}% | {status}"
             )
         if not self.ok and self.reason:
@@ -234,7 +242,7 @@ def evaluate_price_gate(
         reason = f"Catalog minimum price missing for: {names}"
     elif blocked:
         details = "; ".join(
-            f"{line.product_name} selling {line.selling_price:.2f} "
+            f"{line.product_name} selling {line.compare_unit_price:.2f} "
             f"< catalog {line.catalog_min_price:.2f}"
             for line in blocked
             if line.catalog_min_price is not None

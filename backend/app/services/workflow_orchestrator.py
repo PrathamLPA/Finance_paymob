@@ -74,7 +74,7 @@ def _format_price_lines(gate: PriceGateResult) -> str:
         else:
             status = "ok"
         parts.append(
-            f"{line.product_name}[sell={line.selling_price:.2f} min={catalog} qty={line.quantity:g} {status}]"
+            f"{line.product_name}[sell={line.compare_unit_price:.2f} min={catalog} qty={line.quantity:g} {status}]"
         )
     return "; ".join(parts)
 

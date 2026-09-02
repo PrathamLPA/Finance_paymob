@@ -52,14 +52,15 @@ def _lines_payload(lines: list[ProductLine]) -> dict[str, Any]:
         discount = None
         if line.catalog_min_price is not None and below:
             discount = str(
-                (line.catalog_min_price - line.selling_price).quantize(Decimal("0.01"))
+                (line.catalog_min_price - line.compare_unit_price).quantize(Decimal("0.01"))
             )
         payload_lines.append(
             {
                 "product_id": line.product_id,
                 "product_name": line.product_name,
                 "quantity": str(line.quantity),
-                "selling_price": str(line.selling_price),
+                "selling_price": str(line.compare_unit_price),
+                "selling_price_ex_vat": str(line.selling_price),
                 "catalog_min_price": (
                     str(line.catalog_min_price) if line.catalog_min_price is not None else None
                 ),

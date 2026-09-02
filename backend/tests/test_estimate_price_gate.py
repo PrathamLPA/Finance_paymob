@@ -65,6 +65,44 @@ def test_evaluate_price_gate_does_not_double_add_vat_on_bitrix_price():
     assert result.total_payable == Decimal("6000.00")
     assert result.total_payable != Decimal("6300.00")
 
+
+def test_catalog_min_compares_vat_inclusive_price():
+    """Catalog min is the final amount (incl. VAT); ex-VAT alone must not trigger approval."""
+    rows = [
+        {
+            "productId": 843,
+            "productName": "Revit MEP",
+            "price": 2500,
+            "priceExclusive": 2380.95,
+            "quantity": 1,
+            "taxRate": 5,
+            "taxIncluded": "N",
+        }
+    ]
+    gate = evaluate_price_gate(rows, {843: Decimal("2500.00")})
+    assert gate.total_payable == Decimal("2500.00")
+    assert gate.ok is True
+    assert gate.lines[0].is_below_minimum is False
+    assert "below" not in gate.reason.lower()
+
+
+def test_catalog_min_still_blocks_when_gross_is_below():
+    rows = [
+        {
+            "productId": 843,
+            "productName": "Revit MEP",
+            "price": 2400,
+            "priceExclusive": 2285.71,
+            "quantity": 1,
+            "taxRate": 5,
+            "taxIncluded": "N",
+        }
+    ]
+    gate = evaluate_price_gate(rows, {843: Decimal("2500.00")})
+    assert gate.ok is False
+    assert gate.lines[0].is_below_minimum is True
+    assert "2400.00" in gate.reason
+
 def test_evaluate_price_gate_requires_products():
     result = evaluate_price_gate([], {})
     assert result.ok is False
