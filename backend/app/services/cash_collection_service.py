@@ -236,6 +236,21 @@ class CashCollectionService:
             or (r.status == STATUS_CLAIMED and r.claimed_by_id == staff.id)
         ]
 
+    def list_collected(self, *, staff: StaffUser, limit: int = 50) -> list[CashCollection]:
+        stmt = (
+            select(CashCollection)
+            .options(
+                joinedload(CashCollection.claimed_by),
+                joinedload(CashCollection.collected_by),
+            )
+            .where(CashCollection.status == STATUS_COLLECTED)
+            .order_by(CashCollection.collected_at.desc().nullslast(), CashCollection.id.desc())
+            .limit(max(1, min(limit, 200)))
+        )
+        if staff.role != ROLE_MANAGER:
+            stmt = stmt.where(CashCollection.collected_by_id == staff.id)
+        return list(self.db.scalars(stmt).unique().all())
+
     def claim(self, collection_id: int, staff: StaffUser) -> CashCollection:
         row = self.db.get(CashCollection, collection_id)
         if not row or row.status == STATUS_CANCELLED:

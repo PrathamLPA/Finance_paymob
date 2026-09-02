@@ -55,6 +55,17 @@ def cash_queue(
     return {"items": [service.collection_to_dict(r) for r in rows]}
 
 
+@router.get("/cash/collected")
+def cash_collected_list(
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(get_current_staff),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    service = CashCollectionService(db)
+    rows = service.list_collected(staff=staff, limit=limit)
+    return {"items": [service.collection_to_dict(r) for r in rows]}
+
+
 @router.post("/cash/{collection_id}/claim")
 def cash_claim(
     collection_id: int,
