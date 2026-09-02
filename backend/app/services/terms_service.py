@@ -101,8 +101,6 @@ class TermsService:
     ) -> Decimal:
         """Use the locked session amount when Bitrix set Installment 1 / full charge."""
         remaining = workflow.remaining_balance
-        if remaining <= 0:
-            raise HTTPException(status_code=400, detail="This balance is already settled.")
 
         if session is not None and session.amount_locked:
             locked = Decimal(session.charge_amount).quantize(
@@ -110,9 +108,15 @@ class TermsService:
             )
             if locked <= 0:
                 raise HTTPException(status_code=400, detail="This payment link has no charge amount.")
-            if locked > remaining:
+            # Locked installment charges are authoritative for this payment session.
+            # Cap at remaining when a positive balance exists; otherwise honor the lock
+            # (workflow totals can be stale vs the installment plan on the session).
+            if remaining > 0 and locked > remaining:
                 return remaining
             return locked
+
+        if remaining <= 0:
+            raise HTTPException(status_code=400, detail="This balance is already settled.")
 
         minimum = workflow.minimum_due(self.settings.payment_required_percent)
         if requested is None:

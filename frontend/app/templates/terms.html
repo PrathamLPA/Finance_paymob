@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment — Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=17">
+    <link rel="stylesheet" href="/static/styles.css?v=18">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -316,7 +316,7 @@
                             <input type="number" name="payment_amount" id="payment-amount" class="field-input"
                                 required step="0.01"
                                 min="{{ payment_amount if amount_locked else minimum_amount }}"
-                                max="{{ remaining_balance }}"
+                                max="{{ payment_amount if amount_locked else remaining_balance }}"
                                 value="{{ payment_amount }}"
                                 {% if amount_locked or not allows_partial %}readonly{% endif %}>
                         </span>
@@ -457,6 +457,15 @@
         }
 
         function amountError() {
+            // Locked installment / full-charge amounts are authoritative — do not
+            // compare against remaining_balance (can be 0 or stale on the page).
+            if (amountLocked) {
+                const lockedValue = parseFloat(amountInput.value);
+                if (isNaN(lockedValue) || lockedValue <= 0) {
+                    return 'This payment link has no charge amount.';
+                }
+                return '';
+            }
             const value = parseFloat(amountInput.value);
             if (isNaN(value)) return 'Enter the amount you want to pay now.';
             if (value < minAmount) return 'Minimum payment is ' + minAmount.toFixed(2) + '.';
