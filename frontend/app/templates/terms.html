@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment — Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=16">
+    <link rel="stylesheet" href="/static/styles.css?v=17">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -335,7 +335,7 @@
                         <span class="panel-step-badge muted" id="badge-terms">Step 4</span>
                         <div>
                             <h2 class="section-heading" id="terms-heading">Terms &amp; Conditions</h2>
-                            <p class="terms-divider-hint">Tap the policy link, read it in the popup, accept, then tick the box below.</p>
+                            <p class="terms-divider-hint">Open the policy, scroll to the end, then confirm. The checkbox will be ticked for you.</p>
                         </div>
                     </div>
                     <div class="consent-row" id="consent-box">
@@ -358,7 +358,7 @@
                             <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </button>
-                    <p class="form-footer-note">You'll be redirected to Paymob's secure checkout to complete your payment.</p>
+                    <p class="form-footer-note" id="submit-blocker-hint">You'll be redirected to Paymob's secure checkout to complete your payment.</p>
                 </section>
             </form>
         </article>
@@ -541,6 +541,8 @@
             const phone = document.getElementById('registrant-phone').value.trim();
             const problem = amountError();
             const seatProblem = seatsError();
+            const blockerHint = document.getElementById('submit-blocker-hint');
+            let blocker = '';
 
             if (!amountLocked) {
                 amountHint.classList.toggle('field-hint-error', Boolean(problem));
@@ -554,17 +556,27 @@
                 seatsHint.classList.toggle('field-hint-error', Boolean(seatProblem));
             }
 
+            if (!courseFor) {
+                blocker = 'Choose whether this course is for you or someone else.';
+            } else if (!name || !email || !phone) {
+                blocker = 'Fill in your name, email, and phone number above.';
+            } else if (seatProblem) {
+                blocker = seatProblem;
+            } else if (problem) {
+                blocker = problem;
+            } else if (!termsReadComplete || !checkbox.checked) {
+                blocker = 'Open the Terms and Conditions link, scroll to the end, then confirm.';
+            }
+
             syncParticipantsJson();
-            submitBtn.disabled = !(
-                termsReadComplete &&
-                checkbox.checked &&
-                courseFor &&
-                name &&
-                email &&
-                phone &&
-                !problem &&
-                !seatProblem
-            );
+            const ready = !blocker;
+            submitBtn.disabled = !ready;
+            if (blockerHint) {
+                blockerHint.textContent = ready
+                    ? "You'll be redirected to Paymob's secure checkout to complete your payment."
+                    : blocker;
+                blockerHint.classList.toggle('field-hint-error', !ready);
+            }
         }
 
         function escapeHtml(value) {
@@ -656,7 +668,6 @@
         let termsScrolledToEnd = false;
 
         form.addEventListener('input', updateSubmitState);
-        checkbox.addEventListener('change', updateSubmitState);
         form.addEventListener('submit', syncParticipantsJson);
 
         function modalIsOpen() {
@@ -674,7 +685,7 @@
             }
             if (termsFooterNote) {
                 termsFooterNote.textContent = enabled
-                    ? 'Tap the button below to close this popup and tick the box on the payment page.'
+                    ? 'Tap the button below to close this popup and continue.'
                     : 'Keep scrolling to enable the button';
             }
         }
@@ -719,10 +730,15 @@
         function acceptTermsFromModal() {
             if (!termsScrolledToEnd) return;
             termsReadComplete = true;
+            checkbox.checked = true;
             closeTermsModal();
             if (consentBox) consentBox.classList.add('is-ready');
-            checkbox.focus();
             updateSubmitState();
+            if (!submitBtn.disabled) {
+                submitBtn.focus();
+            } else {
+                checkbox.focus();
+            }
         }
 
         if (openTermsBtn) {
@@ -733,10 +749,21 @@
             });
         }
 
-        checkbox.addEventListener('click', (event) => {
+        function requireTermsBeforeCheck(event) {
             if (termsReadComplete) return;
-            event.preventDefault();
+            if (event) event.preventDefault();
+            checkbox.checked = false;
             openTermsModal();
+            updateSubmitState();
+        }
+
+        checkbox.addEventListener('click', requireTermsBeforeCheck);
+        checkbox.addEventListener('change', () => {
+            if (!termsReadComplete && checkbox.checked) {
+                checkbox.checked = false;
+                openTermsModal();
+            }
+            updateSubmitState();
         });
 
         if (termsModalBody) {
