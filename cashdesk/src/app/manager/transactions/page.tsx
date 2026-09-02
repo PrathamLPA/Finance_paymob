@@ -30,7 +30,7 @@ function TransactionsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Transactions"
-        description="Every payment recorded — filter cash vs online and search by customer, course, or lead."
+        description="Every payment recorded — see invoice status, create/resend Zoho + Bitrix + email, and filter cash vs online."
       >
         {(["all", "cash", "online"] as const).map((c) => (
           <Button
@@ -54,7 +54,7 @@ function TransactionsPage() {
 
       <Card>
         <CardContent className="px-0 pb-0 pt-0">
-          <TransactionTable items={items} />
+          <TransactionTable items={items} onUpdated={refresh} />
         </CardContent>
       </Card>
     </div>

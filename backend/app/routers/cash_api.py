@@ -332,3 +332,69 @@ async def bank_transfer_reject(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return service.submission_to_dict(row)
+
+
+class InvoiceRetriggerBody(BaseModel):
+    payment_transaction_id: int | None = None
+    transaction_id: str | None = None
+    workflow_id: int | None = None
+    lead_id: int | None = None
+
+
+@router.post("/invoices/retrigger")
+async def retrigger_invoice(
+    body: InvoiceRetriggerBody,
+    db: Session = Depends(get_db),
+    _manager: StaffUser = Depends(require_manager),
+) -> dict[str, Any]:
+    """Create missing Zoho invoice and (re)send to Bitrix + customer email."""
+    from sqlalchemy import select
+
+    from app.models.customer_workflow import CustomerWorkflow
+    from app.models.payment_transaction import PaymentTransaction
+    from app.services.invoice_service import InvoiceService
+
+    txn: PaymentTransaction | None = None
+    if body.payment_transaction_id is not None:
+        txn = db.get(PaymentTransaction, body.payment_transaction_id)
+    elif body.transaction_id:
+        txn = db.scalar(
+            select(PaymentTransaction).where(
+                PaymentTransaction.transaction_id == body.transaction_id
+            )
+        )
+
+    workflow: CustomerWorkflow | None = None
+    if txn is not None:
+        workflow = txn.workflow
+    elif body.workflow_id is not None:
+        workflow = db.get(CustomerWorkflow, body.workflow_id)
+    elif body.lead_id is not None:
+        workflow = db.scalar(
+            select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == body.lead_id)
+        )
+
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Workflow not found for this payment")
+
+    if txn is None:
+        txn = db.scalar(
+            select(PaymentTransaction)
+            .where(PaymentTransaction.workflow_id == workflow.id)
+            .order_by(PaymentTransaction.paid_at.desc())
+        )
+    if txn is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No recorded payment found for this workflow — cannot create invoice",
+        )
+
+    result = await InvoiceService(db).retrigger_invoice_delivery(workflow, txn)
+    if not result.get("ok") and str(result.get("steps", {}).get("zoho", "")).startswith(
+        "error"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=result.get("detail") or "Invoice retrigger failed in Zoho",
+        )
+    return result

@@ -454,6 +454,7 @@ class CashCollectionService:
                 {
                     "id": txn.id,
                     "transaction_id": txn.transaction_id,
+                    "workflow_id": wf.id if wf else None,
                     "channel": channel_label,
                     "amount": str(txn.amount),
                     "currency": txn.currency,
@@ -469,6 +470,8 @@ class CashCollectionService:
                     "employee_name": employee_name,
                     "employee_email": employee_email,
                     "collection_id": collection_id,
+                    "zoho_invoice_id": wf.zoho_invoice_id if wf else None,
+                    "invoice_synced": bool(wf and wf.zoho_invoice_id),
                 }
             )
         return out
