@@ -30,7 +30,7 @@ function TransactionsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Transactions"
-        description="Every payment recorded — see invoice status, create/resend Zoho + Bitrix + email, and filter cash vs online."
+        description="Click a payment to open full details. Create or resend invoices from the popup."
       >
         {(["all", "cash", "online"] as const).map((c) => (
           <Button
