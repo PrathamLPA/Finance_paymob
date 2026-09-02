@@ -264,7 +264,7 @@ class CashCollectionService:
             raise ValueError("Already collected")
         if row.status == STATUS_CLAIMED and row.claimed_by_id != staff.id:
             raise ValueError("Already claimed by another employee")
-        if not row.details_ready_at:
+        if not self._collection_details_ready(row):
             raise ValueError(
                 "Customer must complete the details form and accept terms before this case can be claimed"
             )
@@ -307,7 +307,25 @@ class CashCollectionService:
                     CashCollection.installment_number == number,
                 )
             )
+        if not row:
+            # Fallback: any open/claimed cash case for this workflow
+            row = self.db.scalar(
+                select(CashCollection)
+                .where(
+                    CashCollection.workflow_id == workflow_id,
+                    CashCollection.status.in_([STATUS_OPEN, STATUS_CLAIMED]),
+                )
+                .order_by(CashCollection.id.desc())
+            )
         if not row or row.status == STATUS_COLLECTED:
+            if not row:
+                logger.warning(
+                    "Cash details ready skipped — no collection for workflow=%s "
+                    "installment=%s session=%s",
+                    workflow_id,
+                    installment_number,
+                    payment_session_id,
+                )
             return row
         row.customer_name = customer_name
         row.customer_email = customer_email
@@ -318,7 +336,32 @@ class CashCollectionService:
             row.details_ready_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(row)
+        logger.info(
+            "Cash details ready | collection_id=%s workflow=%s session=%s",
+            row.id,
+            workflow_id,
+            payment_session_id,
+        )
         return row
+
+    def _collection_details_ready(self, row: CashCollection) -> bool:
+        if row.details_ready_at:
+            return True
+        if not row.payment_session_id:
+            return False
+        from app.models.payment_session import CHANNEL_CASH, SESSION_TERMS_ACCEPTED, PaymentSession
+
+        session = self.db.get(PaymentSession, row.payment_session_id)
+        if (
+            session
+            and (getattr(session, "channel", None) or "").strip().lower() == CHANNEL_CASH
+            and session.status == SESSION_TERMS_ACCEPTED
+        ):
+            # Backfill if terms were accepted but flag was missed
+            row.details_ready_at = datetime.now(timezone.utc)
+            self.db.commit()
+            return True
+        return False
 
     def employee_balances(self, employee_id: int) -> dict[str, Decimal]:
         collected = self.db.scalar(
@@ -481,7 +524,7 @@ class CashCollectionService:
             "amount_paid": str(paid),
             "remaining_balance": str(remaining),
             "is_collected": row.status == STATUS_COLLECTED,
-            "details_ready": bool(row.details_ready_at),
+            "details_ready": self._collection_details_ready(row),
             "details_ready_at": row.details_ready_at.isoformat() if row.details_ready_at else None,
             "payment_session_id": row.payment_session_id,
             "has_proof": bool(row.proof_path),

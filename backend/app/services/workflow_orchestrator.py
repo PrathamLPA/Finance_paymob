@@ -1694,7 +1694,7 @@ class WorkflowOrchestrator:
             raise ValueError("Only the claiming employee can collect this cash")
         if not row.proof_path:
             raise ValueError("Upload a cash collection photo before confirming")
-        if not row.details_ready_at:
+        if not CashCollectionService(self.db, self.settings)._collection_details_ready(row):
             raise ValueError(
                 "Customer must complete the details form and accept terms before cash can be collected"
             )
