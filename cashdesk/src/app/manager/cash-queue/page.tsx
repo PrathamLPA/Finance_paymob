@@ -80,9 +80,9 @@ function CashQueuePage() {
                 items.map((row) => (
                   <TR key={row.id}>
                     <TD>
-                      <div className="font-medium">{row.customer_name || "—"}</div>
+                      <div className="font-medium">{row.customer_name || "-"}</div>
                       <div className="text-xs text-stone-500">
-                        Lead #{row.bitrix_lead_id} · {row.course_title || "—"}
+                        Lead #{row.bitrix_lead_id} · {row.course_title || "-"}
                       </div>
                       {row.customer_phone ? (
                         <div className="text-xs text-stone-500">{row.customer_phone}</div>
@@ -103,7 +103,7 @@ function CashQueuePage() {
                         {row.status}
                       </Badge>
                     </TD>
-                    <TD>{row.claimed_by_name || "—"}</TD>
+                    <TD>{row.claimed_by_name || "-"}</TD>
                   </TR>
                 ))
               )}

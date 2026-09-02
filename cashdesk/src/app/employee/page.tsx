@@ -50,7 +50,7 @@ function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="grid grid-cols-[6.75rem_1fr] gap-x-3 gap-y-1 border-b border-stone-200/70 py-2 last:border-b-0 sm:grid-cols-[7.5rem_1fr]">
       <dt className="text-[11px] font-medium uppercase tracking-wide text-stone-500">{label}</dt>
-      <dd className="break-words text-sm text-stone-900">{value || "—"}</dd>
+      <dd className="break-words text-sm text-stone-900">{value || "-"}</dd>
     </div>
   );
 }
@@ -164,7 +164,7 @@ function CollectionDetailModal({
             </div>
             {!detailsReady && !isCollected ? (
               <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                Form fill incomplete — customer must open the email link, enter name /
+                Form fill incomplete - customer must open the email link, enter name /
                 email / phone, and accept Terms before you can claim or collect cash.
               </p>
             ) : null}
@@ -190,13 +190,13 @@ function CollectionDetailModal({
               <DetailRow label="Course total" value={money(row.course_total, row.currency)} />
               <DetailRow label="Amount paid" value={money(row.amount_paid, row.currency)} />
               <DetailRow label="Remaining" value={money(row.remaining_balance, row.currency)} />
-              <DetailRow label="Phone" value={row.customer_phone || "—"} />
-              <DetailRow label="Email" value={row.customer_email || "—"} />
+              <DetailRow label="Phone" value={row.customer_phone || "-"} />
+              <DetailRow label="Email" value={row.customer_email || "-"} />
               {isCollected ? (
                 <DetailRow
                   label="Collected at"
                   value={
-                    row.collected_at ? new Date(row.collected_at).toLocaleString() : "—"
+                    row.collected_at ? new Date(row.collected_at).toLocaleString() : " - "
                   }
                 />
               ) : null}
@@ -220,7 +220,7 @@ function CollectionDetailModal({
                 <span className="text-xs text-stone-500">
                   {proofFile
                     ? proofFile.name
-                    : "JPG, PNG, WEBP, or PDF — max 8MB. Required before confirming."}
+                    : "JPG, PNG, WEBP, or PDF - max 8MB. Required before confirming."}
                 </span>
               </label>
             </section>
@@ -565,7 +565,7 @@ function EmployeeDesk({ userId }: { userId: number }) {
               {tab === "open"
                 ? "No open cash cases right now"
                 : tab === "claimed"
-                  ? "No claimed cases — claim one from Open"
+                  ? "No claimed cases - claim one from Open"
                   : "No collected cases yet"}
             </CardContent>
           </Card>

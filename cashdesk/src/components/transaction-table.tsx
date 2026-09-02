@@ -43,7 +43,7 @@ function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="grid grid-cols-[6.75rem_1fr] gap-x-3 gap-y-1 border-b border-stone-200/70 py-2 last:border-b-0 sm:grid-cols-[7.5rem_1fr]">
       <dt className="text-[11px] font-medium uppercase tracking-wide text-stone-500">{label}</dt>
-      <dd className="break-words text-sm text-stone-900">{value || "—"}</dd>
+      <dd className="break-words text-sm text-stone-900">{value || "-"}</dd>
     </div>
   );
 }
@@ -114,7 +114,7 @@ function TransactionDetailModal({
               {row.customer_name || "Customer"}
             </h2>
             <p className="mt-1 text-sm text-stone-500">
-              Lead #{row.bitrix_lead_id ?? "—"} · {row.course_title || "No course title"}
+              Lead #{row.bitrix_lead_id ?? "-"} · {row.course_title || "No course title"}
             </p>
           </div>
           <button
@@ -140,7 +140,7 @@ function TransactionDetailModal({
             <dl>
               <DetailRow
                 label="Paid at"
-                value={row.paid_at ? new Date(row.paid_at).toLocaleString() : "—"}
+                value={row.paid_at ? new Date(row.paid_at).toLocaleString() : " - "}
               />
               <DetailRow label="Amount" value={money(row.amount, row.currency)} />
               <DetailRow label="Course total" value={money(row.course_total, row.currency)} />
@@ -149,7 +149,7 @@ function TransactionDetailModal({
                 label="Remaining"
                 value={money(row.remaining_balance, row.currency)}
               />
-              <DetailRow label="Email" value={row.customer_email || "—"} />
+              <DetailRow label="Email" value={row.customer_email || "-"} />
               <DetailRow
                 label="Collector"
                 value={
@@ -161,7 +161,7 @@ function TransactionDetailModal({
                       ) : null}
                     </span>
                   ) : (
-                    "—"
+                    " - "
                   )
                 }
               />
@@ -291,12 +291,12 @@ export function TransactionTable({
                 }}
               >
                 <TD className="whitespace-nowrap text-xs text-stone-600">
-                  {row.paid_at ? new Date(row.paid_at).toLocaleString() : "—"}
+                  {row.paid_at ? new Date(row.paid_at).toLocaleString() : " - "}
                 </TD>
                 <TD>
-                  <div className="font-medium text-stone-900">{row.customer_name || "—"}</div>
+                  <div className="font-medium text-stone-900">{row.customer_name || "-"}</div>
                   <div className="text-xs text-stone-500">
-                    Lead #{row.bitrix_lead_id ?? "—"} · {row.course_title || "—"}
+                    Lead #{row.bitrix_lead_id ?? "-"} · {row.course_title || "-"}
                   </div>
                 </TD>
                 <TD>
@@ -317,7 +317,7 @@ export function TransactionTable({
                   )}
                 </TD>
                 <TD>
-                  <div className="text-sm">{row.employee_name || "—"}</div>
+                  <div className="text-sm">{row.employee_name || "-"}</div>
                   <div className="text-xs text-stone-500">{row.employee_email || ""}</div>
                 </TD>
               </TR>

@@ -110,7 +110,7 @@
                     </div>
                     <div class="amount-row">
                         <dt>Lead owner</dt>
-                        <dd>{{ data.owner_name or '—' }}</dd>
+                        <dd>{{ data.owner_name or '-' }}</dd>
                     </div>
                     <div class="amount-row">
                         <dt>Proposed total</dt>
@@ -142,7 +142,7 @@
                                 {{ line.product_name }} × {{ line.quantity }}
                                 <span class="line-meta">selling {{ line.selling_price }} {{ data.currency }}</span>
                             </dt>
-                            <dd>min {{ line.catalog_min_price or '—' }}</dd>
+                            <dd>min {{ line.catalog_min_price or '-' }}</dd>
                         </div>
                         {% endfor %}
                     </div>
@@ -157,7 +157,7 @@
                                 Installment {{ slot.number }}
                                 <span class="line-meta">
                                     {% if slot.amount %}Amount {{ slot.amount }} {{ data.currency }}{% else %}Amount not set in Bitrix{% endif %}
-                                    · Due {{ slot.due_date or '—' }}
+                                    · Due {{ slot.due_date or '-' }}
                                 </span>
                             </dt>
                             <dd>{% if slot.amount_missing == '1' %}missing{% else %}ok{% endif %}</dd>
@@ -182,7 +182,7 @@
                                     {{ line.product_name }}
                                     <span class="line-meta">
                                         Current {{ line.selling_price }} {{ data.currency }} ·
-                                        catalog min {{ line.catalog_min_price or '—' }}
+                                        catalog min {{ line.catalog_min_price or '-' }}
                                     </span>
                                 </dt>
                                 <dd>below min</dd>
@@ -198,7 +198,7 @@
                                         <strong>{{ line.product_name }}</strong>
                                         <span class="line-meta">
                                             Current {{ line.selling_price }} {{ data.currency }} ·
-                                            catalog min {{ line.catalog_min_price or '—' }}
+                                            catalog min {{ line.catalog_min_price or '-' }}
                                         </span>
                                     </div>
                                     <label class="field">
@@ -219,7 +219,7 @@
                             {% for slot in installment.schedule or [] %}
                             <div class="amount-row">
                                 <dt>Installment {{ slot.number }}</dt>
-                                <dd>Due {{ slot.due_date or '—' }}</dd>
+                                <dd>Due {{ slot.due_date or '-' }}</dd>
                             </div>
                             {% endfor %}
                         </div>
@@ -230,7 +230,7 @@
                                 <div class="override-row">
                                     <div>
                                         <strong>Installment {{ slot.number }}</strong>
-                                        <span class="line-meta">Current due {{ slot.due_date or '—' }}</span>
+                                        <span class="line-meta">Current due {{ slot.due_date or '-' }}</span>
                                     </div>
                                     <label class="field">
                                         <span class="field-label">Preferred due date</span>
@@ -253,7 +253,7 @@
                             <div class="amount-row">
                                 <dt>
                                     Installment {{ slot.number }}
-                                    <span class="line-meta">Due {{ slot.due_date or '—' }}</span>
+                                    <span class="line-meta">Due {{ slot.due_date or '-' }}</span>
                                 </dt>
                                 <dd>
                                     {% if slot.amount %}{{ slot.amount }} {{ data.currency }}{% else %}not set{% endif %}
@@ -362,7 +362,7 @@
                 const allApproved = cards.length > 0 && cards.every((c) => c.dataset.state === 'approved');
                 if (finalWrap) finalWrap.hidden = !allApproved;
                 if (allApproved && hint) {
-                    hint.textContent = 'All cases approved — send the payment link when ready.';
+                    hint.textContent = 'All cases approved - send the payment link when ready.';
                 }
             }
 
@@ -436,7 +436,7 @@
                     decisionInput.value = 'approve';
                 }
                 rejectedCaseInput.value = '';
-                // Approve as-is — no price/amount/date overrides.
+                // Approve as-is - no price/amount/date overrides.
                 document.getElementById('overrides-json').value = JSON.stringify({
                     product_prices: [],
                     installments: [],

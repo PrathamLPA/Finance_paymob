@@ -156,9 +156,9 @@ function DepositsPanel() {
               ) : (
                 items.map((row) => (
                   <TR key={row.id}>
-                    <TD>{row.deposited_at ? new Date(row.deposited_at).toLocaleString() : "—"}</TD>
+                    <TD>{row.deposited_at ? new Date(row.deposited_at).toLocaleString() : " - "}</TD>
                     <TD>{money(row.amount, row.currency)}</TD>
-                    <TD>{row.note || "—"}</TD>
+                    <TD>{row.note || "-"}</TD>
                   </TR>
                 ))
               )}

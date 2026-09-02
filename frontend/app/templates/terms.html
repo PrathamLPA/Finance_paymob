@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Secure Payment — Terms &amp; Conditions</title>
+    <title>Secure Payment - Terms &amp; Conditions</title>
     <link rel="stylesheet" href="/static/styles.css?v=18">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -199,7 +199,7 @@
                         <div>
                             <h2 class="section-heading" id="candidates-heading">Course candidates</h2>
                             <p class="terms-divider-hint">
-                                Enter each candidate’s name and email. Courses on this order are shown below — no need to pick a course.
+                                Enter each candidate’s name and email. Courses on this order are shown below - no need to pick a course.
                             </p>
                         </div>
                     </div>
@@ -431,7 +431,7 @@
                 <div class="terms-modal-actions">
                     <button type="button" class="btn-secondary" data-close-terms>Not now</button>
                     <button type="button" class="btn-paymob terms-modal-accept" id="terms-modal-accept" disabled>
-                        I've read — return to payment
+                        I've read - return to payment
                     </button>
                 </div>
             </footer>
@@ -445,6 +445,7 @@
         const amountInput = document.getElementById('payment-amount');
         const amountHint = document.getElementById('amount-hint');
         const amountLocked = {{ 'true' if amount_locked else 'false' }};
+        const channel = {{ (channel or '') | tojson }};
         const minAmount = parseFloat(amountInput.min || '0');
         const maxAmount = parseFloat(amountInput.max || '0');
         const courses = {{ courses | tojson }};
@@ -471,7 +472,7 @@
         }
 
         function amountError() {
-            // Locked installment / full-charge amounts are authoritative — do not
+            // Locked installment / full-charge amounts are authoritative - do not
             // compare against remaining_balance (can be 0 or stale on the page).
             if (amountLocked) {
                 const lockedValue = parseFloat(amountInput.value);
@@ -595,14 +596,9 @@
             const ready = !blocker;
             submitBtn.disabled = !ready;
             if (blockerHint) {
-                const channel = {{ (channel or 'online') | tojson }};
-                let readyHint = "You'll be redirected to Paymob's secure checkout to complete your payment.";
-                if (channel === 'cash') {
-                    readyHint = 'After this step, please make your cash payment at the Learners Point office desk.';
-                } else if (channel === 'bank_transfer') {
-                    readyHint = 'Next you will upload a clear photo or PDF of your transfer receipt.';
-                }
-                blockerHint.textContent = ready ? readyHint : blocker;
+                blockerHint.textContent = ready
+                    ? "You'll be redirected to Paymob's secure checkout to complete your payment."
+                    : blocker;
                 blockerHint.classList.toggle('field-hint-error', !ready);
             }
         }
@@ -696,7 +692,22 @@
         let termsScrolledToEnd = false;
 
         form.addEventListener('input', updateSubmitState);
-        form.addEventListener('submit', syncParticipantsJson);
+        form.addEventListener('submit', (event) => {
+            syncParticipantsJson();
+            if (submitBtn.disabled) {
+                event.preventDefault();
+                return;
+            }
+            submitBtn.disabled = true;
+            const label = submitBtn.querySelector('span');
+            if (label) {
+                label.textContent = channel === 'cash' ? 'Saving...' : 'Continuing...';
+            }
+            const hint = document.getElementById('submit-blocker-hint');
+            if (hint) {
+                hint.textContent = 'Please wait a moment...';
+            }
+        });
 
         function modalIsOpen() {
             return termsModal && termsModal.classList.contains('is-open');

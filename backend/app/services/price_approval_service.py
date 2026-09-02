@@ -322,7 +322,7 @@ class PriceApprovalService:
         if not manager_email and self.settings.bitrix_approval_fallback_email:
             manager_email = self.settings.bitrix_approval_fallback_email.strip()
             logger.warning(
-                "No Bitrix manager for owner %s — using fallback %s",
+                "No Bitrix manager for owner %s - using fallback %s",
                 owner_id,
                 manager_email,
             )
@@ -399,7 +399,7 @@ class PriceApprovalService:
             if channels
             else (
                 "Could not email or notify the manager automatically "
-                "(Bitrix mail/chat not available to this webhook) — "
+                "(Bitrix mail/chat not available to this webhook) - "
                 "share the link below with them."
             )
         )
@@ -421,7 +421,7 @@ class PriceApprovalService:
                 entity_id=workflow.bitrix_lead_id,
                 comment=(
                     f"{summary}{installment_block}"
-                    f"Pending manager approval — {manager_email}.\n"
+                    f"Pending manager approval - {manager_email}.\n"
                     f"{delivery}\n"
                     f"Approval link: {approval_url}"
                 ),
@@ -523,7 +523,7 @@ class PriceApprovalService:
             )
             return False
 
-        subject = f"Approval needed — {approval.lead_title}"
+        subject = f"Approval needed - {approval.lead_title}"
         body = self._email_body(approval, self.build_approval_url(approval.token))
         logger.info(
             "TRY approval delivery | channel=sendgrid lead_id=%s approval_id=%s "
@@ -569,7 +569,7 @@ class PriceApprovalService:
 
     async def _notify_manager(self, approval: PriceApproval, approval_url: str) -> list[str]:
         """Prefer SendGrid, then Bitrix chat. Bitrix mail is skipped (portal often lacks it)."""
-        subject = f"Approval needed — {approval.lead_title}"
+        subject = f"Approval needed - {approval.lead_title}"
         body = self._email_body(approval, approval_url)
         delivered: list[str] = []
         attempts: list[str] = []
@@ -825,7 +825,7 @@ class PriceApprovalService:
         label = " / ".join(kinds) if kinds else "request"
         if approve:
             comment = (
-                f"APPROVED by manager ({approval.manager_email or 'unknown'}) — {label}.\n"
+                f"APPROVED by manager ({approval.manager_email or 'unknown'}) - {label}.\n"
                 f"Proposed total {approval.total_payable} {approval.currency}.\n"
                 "Payment link will be generated."
             )
@@ -836,7 +836,7 @@ class PriceApprovalService:
             preferred_block = self._rejection_preferred_block(approval)
             case_label = (approval.lines_payload or {}).get("rejected_case") or label
             comment = (
-                f"REJECTED by manager ({approval.manager_email or 'unknown'}) — {case_label}.\n"
+                f"REJECTED by manager ({approval.manager_email or 'unknown'}) - {case_label}.\n"
                 f"Responsible person: {owner}\n"
                 f"Reason note: {approval.decision_note or '-'}\n"
                 f"{preferred_block}"

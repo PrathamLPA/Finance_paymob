@@ -151,7 +151,7 @@ class WorkflowOrchestrator:
                 "are no longer valid):\n"
             )
         elif force:
-            prefix = "Payment reminder — current link:\n"
+            prefix = "Payment reminder - current link:\n"
         comment = (
             f"{prefix}"
             f"Payment link: {payment_url}\n"
@@ -236,7 +236,7 @@ class WorkflowOrchestrator:
             f"{collection.due_amount} {collection.currency}\n"
             f"Customer must fill name / email / phone and accept Terms first.\n"
             f"Fill-details link: {payment_url}\n"
-            f"After that, pay at the office desk — collect in Cash Desk."
+            f"After that, pay at the office desk - collect in Cash Desk."
         )
         try:
             await self.bitrix.add_timeline_comment(
@@ -249,7 +249,7 @@ class WorkflowOrchestrator:
                 "Failed to comment cash intake on %s %s", entity_type, entity_id
             )
 
-        # Link already posted in the cash comment above — avoid a second
+        # Link already posted in the cash comment above - avoid a second
         # "Payment reminder" comment that looks like an online Paymob link.
         session.link_commented_at = datetime.now(timezone.utc)
         self.db.commit()
@@ -293,7 +293,7 @@ class WorkflowOrchestrator:
         if new_email != previous_email:
             had_paymob_block = bool(workflow.last_paymob_failure_hash)
             workflow.last_paymob_failure_hash = None
-            # Email changed after a Paymob block — retry on the next reminder scan.
+            # Email changed after a Paymob block - retry on the next reminder scan.
             if had_paymob_block:
                 interval_hours = max(int(self.settings.reminder_interval_hours or 24), 1)
                 workflow.last_reminder_at = datetime.now(timezone.utc) - timedelta(
@@ -432,7 +432,7 @@ class WorkflowOrchestrator:
 
         if not gate.ok:
             logger.info(
-                "Estimate ready — awaiting discount approval | lead_id=%s estimate_id=%s",
+                "Estimate ready - awaiting discount approval | lead_id=%s estimate_id=%s",
                 lead_id,
                 workflow.bitrix_estimate_id,
             )
@@ -659,7 +659,7 @@ class WorkflowOrchestrator:
         )
         estimate_id = await self.bitrix.create_estimate(
             lead_id=lead_id,
-            title=f"Estimate — {title}",
+            title=f"Estimate - {title}",
             currency=currency,
             opportunity=gate_total,
             tax_value=gate_tax,
@@ -718,7 +718,7 @@ class WorkflowOrchestrator:
 
         if workflow.total_amount <= 0:
             raise ValueError(
-                f"Lead {lead_id} has no payment amount — set OPPORTUNITY "
+                f"Lead {lead_id} has no payment amount - set OPPORTUNITY "
                 f"(or BITRIX_FIELD_LEAD_AMOUNT) in Bitrix before requesting payment"
             )
 
@@ -826,7 +826,7 @@ class WorkflowOrchestrator:
             self.db.commit()
 
         logger.info(
-            "Payment link created for lead %s — estimate_id=%s channel=%s token %s...",
+            "Payment link created for lead %s - estimate_id=%s channel=%s token %s...",
             lead_id,
             workflow.bitrix_estimate_id or "-",
             channel,
@@ -842,7 +842,7 @@ class WorkflowOrchestrator:
         product_prices: list[dict] | None = None,
         installment_overrides: list[dict] | None = None,
     ) -> PaymentSession:
-        """Manager approved — apply optional overrides, then send payment link."""
+        """Manager approved - apply optional overrides, then send payment link."""
         logger.info("START manager approve | token=%s...", token[:8])
         approval = await self.approval_service.decide(token, approve=True, note=note)
         workflow = self.get_or_create_workflow(approval.bitrix_lead_id)
@@ -1266,7 +1266,7 @@ class WorkflowOrchestrator:
 
         if owner_id <= 0:
             logger.info(
-                "No responsible person on lead %s — skip owner chat/email",
+                "No responsible person on lead %s - skip owner chat/email",
                 workflow.bitrix_lead_id,
             )
             return
@@ -1292,7 +1292,7 @@ class WorkflowOrchestrator:
             agent_email, agent_name = _bitrix_user_email_name(user)
         if not agent_email:
             logger.info(
-                "Responsible person %s has no email — chat only | lead_id=%s",
+                "Responsible person %s has no email - chat only | lead_id=%s",
                 owner_id,
                 workflow.bitrix_lead_id,
             )
@@ -1348,7 +1348,7 @@ class WorkflowOrchestrator:
 
         action = "approved with updates" if approved else "updated values"
         subject = (
-            f"Manager {action} — {approval.lead_title or f'Lead {approval.bitrix_lead_id}'}"
+            f"Manager {action} - {approval.lead_title or f'Lead {approval.bitrix_lead_id}'}"
         )
         body = "\n".join(
             [
@@ -1441,7 +1441,7 @@ class WorkflowOrchestrator:
         label = (approval.lines_payload or {}).get("rejected_case") or " / ".join(kinds)
         note = approval.decision_note or "-"
         preferred = self._format_suggested_prices(approval)
-        subject = f"Payment approval rejected — {approval.lead_title or f'Lead {approval.bitrix_lead_id}'}"
+        subject = f"Payment approval rejected - {approval.lead_title or f'Lead {approval.bitrix_lead_id}'}"
         body_parts = [
             f"Your payment approval request was rejected by the manager "
             f"({approval.manager_email or 'unknown'}).",
@@ -1542,7 +1542,7 @@ class WorkflowOrchestrator:
         self.db.commit()
 
         logger.info(
-            "Payment link created for finance deal %s — token %s...",
+            "Payment link created for finance deal %s - token %s...",
             finance_deal_id,
             session.token[:8],
         )
@@ -1556,7 +1556,7 @@ class WorkflowOrchestrator:
         workflow.b2c_deal_id = 900003 + lead_id
         workflow.first_payment_at = datetime.now(timezone.utc)
         logger.info(
-            "Dev simulate — mock deals for lead %s: sales=%s finance=%s b2c=%s",
+            "Dev simulate - mock deals for lead %s: sales=%s finance=%s b2c=%s",
             lead_id,
             workflow.sales_deal_id,
             workflow.finance_deal_id,
@@ -1594,7 +1594,7 @@ class WorkflowOrchestrator:
                 logger.exception("Failed to sync customer details to deal %s", deal_id)
 
         logger.info(
-            "First payment — created deals for lead %s: sales=%s finance=%s b2c=%s",
+            "First payment - created deals for lead %s: sales=%s finance=%s b2c=%s",
             workflow.bitrix_lead_id,
             sales_deal_id,
             finance_deal_id,
@@ -1636,13 +1636,13 @@ class WorkflowOrchestrator:
         await self._comment_on_workflow_entities(workflow, comment)
         await self._notify_assigned_agent(
             workflow,
-            subject=f"{comment_prefix} — Lead {workflow.bitrix_lead_id}",
+            subject=f"{comment_prefix} - Lead {workflow.bitrix_lead_id}",
             body=comment,
         )
 
         if skip_zoho or dev_simulate:
             if dev_simulate:
-                logger.info("Dev simulate — skipping Zoho invoice sync")
+                logger.info("Dev simulate - skipping Zoho invoice sync")
         else:
             try:
                 await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
@@ -1843,7 +1843,7 @@ class WorkflowOrchestrator:
     def _paymob_failure_summary(reason: str) -> str:
         lower = reason.lower()
         if "valid email" in lower or ('billing_data' in lower and '"email"' in lower):
-            return "Invalid customer email — Paymob rejected the billing email."
+            return "Invalid customer email - Paymob rejected the billing email."
         return reason
 
     @staticmethod
@@ -1900,7 +1900,7 @@ class WorkflowOrchestrator:
         summary = self._paymob_failure_summary(reason)
         if "valid email" in reason.lower():
             comment = (
-                f"Payment link blocked — invalid customer email\n"
+                f"Payment link blocked - invalid customer email\n"
                 f"Paymob rejected the billing email: {email_on_file}\n"
                 f"Trigger: {trigger}\n"
                 f"Please correct the email on the lead and generate a new payment link."
@@ -1924,7 +1924,7 @@ class WorkflowOrchestrator:
         await self._comment_on_workflow_entities(workflow, comment)
         await self._notify_assigned_agent(
             workflow,
-            subject=f"Payment link failed — Lead {workflow.bitrix_lead_id}",
+            subject=f"Payment link failed - Lead {workflow.bitrix_lead_id}",
             body=comment,
         )
         workflow.last_paymob_failure_hash = digest
@@ -1995,7 +1995,7 @@ class WorkflowOrchestrator:
         except (TypeError, ValueError):
             owner_id = 0
         if owner_id <= 0:
-            logger.info("No assigned agent on lead %s — skip chat/email notice", workflow.bitrix_lead_id)
+            logger.info("No assigned agent on lead %s - skip chat/email notice", workflow.bitrix_lead_id)
             return
 
         chat_text = f"{subject}\n\n{body}"
@@ -2015,7 +2015,7 @@ class WorkflowOrchestrator:
             agent_email, agent_name = _bitrix_user_email_name(user)
         if not agent_email:
             logger.info(
-                "Assigned agent %s has no email — chat only | lead_id=%s",
+                "Assigned agent %s has no email - chat only | lead_id=%s",
                 owner_id,
                 workflow.bitrix_lead_id,
             )
@@ -2082,7 +2082,7 @@ class WorkflowOrchestrator:
         await self._comment_on_workflow_entities(workflow, comment)
         await self._notify_assigned_agent(
             workflow,
-            subject=f"Payment failed — Lead {workflow.bitrix_lead_id}",
+            subject=f"Payment failed - Lead {workflow.bitrix_lead_id}",
             body=comment,
         )
         self.db.refresh(workflow)

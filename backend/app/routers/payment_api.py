@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -164,6 +164,7 @@ async def accept_payment_terms(
     token: str,
     request: Request,
     body: AcceptTermsBody,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     if not body.accepted:
@@ -181,6 +182,7 @@ async def accept_payment_terms(
         registrant_phone=body.registrant_phone,
         payment_amount=body.payment_amount,
         participants=[p.model_dump() for p in body.participants],
+        background_tasks=background_tasks,
     )
     return {"checkout_url": checkout_url}
 

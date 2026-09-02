@@ -63,12 +63,12 @@ function DepositsPage() {
                 items.map((row) => (
                   <TR key={row.id}>
                     <TD className="whitespace-nowrap text-xs">
-                      {row.deposited_at ? new Date(row.deposited_at).toLocaleString() : "—"}
+                      {row.deposited_at ? new Date(row.deposited_at).toLocaleString() : " - "}
                     </TD>
-                    <TD>{row.employee_name || "—"}</TD>
+                    <TD>{row.employee_name || "-"}</TD>
                     <TD className="font-medium">{money(row.amount, row.currency)}</TD>
-                    <TD className="text-stone-600">{row.note || "—"}</TD>
-                    <TD>{row.recorded_by_name || "—"}</TD>
+                    <TD className="text-stone-600">{row.note || "-"}</TD>
+                    <TD>{row.recorded_by_name || "-"}</TD>
                   </TR>
                 ))
               )}

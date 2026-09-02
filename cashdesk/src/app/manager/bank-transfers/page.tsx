@@ -180,13 +180,13 @@ function BankTransfersPage() {
                     >
                       <TD>
                         <div className="font-medium">
-                          {row.registrant_name || row.customer_name || "—"}
+                          {row.registrant_name || row.customer_name || "-"}
                         </div>
                         <div className="text-xs text-stone-500">
                           Lead #{row.bitrix_lead_id}
                           {row.bitrix_estimate_id ? ` · Est #${row.bitrix_estimate_id}` : ""}
                         </div>
-                        <div className="text-xs text-stone-500">{row.course_title || "—"}</div>
+                        <div className="text-xs text-stone-500">{row.course_title || "-"}</div>
                       </TD>
                       <TD>I{row.installment_number}</TD>
                       <TD className="font-medium">{money(row.due_amount, row.currency)}</TD>
@@ -209,10 +209,10 @@ function BankTransfersPage() {
               <>
                 <div>
                   <p className="font-medium text-stone-900">
-                    {selected.registrant_name || selected.customer_name || "—"}
+                    {selected.registrant_name || selected.customer_name || "-"}
                   </p>
                   <p className="text-xs text-stone-500">
-                    {selected.registrant_email || selected.customer_email || "—"}
+                    {selected.registrant_email || selected.customer_email || "-"}
                     {selected.registrant_phone || selected.customer_phone
                       ? ` · ${selected.registrant_phone || selected.customer_phone}`
                       : ""}
@@ -325,7 +325,7 @@ function BankTransfersPage() {
         >
           <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/10 bg-stone-950/80 px-4 py-3 backdrop-blur">
             <p className="truncate text-sm text-white/80">
-              {selected?.proof_original_name || "Receipt"} — scroll to see full image
+              {selected?.proof_original_name || "Receipt"} - scroll to see full image
             </p>
             <button
               type="button"

@@ -64,7 +64,7 @@ async def approve_price(token: str, body: DecisionBody, db: Session = Depends(ge
             "lead_id": collection.bitrix_lead_id,
             "payment_url": None,
             "message": (
-                "Payment mode is Cash — no Paymob link was sent. "
+                "Payment mode is Cash - no Paymob link was sent. "
                 "Collect cash in Cash Desk."
             ),
         }

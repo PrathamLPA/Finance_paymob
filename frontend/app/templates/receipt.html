@@ -127,7 +127,7 @@
                         </svg>
                     </span>
                     <span class="receipt-dropzone-title">Choose receipt photo or PDF</span>
-                    <span class="receipt-dropzone-hint" id="receipt-filename">JPG, PNG, WEBP, or PDF — max 8MB</span>
+                    <span class="receipt-dropzone-hint" id="receipt-filename">JPG, PNG, WEBP, or PDF - max 8MB</span>
                 </label>
                 <button type="submit" class="btn-paymob" id="receipt-submit">
                     Submit receipt
@@ -149,7 +149,7 @@
             if (!input || !hint || !zone) return;
             input.addEventListener('change', function () {
                 var file = input.files && input.files[0];
-                hint.textContent = file ? file.name : 'JPG, PNG, WEBP, or PDF — max 8MB';
+                hint.textContent = file ? file.name : 'JPG, PNG, WEBP, or PDF - max 8MB';
                 zone.classList.toggle('has-file', Boolean(file));
             });
         })();

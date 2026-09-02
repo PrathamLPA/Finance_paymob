@@ -7,8 +7,9 @@ import re
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+from typing import Any
 
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session
@@ -166,10 +167,11 @@ class TermsService:
         pdf_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = pdf_dir / f"terms_acceptance_{session.id}_{session.token[:8]}.pdf"
 
-        markdown = self.load_terms_markdown()
+        # Short acceptance receipt only. Reprinting the full terms markdown
+        # was a major source of lag on Confirm & finish.
         course_label = "For me" if course_for == "self" else "For someone else"
         c = canvas.Canvas(str(pdf_path), pagesize=letter)
-        c.drawString(72, 750, "Terms and Conditions — Acceptance Record")
+        c.drawString(72, 750, "Terms and Conditions - Acceptance Record")
         c.drawString(72, 730, f"Version: {self.settings.terms_version}")
         c.drawString(72, 710, f"Accepted at: {datetime.now(timezone.utc).isoformat()}")
         c.drawString(72, 690, f"Session token: {session.token[:16]}...")
@@ -195,21 +197,77 @@ class TermsService:
                 y -= 14
             y -= 10
 
-        for line in markdown.split("\n"):
-            if y < 72:
-                c.showPage()
-                y = 750
-            c.drawString(72, y, line[:90])
-            y -= 14
-
-        if y < 72:
+        if y < 100:
             c.showPage()
             y = 750
-        y -= 14
+        c.drawString(72, y, "The customer accepted the published Terms and Conditions online.")
+        y -= 16
         c.drawString(72, y, f"Full refund policy: {self.settings.refund_policy_url}")
 
         c.save()
         return str(pdf_path)
+
+    @staticmethod
+    async def run_acceptance_side_effects(
+        *,
+        session_id: int,
+        workflow_id: int,
+        course_for: str,
+        registrant_name: str,
+        registrant_email: str,
+        registrant_phone: str,
+        participants: list[dict[str, Any]] | None,
+    ) -> None:
+        """PDF + Bitrix sync + email after the customer already got their next URL."""
+        from app.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            service = TermsService(db)
+            session = db.get(PaymentSession, session_id)
+            if not session:
+                logger.warning(
+                    "Deferred terms side effects skipped: missing session %s", session_id
+                )
+                return
+
+            pdf_path = service.generate_acceptance_pdf(
+                session,
+                course_for=course_for,
+                registrant_name=registrant_name,
+                registrant_email=registrant_email,
+                registrant_phone=registrant_phone,
+                participants=participants,
+            )
+            acceptance = (
+                db.query(TermsAcceptance)
+                .filter(TermsAcceptance.payment_session_id == session_id)
+                .order_by(TermsAcceptance.id.desc())
+                .first()
+            )
+            if acceptance and not acceptance.pdf_path:
+                acceptance.pdf_path = pdf_path
+                db.commit()
+
+            workflow = db.get(CustomerWorkflow, workflow_id)
+            if not workflow:
+                return
+
+            await service._sync_registrant_to_bitrix(workflow)
+            if workflow.customer_email:
+                service.email.send_terms_acceptance(
+                    to_email=workflow.customer_email,
+                    customer_name=workflow.customer_name,
+                    pdf_path=pdf_path,
+                    terms_version=service.settings.terms_version,
+                )
+        except Exception:
+            logger.exception(
+                "Deferred terms acceptance side effects failed | session_id=%s",
+                session_id,
+            )
+        finally:
+            db.close()
 
     async def accept_terms(
         self,
@@ -223,6 +281,7 @@ class TermsService:
         registrant_phone: str,
         payment_amount: Decimal | None = None,
         participants: list[dict] | None = None,
+        background_tasks: BackgroundTasks | None = None,
     ) -> str:
         if not accepted:
             raise HTTPException(status_code=400, detail="You must accept the Terms and Conditions to continue")
@@ -263,7 +322,7 @@ class TermsService:
         is_bank_transfer = channel == CHANNEL_BANK_TRANSFER
         is_cash = channel == CHANNEL_CASH
 
-        # Always use the form details for Paymob / Bitrix — even on re-submit.
+        # Always use the form details for Paymob / Bitrix, even on re-submit.
         workflow = session.workflow
         workflow.customer_name = registrant_name.strip()
         workflow.customer_email = registrant_email.strip()
@@ -272,19 +331,11 @@ class TermsService:
         self.db.refresh(workflow)
 
         if session.status != SESSION_TERMS_ACCEPTED:
-            pdf_path = self.generate_acceptance_pdf(
-                session,
-                course_for=course_for,
-                registrant_name=registrant_name.strip(),
-                registrant_email=registrant_email.strip(),
-                registrant_phone=registrant_phone.strip(),
-                participants=cleaned_participants,
-            )
-
+            # Persist acceptance immediately; PDF / Bitrix / email run after response.
             acceptance = TermsAcceptance(
                 payment_session_id=session.id,
                 ip_address=ip_address,
-                pdf_path=pdf_path,
+                pdf_path=None,
                 terms_version=self.settings.terms_version,
                 course_for=course_for,
                 registrant_name=registrant_name.strip(),
@@ -294,18 +345,26 @@ class TermsService:
             )
             self.db.add(acceptance)
             self.session_service.mark_terms_accepted(session)
+            self.db.commit()
 
-            await self._sync_registrant_to_bitrix(workflow)
-
-            if workflow.customer_email:
-                self.email.send_terms_acceptance(
-                    to_email=workflow.customer_email,
-                    customer_name=workflow.customer_name,
-                    pdf_path=pdf_path,
-                    terms_version=self.settings.terms_version,
+            side_effect_kwargs = {
+                "session_id": session.id,
+                "workflow_id": workflow.id,
+                "course_for": course_for,
+                "registrant_name": registrant_name.strip(),
+                "registrant_email": registrant_email.strip(),
+                "registrant_phone": registrant_phone.strip(),
+                "participants": cleaned_participants,
+            }
+            if background_tasks is not None:
+                background_tasks.add_task(
+                    TermsService.run_acceptance_side_effects,
+                    **side_effect_kwargs,
                 )
+            else:
+                await TermsService.run_acceptance_side_effects(**side_effect_kwargs)
         else:
-            # Already accepted — keep charge amount in sync
+            # Already accepted: keep charge amount in sync
             if amount != session.charge_amount:
                 session.charge_amount = amount
                 self.db.commit()

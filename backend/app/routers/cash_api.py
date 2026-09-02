@@ -446,7 +446,7 @@ async def retrigger_invoice(
     if txn is None:
         raise HTTPException(
             status_code=400,
-            detail="No recorded payment found for this workflow — cannot create invoice",
+            detail="No recorded payment found for this workflow - cannot create invoice",
         )
 
     result = await InvoiceService(db).retrigger_invoice_delivery(workflow, txn)

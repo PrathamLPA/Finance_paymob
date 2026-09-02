@@ -127,7 +127,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
             {
                 "request": request,
                 "page_title": "Receipt received",
-                "heading": "Thank you — receipt received",
+                "heading": "Thank you - receipt received",
                 "message": (
                     f"Hi {name}, we have received your bank transfer receipt. "
                     if name
@@ -229,7 +229,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
     elif success:
         heading = "Payment submitted"
         message = (
-            "Your card payment was submitted. We are confirming it with Paymob now — "
+            "Your card payment was submitted. We are confirming it with Paymob now - "
             "this usually takes a few seconds."
         )
         page_title = "Payment Submitted"
@@ -312,7 +312,7 @@ async def payment_receipt_page(token: str, request: Request) -> HTMLResponse:
             {"request": request, "message": exc.detail},
             status_code=exc.status_code if exc.status_code in (404, 400) else 404,
         )
-    # Already submitted — keep them on the receipt page so they can see status
+    # Already submitted - keep them on the receipt page so they can see status
     # and replace the file if needed (do not bounce to thank-you on every refresh).
     return templates.TemplateResponse(
         "receipt.html",
@@ -395,18 +395,19 @@ async def accept_terms_and_redirect(
     payment_amount: str | None = Form(default=None),
     participants_json: str | None = Form(default=None),
 ) -> Response:
-    try:
-        data = await get_payment(token)
-    except BackendApiError as exc:
-        return templates.TemplateResponse(
-            "error.html",
-            {"request": request, "message": exc.detail},
-            status_code=404,
-        )
-
     participants = _parse_participants(participants_json)
 
-    def _reject(message: str, status_code: int = 400) -> HTMLResponse:
+    async def _reject(message: str, status_code: int = 400) -> HTMLResponse:
+        # Only load session context when we need to re-render the form (saves a
+        # round-trip on the happy path, which matters for cash confirm lag).
+        try:
+            data = await get_payment(token)
+        except BackendApiError as exc:
+            return templates.TemplateResponse(
+                "error.html",
+                {"request": request, "message": exc.detail},
+                status_code=404,
+            )
         return templates.TemplateResponse(
             "terms.html",
             _form_context(
@@ -425,14 +426,14 @@ async def accept_terms_and_redirect(
         )
 
     if accepted != "yes":
-        return _reject("You must accept the Terms and Conditions to continue.")
+        return await _reject("You must accept the Terms and Conditions to continue.")
 
     chosen_amount: Decimal | None = None
     if payment_amount and payment_amount.strip():
         try:
             chosen_amount = Decimal(payment_amount.strip())
         except InvalidOperation:
-            return _reject("Please enter a valid payment amount.")
+            return await _reject("Please enter a valid payment amount.")
 
     try:
         result = await accept_payment(
@@ -448,6 +449,8 @@ async def accept_terms_and_redirect(
             },
         )
     except BackendApiError as exc:
-        return _reject(exc.detail, exc.status_code if 400 <= exc.status_code < 500 else 400)
+        return await _reject(
+            exc.detail, exc.status_code if 400 <= exc.status_code < 500 else 400
+        )
 
     return RedirectResponse(url=result["checkout_url"], status_code=303)
