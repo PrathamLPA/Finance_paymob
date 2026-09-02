@@ -4,51 +4,82 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ page_title }}</title>
-    <link rel="stylesheet" href="/static/styles.css?v=8">
+    <link rel="stylesheet" href="/static/styles.css?v=19">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body class="error-page-body thank-you-page">
+<body class="paymob-page thank-you-page">
     <div class="page-bg"></div>
-    <div class="error-card thank-you-card animate-rise">
-        <div class="thank-you-icon {% if variant == 'failed' %}is-failed{% else %}is-success{% endif %}" aria-hidden="true">
-            {% if variant == 'failed' %}
-            <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
-                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"/>
-                <path d="M15 9l-6 6M9 9l6 6" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
-            </svg>
-            {% else %}
-            <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
-                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"/>
-                <path d="M8 12.5l2.5 2.5L16 9.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            {% endif %}
-        </div>
-        <h1>{{ heading }}</h1>
-        <p>{{ message }}</p>
-        {% if amount_display %}
-        <p class="thank-you-amount"><strong>Amount:</strong> {{ amount_display }}</p>
-        {% endif %}
-        {% if merchant_order_id %}
-        <p class="form-footer-note">Reference: {{ merchant_order_id }}</p>
-        {% endif %}
-        <p class="form-footer-note">{{ footnote }}</p>
 
-        {% if show_lms and lms_url %}
-        <div class="lms-cta">
-            <p class="lms-cta-copy">
-                Your course is ready. Continue to Learners Point Academy to open your classroom.
-            </p>
-            <a class="btn-paymob" id="lms-button" href="{{ lms_url }}">
-                Go to My Classroom
-            </a>
-            {% if auto_redirect_seconds and auto_redirect_seconds > 0 %}
-            <p class="form-footer-note" id="lms-redirect-note">
-                Redirecting in <span id="lms-countdown">{{ auto_redirect_seconds }}</span>s…
-            </p>
-            {% endif %}
+    <header class="site-header">
+        <a class="brand brand-learners" href="https://learnerspoint.org" target="_blank" rel="noopener noreferrer">
+            <picture>
+                <source srcset="/static/brand/learners-point-logo.avif" type="image/avif">
+                <img
+                    class="brand-logo"
+                    src="/static/brand/learners-point-logo.png"
+                    width="40"
+                    height="40"
+                    alt="Learners Point"
+                >
+            </picture>
+            <div>
+                <span class="brand-name">Learners Point</span>
+                <span class="brand-tagline">Secure course payment</span>
+            </div>
+        </a>
+        <div class="secure-badge">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M8 11V8a4 4 0 118 0v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            <span>SSL Secured</span>
         </div>
-        {% endif %}
-    </div>
+    </header>
+
+    <main class="main-content thank-you-main">
+        <article class="terms-card thank-you-card animate-rise">
+            <div class="thank-you-icon {% if variant == 'failed' %}is-failed{% else %}is-success{% endif %}" aria-hidden="true">
+                {% if variant == 'failed' %}
+                <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"/>
+                    <path d="M15 9l-6 6M9 9l6 6" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+                </svg>
+                {% else %}
+                <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"/>
+                    <path d="M8 12.5l2.5 2.5L16 9.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                {% endif %}
+            </div>
+            <h1>{{ heading }}</h1>
+            <p class="thank-you-message">{{ message }}</p>
+            {% if amount_display %}
+            <p class="thank-you-amount"><strong>Amount:</strong> {{ amount_display }}</p>
+            {% endif %}
+            {% if merchant_order_id %}
+            <p class="form-footer-note">Reference: {{ merchant_order_id }}</p>
+            {% endif %}
+            <p class="form-footer-note">{{ footnote }}</p>
+
+            {% if show_lms and lms_url %}
+            <div class="lms-cta">
+                <p class="lms-cta-copy">
+                    Your course is ready. Continue to Learners Point Academy to open your classroom.
+                </p>
+                <a class="btn-paymob" id="lms-button" href="{{ lms_url }}">
+                    Go to My Classroom
+                </a>
+                {% if auto_redirect_seconds and auto_redirect_seconds > 0 %}
+                <p class="form-footer-note" id="lms-redirect-note">
+                    Redirecting in <span id="lms-countdown">{{ auto_redirect_seconds }}</span>s…
+                </p>
+                {% endif %}
+            </div>
+            {% endif %}
+        </article>
+    </main>
 
     {% if show_lms and lms_url and auto_redirect_seconds and auto_redirect_seconds > 0 %}
     <script>

@@ -1320,7 +1320,23 @@ body.error-page-body {
 .thank-you-page .thank-you-card {
     position: relative;
     z-index: 1;
-    max-width: 460px;
+    max-width: 520px;
+    width: 100%;
+    margin: 0 auto;
+    text-align: center;
+}
+
+.thank-you-main {
+    display: flex;
+    justify-content: center;
+    padding-top: 1.5rem;
+    padding-bottom: 2rem;
+}
+
+.thank-you-message {
+    margin: 0 auto;
+    max-width: 36ch;
+    color: var(--muted-foreground);
 }
 
 .thank-you-icon {
@@ -1354,6 +1370,133 @@ body.error-page-body {
 .thank-you-amount {
     margin-top: 0.75rem !important;
     color: var(--foreground) !important;
+}
+
+.receipt-card .card-hero {
+    margin-bottom: 0.35rem;
+}
+
+.receipt-summary {
+    margin: 1.15rem 0 1.25rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: color-mix(in oklab, var(--muted) 45%, var(--card));
+}
+
+.receipt-summary .amount-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.35rem 0;
+}
+
+.receipt-summary .amount-row dt {
+    color: var(--muted-foreground);
+}
+
+.receipt-summary .amount-row dd {
+    margin: 0;
+    text-align: right;
+    font-weight: 500;
+}
+
+.receipt-status {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: capitalize;
+    background: color-mix(in oklab, var(--muted) 70%, white);
+    color: var(--foreground);
+}
+
+.receipt-status-pending_review,
+.receipt-status-awaiting_upload {
+    background: color-mix(in oklab, #d97706 16%, white);
+    color: #92400e;
+}
+
+.receipt-status-approved {
+    background: color-mix(in oklab, var(--success) 16%, white);
+    color: color-mix(in oklab, var(--success) 70%, black);
+}
+
+.receipt-status-rejected {
+    background: color-mix(in oklab, var(--destructive) 14%, white);
+    color: var(--destructive);
+}
+
+.receipt-instructions {
+    margin-bottom: 1.15rem;
+    padding: 0.95rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+}
+
+.receipt-instructions .section-heading {
+    margin: 0 0 0.4rem;
+    font-size: 0.95rem;
+}
+
+.receipt-instructions p {
+    margin: 0;
+    white-space: pre-wrap;
+    color: var(--muted-foreground);
+}
+
+.receipt-form {
+    display: grid;
+    gap: 0.85rem;
+    margin-top: 0.35rem;
+}
+
+.receipt-dropzone {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    gap: 0.35rem;
+    padding: 1.35rem 1rem;
+    border: 1.5px dashed color-mix(in oklab, var(--border) 40%, #0f766e);
+    border-radius: var(--radius-lg);
+    background: color-mix(in oklab, #0f766e 5%, var(--card));
+    cursor: pointer;
+    text-align: center;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.receipt-dropzone:hover,
+.receipt-dropzone:focus-within,
+.receipt-dropzone.has-file {
+    border-color: #0f766e;
+    background: color-mix(in oklab, #0f766e 9%, var(--card));
+}
+
+.receipt-dropzone input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.receipt-dropzone-icon {
+    color: #0f766e;
+    margin-bottom: 0.15rem;
+}
+
+.receipt-dropzone-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--foreground);
+}
+
+.receipt-dropzone-hint {
+    font-size: 0.8rem;
+    color: var(--muted-foreground);
+    word-break: break-all;
 }
 
 .btn-paymob {

@@ -126,7 +126,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
             {
                 "request": request,
                 "page_title": "Receipt received",
-                "heading": "Thank you — receipt received",
+                "heading": "Thank you - receipt received",
                 "message": (
                     f"Hi {name}, we have received your bank transfer receipt. "
                     if name
@@ -269,26 +269,19 @@ async def payment_receipt_page(token: str, request: Request) -> HTMLResponse:
             {"request": request, "message": exc.detail},
             status_code=exc.status_code if exc.status_code in (404, 400) else 404,
         )
-    # Already submitted — show thank-you instead of the upload form
-    if data.get("status") == "pending_review" and data.get("has_proof"):
-        from urllib.parse import urlencode
-
-        qs = urlencode(
-            {
-                "kind": "bank_transfer",
-                "amount": str(data.get("payment_amount") or ""),
-                "currency": str(data.get("currency") or "AED"),
-                "name": str(data.get("customer_name") or ""),
-            }
-        )
-        return RedirectResponse(url=f"/payment/thank-you?{qs}", status_code=303)
+    # Already submitted — keep them on the receipt page so they can see status
+    # and replace the file if needed (do not bounce to thank-you on every refresh).
     return templates.TemplateResponse(
         "receipt.html",
         {
             "request": request,
             "token": token,
             "error": None,
-            "success": None,
+            "success": (
+                "Receipt received. Finance will review it shortly."
+                if data.get("status") == "pending_review" and data.get("has_proof")
+                else None
+            ),
             **data,
         },
     )

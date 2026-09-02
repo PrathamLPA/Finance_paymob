@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Upload Bank Transfer Receipt</title>
-    <link rel="stylesheet" href="/static/styles.css?v=8">
+    <link rel="stylesheet" href="/static/styles.css?v=19">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -13,26 +13,44 @@
     <div class="page-bg"></div>
 
     <header class="site-header">
-        <div class="brand">
-            <div class="brand-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                    <path d="M8 12l3 3 5-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-            </div>
+        <a class="brand brand-learners" href="https://learnerspoint.org" target="_blank" rel="noopener noreferrer">
+            <picture>
+                <source srcset="/static/brand/learners-point-logo.avif" type="image/avif">
+                <img
+                    class="brand-logo"
+                    src="/static/brand/learners-point-logo.png"
+                    width="40"
+                    height="40"
+                    alt="Learners Point"
+                >
+            </picture>
             <div>
-                <span class="brand-name">Finance Automation</span>
+                <span class="brand-name">Learners Point</span>
                 <span class="brand-tagline">Bank transfer</span>
             </div>
-        </div>
+        </a>
         <div class="secure-badge">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M8 11V8a4 4 0 118 0v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
             <span>SSL Secured</span>
         </div>
     </header>
 
     <main class="main-content">
-        <article class="terms-card animate-rise">
+        <article class="terms-card receipt-card">
             <div class="card-hero">
+                <picture>
+                    <source srcset="/static/brand/learners-point-logo.avif" type="image/avif">
+                    <img
+                        class="card-hero-logo"
+                        src="/static/brand/learners-point-logo.png"
+                        width="48"
+                        height="48"
+                        alt=""
+                    >
+                </picture>
                 <div class="card-hero-text">
                     <div class="card-header">
                         <h1>Upload transfer receipt</h1>
@@ -51,29 +69,32 @@
             <div class="alert alert-success" role="alert">{{ success }}</div>
             {% endif %}
 
-            <div class="amount-summary" style="margin: 1.25rem 0;">
-                <div class="amount-row">
-                    <span>{{ charge_label or "Amount due" }}</span>
-                    <strong>{{ payment_amount }} {{ currency }}</strong>
+            <section class="receipt-summary" aria-label="Payment summary">
+                <div class="amount-row amount-row-total">
+                    <dt>{{ charge_label or "Amount due" }}</dt>
+                    <dd><strong>{{ payment_amount }} {{ currency }}</strong></dd>
                 </div>
                 {% if customer_name %}
                 <div class="amount-row">
-                    <span>Name</span>
-                    <span>{{ customer_name }}</span>
+                    <dt>Name</dt>
+                    <dd>{{ customer_name }}</dd>
                 </div>
                 {% endif %}
                 {% if status %}
                 <div class="amount-row">
-                    <span>Status</span>
-                    <span>{{ status }}</span>
+                    <dt>Status</dt>
+                    <dd>
+                        <span class="receipt-status receipt-status-{{ status }}">{{ status.replace('_', ' ') }}</span>
+                    </dd>
                 </div>
                 {% endif %}
-            </div>
+            </section>
 
             {% if instructions %}
-            <div class="terms-body" style="margin-bottom: 1.25rem;">
+            <section class="receipt-instructions">
+                <h2 class="section-heading">Bank details</h2>
                 <p>{{ instructions }}</p>
-            </div>
+            </section>
             {% endif %}
 
             {% if review_note and status == "rejected" %}
@@ -82,23 +103,57 @@
             </div>
             {% endif %}
 
-            {% if status == "pending_review" and has_proof and not error %}
-            <p class="form-footer-note">
+            {% if status == "pending_review" and has_proof %}
+            <div class="alert alert-success" role="status">
                 Your receipt{% if proof_original_name %} ({{ proof_original_name }}){% endif %}
                 is with finance for review. You can upload a replacement file below if needed.
-            </p>
+            </div>
             {% endif %}
 
             {% if status != "approved" %}
-            <form method="post" action="/payment/{{ token }}/receipt" enctype="multipart/form-data" class="terms-form">
-                <label class="field-label" for="receipt">Receipt / screenshot (JPG, PNG, WEBP, or PDF — max 8MB)</label>
-                <input id="receipt" name="receipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" required>
-                <button type="submit" class="btn-paymob" style="margin-top: 1rem;">Submit receipt</button>
+            <form method="post" action="/payment/{{ token }}/receipt" enctype="multipart/form-data" class="receipt-form" id="receipt-form">
+                <label class="receipt-dropzone" for="receipt" id="receipt-dropzone">
+                    <input
+                        id="receipt"
+                        name="receipt"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,application/pdf"
+                        required
+                    >
+                    <span class="receipt-dropzone-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
+                            <path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M4 14v4a2 2 0 002 2h12a2 2 0 002-2v-4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+                        </svg>
+                    </span>
+                    <span class="receipt-dropzone-title">Choose receipt photo or PDF</span>
+                    <span class="receipt-dropzone-hint" id="receipt-filename">JPG, PNG, WEBP, or PDF — max 8MB</span>
+                </label>
+                <button type="submit" class="btn-paymob" id="receipt-submit">
+                    Submit receipt
+                </button>
+                <p class="form-footer-note">You’ll be shown a confirmation once the file is uploaded.</p>
             </form>
             {% else %}
             <p class="form-footer-note">This bank transfer has already been approved. Thank you.</p>
             {% endif %}
         </article>
     </main>
+
+    {% if status != "approved" %}
+    <script>
+        (function () {
+            var input = document.getElementById('receipt');
+            var hint = document.getElementById('receipt-filename');
+            var zone = document.getElementById('receipt-dropzone');
+            if (!input || !hint || !zone) return;
+            input.addEventListener('change', function () {
+                var file = input.files && input.files[0];
+                hint.textContent = file ? file.name : 'JPG, PNG, WEBP, or PDF — max 8MB';
+                zone.classList.toggle('has-file', Boolean(file));
+            });
+        })();
+    </script>
+    {% endif %}
 </body>
 </html>
