@@ -227,6 +227,83 @@ def persist_installment_plan(
     _ = workflow.installments
 
 
+def clear_installment_plan(db: Session, workflow: CustomerWorkflow) -> bool:
+    """Remove persisted installment rows. Returns True when anything was deleted."""
+    rows = list(workflow.installments or [])
+    if not rows:
+        return False
+    for row in rows:
+        db.delete(row)
+    db.commit()
+    db.refresh(workflow)
+    db.expire(workflow, ["installments"])
+    _ = workflow.installments
+    return True
+
+
+def _persisted_matches_slots(
+    workflow: CustomerWorkflow, slots: list[ParsedInstallment]
+) -> bool:
+    persisted = sorted(workflow.installments or [], key=lambda row: row.installment_number)
+    valid = [
+        s
+        for s in slots
+        if s.amount is not None and s.amount > 0 and s.due_date is not None
+    ]
+    if len(persisted) != len(valid):
+        return False
+    for row, slot in zip(persisted, valid):
+        if int(row.installment_number) != int(slot.number):
+            return False
+        if Decimal(row.amount).quantize(Decimal("0.01")) != slot.amount.quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        ):
+            return False
+        row_date = row.due_date.date() if hasattr(row.due_date, "date") else row.due_date
+        slot_date = slot.due_date.date() if hasattr(slot.due_date, "date") else slot.due_date
+        if row_date != slot_date:
+            return False
+    return True
+
+
+def sync_installment_plan_from_lead(
+    db: Session,
+    workflow: CustomerWorkflow,
+    lead: dict[str, Any] | None,
+    settings: Settings,
+    *,
+    payable_total: Decimal,
+) -> str:
+    """Refresh frozen plan from Bitrix while unpaid.
+
+    Returns: unchanged | created | replaced | cleared
+    """
+    paid = Decimal(workflow.amount_paid or 0).quantize(Decimal("0.01"))
+    if paid > 0:
+        return "unchanged"
+
+    validation = validate_installment_plan(
+        lead, settings, payable_total=payable_total
+    )
+
+    # Bitrix is now a single payment / no multi-installment plan.
+    if not validation.indicated:
+        if workflow.installments:
+            clear_installment_plan(db, workflow)
+            return "cleared"
+        return "unchanged"
+
+    if not validation.ok:
+        # Keep existing frozen plan until Bitrix is fixed; caller may still raise.
+        return "unchanged"
+
+    if workflow.installments and _persisted_matches_slots(workflow, validation.slots):
+        return "unchanged"
+
+    had_rows = bool(workflow.installments)
+    persist_installment_plan(db, workflow, validation.slots, replace=True)
+    return "replaced" if had_rows else "created"
+
 
 def resolve_first_charge_for_workflow(
     workflow: CustomerWorkflow,

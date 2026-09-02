@@ -31,6 +31,7 @@ from app.services.installment_plan import (
     installment_policy_payload,
     persist_installment_plan,
     resolve_first_charge_for_workflow,
+    sync_installment_plan_from_lead,
     validate_installment_plan,
 )
 from app.services.invoice_service import InvoiceService
@@ -484,7 +485,7 @@ class WorkflowOrchestrator:
         lead: dict,
         skip_installment_policy: bool = False,
     ) -> None:
-        """Freeze pricing + installment plan once at first payment-link creation."""
+        """Freeze pricing once; refresh installment plan from Bitrix while unpaid."""
         currency = workflow.currency or self.settings.default_currency
         if not workflow.pricing_snapshot:
             workflow.pricing_snapshot = minimal_pricing_snapshot(
@@ -494,33 +495,45 @@ class WorkflowOrchestrator:
             self.db.commit()
             self.db.refresh(workflow)
 
-        if not workflow.installments:
-            validation = validate_installment_plan(
-                lead,
-                self.settings,
-                payable_total=Decimal(workflow.total_amount or 0),
+        validation = validate_installment_plan(
+            lead,
+            self.settings,
+            payable_total=Decimal(workflow.total_amount or 0),
+        )
+        if validation.indicated and not validation.ok:
+            message = (
+                "Installment plan is incomplete or invalid. Fix Bitrix installment "
+                "amounts and due dates before generating a payment link.\n"
+                + "\n".join(f"- {err}" for err in validation.errors)
             )
-            if validation.indicated and not validation.ok:
-                message = (
-                    "Installment plan is incomplete or invalid. Fix Bitrix installment "
-                    "amounts and due dates before generating a payment link.\n"
-                    + "\n".join(f"- {err}" for err in validation.errors)
+            try:
+                await self.bitrix.add_timeline_comment(
+                    entity_type="LEAD",
+                    entity_id=workflow.bitrix_lead_id,
+                    comment=message,
                 )
-                try:
-                    await self.bitrix.add_timeline_comment(
-                        entity_type="LEAD",
-                        entity_id=workflow.bitrix_lead_id,
-                        comment=message,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to post installment validation comment on lead %s",
-                        workflow.bitrix_lead_id,
-                    )
-                raise ValueError(message)
+            except Exception:
+                logger.exception(
+                    "Failed to post installment validation comment on lead %s",
+                    workflow.bitrix_lead_id,
+                )
+            raise ValueError(message)
 
-            if validation.indicated and validation.ok:
-                persist_installment_plan(self.db, workflow, validation.slots)
+        sync_result = sync_installment_plan_from_lead(
+            self.db,
+            workflow,
+            lead,
+            self.settings,
+            payable_total=Decimal(workflow.total_amount or 0),
+        )
+        if sync_result in ("created", "replaced", "cleared"):
+            expired = self.session_service.expire_active_sessions_for_workflow(workflow)
+            logger.info(
+                "Installment plan %s from Bitrix | lead_id=%s expired_sessions=%s",
+                sync_result,
+                workflow.bitrix_lead_id,
+                expired,
+            )
 
         if skip_installment_policy:
             return
