@@ -349,13 +349,26 @@ def _label_means_website_payment(label: str | None) -> bool:
     if not label:
         return False
     normalized = label.strip().lower().replace("_", " ").replace("-", " ")
+    # Only explicit website payment — not generic "online" / "card"
+    # (those use card integration only).
     return normalized in (
         "website payment",
         "website",
+        "websitepayment",
+    ) or "website payment" in normalized
+
+
+def _label_means_card_or_online(label: str | None) -> bool:
+    if not label:
+        return False
+    normalized = label.strip().lower().replace("_", " ").replace("-", " ")
+    return normalized in (
         "online",
         "card",
         "cards",
-    ) or "website payment" in normalized
+        "credit card",
+        "debit card",
+    ) or normalized.startswith("card ")
 
 
 def _card_integration_id(settings: Settings) -> int:
@@ -406,12 +419,14 @@ def resolve_paymob_payment_method_ids(
     elif _label_means_website_payment(effective) or mapped in (
         "website_payment",
         "website payment",
-        "online",
     ):
         # Website payment: offer all enabled BNPL + card on unified checkout.
         for mid in (card_id, tabby_id, tamara_id):
             if mid > 0 and mid not in methods:
                 methods.append(mid)
+    elif _label_means_card_or_online(effective) or mapped in ("online", "card"):
+        if card_id > 0:
+            methods = [card_id]
     else:
         if card_id > 0:
             methods = [card_id]

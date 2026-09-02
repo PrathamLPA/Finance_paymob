@@ -50,6 +50,27 @@ def test_website_payment_offers_card_tabby_tamara():
     assert methods == [49586, 52169, 52266]
 
 
+def test_online_and_card_modes_use_card_only():
+    settings = _settings()
+    settings.bitrix_payment_mode_enum_map = (
+        "5776:website_payment,5788:online,5780:card,5782:tabby"
+    )
+    online = resolve_paymob_payment_method_ids(
+        {"UF_MODE_1": "5788"},
+        installment_number=1,
+        settings=settings,
+        bitrix_enum_labels={"5788": "online"},
+    )
+    assert online == [49586]
+    card = resolve_paymob_payment_method_ids(
+        {"UF_MODE_1": "5780"},
+        installment_number=1,
+        settings=settings,
+        bitrix_enum_labels={"5780": "card"},
+    )
+    assert card == [49586]
+
+
 def test_default_empty_mode_uses_card():
     methods = resolve_paymob_payment_method_ids(
         {},

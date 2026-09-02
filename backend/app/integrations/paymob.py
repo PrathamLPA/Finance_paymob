@@ -681,9 +681,15 @@ class RealPaymobClient(MockPaymobClient):
                     detail = intention_resp.json().get("detail", detail)
                 except Exception:
                     pass
-                logger.error("Paymob intention failed (%s): %s", intention_resp.status_code, str(detail)[:500])
+                logger.error(
+                    "Paymob intention failed (%s): %s | payment_methods=%s",
+                    intention_resp.status_code,
+                    str(detail)[:500],
+                    methods,
+                )
                 raise ValueError(
-                    f"Paymob intention failed ({intention_resp.status_code}): {detail}"
+                    f"Paymob intention failed ({intention_resp.status_code}): {detail} "
+                    f"[payment_methods={methods}]"
                 ) from None
             data = intention_resp.json()
 
