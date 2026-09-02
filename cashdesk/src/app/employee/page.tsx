@@ -156,19 +156,29 @@ function CollectionDetailModal({
                 {row.status}
               </Badge>
               {detailsReady ? (
-                <Badge variant="success">Form completed</Badge>
+                <Badge variant="success">Form fill complete</Badge>
               ) : (
-                <Badge variant="warning">Waiting for customer form</Badge>
+                <Badge variant="warning">Form fill incomplete</Badge>
               )}
               {row.has_proof ? <Badge variant="cash">Photo on file</Badge> : null}
             </div>
             {!detailsReady && !isCollected ? (
               <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                Customer must open the email link, fill name / email / phone, and accept
-                Terms before you can claim or collect cash.
+                Form fill incomplete — customer must open the email link, enter name /
+                email / phone, and accept Terms before you can claim or collect cash.
               </p>
             ) : null}
             <dl>
+              <DetailRow
+                label="Form fill"
+                value={
+                  detailsReady ? (
+                    <span className="font-medium text-emerald-800">Completed</span>
+                  ) : (
+                    <span className="font-medium text-amber-800">Incomplete</span>
+                  )
+                }
+              />
               <DetailRow label="Installment" value={`I${row.installment_number}`} />
               <DetailRow
                 label={isCollected ? "Collected" : "Due"}
@@ -259,7 +269,7 @@ function CollectionDetailModal({
                 ? "Claiming…"
                 : detailsReady
                   ? "Claim this collection"
-                  : "Waiting for form"}
+                  : "Form fill incomplete"}
             </Button>
           ) : null}
           {isClaimed ? (
@@ -272,7 +282,7 @@ function CollectionDetailModal({
                 ? "Saving…"
                 : detailsReady
                   ? "Confirm cash received"
-                  : "Waiting for form"}
+                  : "Form fill incomplete"}
             </Button>
           ) : null}
         </footer>
@@ -330,11 +340,30 @@ function CollectionCard({
             {row.status}
           </Badge>
         </div>
-        {!row.details_ready && row.status !== "collected" ? (
-          <p className="mt-2 text-xs font-medium text-amber-800">Waiting for customer form</p>
-        ) : null}
       </CardHeader>
       <CardContent className="space-y-3">
+        {row.status !== "collected" ? (
+          <div
+            className={`rounded-lg border px-3 py-2 text-sm ${
+              row.details_ready
+                ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                : "border-amber-200 bg-amber-50 text-amber-950"
+            }`}
+          >
+            <p className="text-[11px] font-medium uppercase tracking-wide opacity-80">
+              Form fill
+            </p>
+            <p className="mt-0.5 font-semibold">
+              {row.details_ready ? "Completed" : "Incomplete"}
+            </p>
+            {!row.details_ready ? (
+              <p className="mt-1 text-xs leading-relaxed opacity-90">
+                Customer has not finished the details link yet. Claim and collect stay
+                locked until they fill name, email, phone and accept Terms.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div>
             <p className="text-stone-500">Installment</p>
