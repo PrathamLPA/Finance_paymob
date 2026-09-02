@@ -42,6 +42,7 @@ function EmployeeDesk({ userId }: { userId: number }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [proofById, setProofById] = useState<Record<number, File | null>>({});
 
   const refresh = useCallback(async () => {
     const [queue, bal] = await Promise.all([
@@ -71,12 +72,24 @@ function EmployeeDesk({ userId }: { userId: number }) {
   }
 
   async function collect(id: number) {
+    const file = proofById[id];
+    if (!file) {
+      setError("Please attach a photo or screenshot before confirming cash received.");
+      return;
+    }
     setBusyId(id);
     setError("");
     setSuccess("");
     try {
-      await api(`/api/staff/cash/${id}/collect`, { method: "POST", body: JSON.stringify({}) });
-      setSuccess("Cash recorded. Bitrix lead timeline and assigned agent were notified.");
+      const body = new FormData();
+      body.append("proof", file);
+      await api(`/api/staff/cash/${id}/collect`, { method: "POST", body });
+      setSuccess("Cash recorded with photo. Bitrix lead timeline and assigned agent were notified.");
+      setProofById((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Collect failed");
@@ -92,7 +105,7 @@ function EmployeeDesk({ userId }: { userId: number }) {
     <div className="space-y-8">
       <PageHeader
         title="Collections"
-        description="Claim a cash case, collect from the customer, then record the deposit when you hand cash to the office."
+        description="Claim a cash case, upload a handover photo, then confirm collection. Deposit later when you hand cash to the office."
       />
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -142,8 +155,33 @@ function EmployeeDesk({ userId }: { userId: number }) {
                   {row.customer_phone ? (
                     <p className="text-sm text-stone-600">Phone: {row.customer_phone}</p>
                   ) : null}
-                  <Button className="w-full" disabled={busyId === row.id} onClick={() => collect(row.id)}>
-                    Confirm cash received
+
+                  <label className="block space-y-1.5">
+                    <span className="text-sm font-medium text-stone-700">
+                      Collection photo / screenshot
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,application/pdf"
+                      className="block w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-teal-800 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-white"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null;
+                        setProofById((prev) => ({ ...prev, [row.id]: file }));
+                      }}
+                    />
+                    <span className="text-xs text-stone-500">
+                      {proofById[row.id]
+                        ? proofById[row.id]?.name
+                        : "JPG, PNG, WEBP, or PDF — max 8MB. Required before confirming."}
+                    </span>
+                  </label>
+
+                  <Button
+                    className="w-full"
+                    disabled={busyId === row.id || !proofById[row.id]}
+                    onClick={() => collect(row.id)}
+                  >
+                    {busyId === row.id ? "Saving…" : "Confirm cash received"}
                   </Button>
                 </CardContent>
               </Card>

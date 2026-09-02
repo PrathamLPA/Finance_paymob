@@ -1643,6 +1643,8 @@ class WorkflowOrchestrator:
             raise ValueError("Claim this collection before recording cash")
         if row.status != STATUS_CLAIMED or row.claimed_by_id != staff_id:
             raise ValueError("Only the claiming employee can collect this cash")
+        if not row.proof_path:
+            raise ValueError("Upload a cash collection photo before confirming")
 
         staff = self.db.get(StaffUser, staff_id)
         if not staff or not staff.is_active:
@@ -1691,11 +1693,17 @@ class WorkflowOrchestrator:
         self.db.flush()
 
         course = row.course_title or CashCollectionService.course_title_from_workflow(workflow)
+        proof_note = (
+            f"Proof on file: {row.proof_original_name}"
+            if row.proof_original_name
+            else "Proof photo uploaded"
+        )
         comment_prefix = (
             f"Cash payment confirmed via Cash Desk\n"
             f"Collected by: {staff.name} ({staff.email})\n"
             f"Course: {course}\n"
-            f"Installment {row.installment_number}"
+            f"Installment {row.installment_number}\n"
+            f"{proof_note}"
         )
         logger.info(
             "Cash collected | lead_id=%s installment=%s amount=%s employee=%s",

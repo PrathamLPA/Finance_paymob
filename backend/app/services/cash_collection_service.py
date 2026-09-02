@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -30,6 +32,14 @@ from app.services.installment_plan import (
 from app.services.staff_auth import hash_password
 
 logger = logging.getLogger(__name__)
+
+ALLOWED_PROOF_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+}
+MAX_PROOF_BYTES = 8 * 1024 * 1024
 
 
 class CashCollectionQueued(Exception):
@@ -62,6 +72,76 @@ class CashCollectionService:
     def __init__(self, db: Session, settings: Settings | None = None):
         self.db = db
         self.settings = settings or get_settings()
+
+    def _proof_dir(self) -> Path:
+        path = Path(self.settings.storage_path) / "cash_proofs"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def save_proof(
+        self,
+        row: CashCollection,
+        *,
+        filename: str,
+        content_type: str | None,
+        data: bytes,
+        staff: StaffUser,
+    ) -> CashCollection:
+        if row.status == STATUS_COLLECTED:
+            raise ValueError("This collection was already recorded")
+        if row.status != STATUS_CLAIMED or row.claimed_by_id != staff.id:
+            raise ValueError("Only the claiming employee can attach a collection photo")
+        if not data:
+            raise ValueError("Empty file")
+        if len(data) > MAX_PROOF_BYTES:
+            raise ValueError("File too large (max 8MB)")
+        ctype = (content_type or "").split(";")[0].strip().lower()
+        if not ctype:
+            guessed, _ = mimetypes.guess_type(filename)
+            ctype = (guessed or "").lower()
+        if ctype == "image/jpg":
+            ctype = "image/jpeg"
+        if ctype not in ALLOWED_PROOF_TYPES:
+            raise ValueError("Only JPG, PNG, WEBP, or PDF photos are allowed")
+
+        ext = Path(filename).suffix.lower()
+        if not ext:
+            ext = {
+                "image/jpeg": ".jpg",
+                "image/png": ".png",
+                "image/webp": ".webp",
+                "application/pdf": ".pdf",
+            }.get(ctype, ".bin")
+        safe_name = f"{row.id}_{uuid.uuid4().hex[:12]}{ext}"
+        dest = self._proof_dir() / safe_name
+        dest.write_bytes(data)
+
+        if row.proof_path:
+            try:
+                old = Path(row.proof_path)
+                if old.is_file() and old.resolve().parent == self._proof_dir().resolve():
+                    old.unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Could not remove old cash proof %s", row.proof_path)
+
+        row.proof_path = str(dest)
+        row.proof_content_type = ctype
+        row.proof_original_name = (filename or safe_name)[:255]
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def read_proof_bytes(self, row: CashCollection) -> tuple[bytes, str, str]:
+        if not row.proof_path:
+            raise ValueError("No proof uploaded")
+        path = Path(row.proof_path)
+        if not path.is_file():
+            raise ValueError("Proof file missing on disk")
+        return (
+            path.read_bytes(),
+            row.proof_content_type or "application/octet-stream",
+            row.proof_original_name or path.name,
+        )
 
     def enqueue_from_workflow(
         self,
@@ -333,6 +413,11 @@ class CashCollectionService:
             "amount_paid": str(paid),
             "remaining_balance": str(remaining),
             "is_collected": row.status == STATUS_COLLECTED,
+            "has_proof": bool(row.proof_path),
+            "proof_original_name": row.proof_original_name,
+            "proof_url": (
+                f"/api/staff/cash/{row.id}/proof" if row.proof_path else None
+            ),
         }
 
     def dashboard(self) -> dict[str, Any]:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -72,19 +72,44 @@ def cash_claim(
 @router.post("/cash/{collection_id}/collect")
 async def cash_collect(
     collection_id: int,
-    body: CollectBody,
     db: Session = Depends(get_db),
     staff: StaffUser = Depends(get_current_staff),
+    proof: UploadFile = File(...),
+    amount: str | None = Form(default=None),
 ) -> dict[str, Any]:
-    orchestrator = WorkflowOrchestrator(db)
+    from app.models.cash_collection import CashCollection
+
+    service = CashCollectionService(db)
+    row = db.get(CashCollection, collection_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Cash collection not found")
+
+    data = await proof.read()
     try:
-        workflow = await orchestrator.collect_cash(
-            collection_id, staff_id=staff.id, amount=body.amount
+        service.save_proof(
+            row,
+            filename=proof.filename or "cash-proof.jpg",
+            content_type=proof.content_type,
+            data=data,
+            staff=staff,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    service = CashCollectionService(db)
-    from app.models.cash_collection import CashCollection
+
+    chosen: Decimal | None = None
+    if amount and str(amount).strip():
+        try:
+            chosen = Decimal(str(amount).strip())
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid amount") from exc
+
+    orchestrator = WorkflowOrchestrator(db)
+    try:
+        workflow = await orchestrator.collect_cash(
+            collection_id, staff_id=staff.id, amount=chosen
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     row = db.get(CashCollection, collection_id)
     return {
@@ -96,6 +121,30 @@ async def cash_collect(
             "payment_status": workflow.payment_status,
         },
     }
+
+
+@router.get("/cash/{collection_id}/proof")
+def cash_collection_proof(
+    collection_id: int,
+    db: Session = Depends(get_db),
+    _staff: StaffUser = Depends(get_current_staff),
+):
+    from fastapi.responses import Response
+
+    from app.models.cash_collection import CashCollection
+
+    row = db.get(CashCollection, collection_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Cash collection not found")
+    try:
+        data, ctype, name = CashCollectionService(db).read_proof_bytes(row)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=data,
+        media_type=ctype,
+        headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
 
 
 @router.get("/cash/my-summary")

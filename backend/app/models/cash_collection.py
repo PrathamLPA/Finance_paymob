@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, text
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -51,6 +51,10 @@ class CashCollection(Base):
         ForeignKey("staff_users.id"), nullable=True, index=True
     )
     collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Photo / screenshot of cash handover (required at collect time)
+    proof_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    proof_content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    proof_original_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("(CURRENT_TIMESTAMP)")
     )
