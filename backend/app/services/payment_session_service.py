@@ -16,6 +16,7 @@ from app.integrations.factory import get_paymob_client
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import (
     CHANNEL_BANK_TRANSFER,
+    CHANNEL_CASH,
     CHANNEL_ONLINE,
     SESSION_COMPLETED,
     SESSION_EXPIRED,
@@ -172,8 +173,14 @@ class PaymentSessionService:
         self.db.commit()
         return None
 
-    def expire_active_sessions_for_workflow(self, workflow: CustomerWorkflow) -> int:
+    def expire_active_sessions_for_workflow(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        exclude_channels: set[str] | None = None,
+    ) -> int:
         """Mark pending/terms-accepted sessions expired (e.g. switching to Cash)."""
+        skip = {c.strip().lower() for c in (exclude_channels or set()) if c}
         sessions = list(
             self.db.scalars(
                 select(PaymentSession).where(
@@ -184,6 +191,9 @@ class PaymentSessionService:
         )
         count = 0
         for session in sessions:
+            channel = (getattr(session, "channel", None) or CHANNEL_ONLINE).strip().lower()
+            if channel in skip:
+                continue
             session.status = SESSION_EXPIRED
             count += 1
         if count:
@@ -265,7 +275,7 @@ class PaymentSessionService:
         merchant_reference = f"WF-{workflow.id}-{uuid.uuid4().hex[:8]}"
         paymob_session_id = None
         paymob_checkout_url = None
-        if channel != CHANNEL_BANK_TRANSFER:
+        if channel not in (CHANNEL_BANK_TRANSFER, CHANNEL_CASH):
             paymob_session = await self._create_paymob_session(
                 workflow,
                 amount=amount,
@@ -306,8 +316,9 @@ class PaymentSessionService:
         *,
         amount: Decimal | None = None,
     ) -> str:
-        if (getattr(session, "channel", None) or CHANNEL_ONLINE) == CHANNEL_BANK_TRANSFER:
-            raise ValueError("Bank transfer sessions do not use Paymob checkout")
+        channel = (getattr(session, "channel", None) or CHANNEL_ONLINE).strip().lower()
+        if channel in (CHANNEL_BANK_TRANSFER, CHANNEL_CASH):
+            raise ValueError(f"{channel} sessions do not use Paymob checkout")
         workflow = session.workflow
         if amount is not None:
             session.charge_amount = amount
@@ -330,6 +341,25 @@ class PaymentSessionService:
     def build_receipt_upload_url(self, token: str) -> str:
         base = self.settings.payment_frontend_base_url or self.settings.public_base_url
         return f"{base.rstrip('/')}/payment/{token}/receipt"
+
+    def build_cash_thank_you_url(
+        self,
+        session: PaymentSession,
+        *,
+        name: str | None = None,
+    ) -> str:
+        from urllib.parse import urlencode
+
+        base = self.settings.payment_frontend_base_url or self.settings.public_base_url
+        qs = urlencode(
+            {
+                "kind": "cash",
+                "amount": str(session.charge_amount),
+                "currency": session.currency or "AED",
+                "name": (name or "").strip(),
+            }
+        )
+        return f"{base.rstrip('/')}/payment/thank-you?{qs}"
 
     def mark_terms_accepted(self, session: PaymentSession) -> None:
         session.status = SESSION_TERMS_ACCEPTED

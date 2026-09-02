@@ -149,7 +149,6 @@ class ReminderService:
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
 
-        from app.services.cash_collection_service import CashCollectionService
         from app.services.payment_mode import (
             resolve_is_bank_transfer_payment_mode,
             resolve_is_cash_payment_mode,
@@ -164,18 +163,28 @@ class ReminderService:
             settings=self.settings,
             bitrix=self.bitrix,
         ):
-            CashCollectionService(self.db, self.settings).enqueue_from_workflow(
-                workflow,
-                lead=lead,
-                due_amount=plan.amount,
-                installment_number=number_for_mode,
-            )
-            logger.info(
-                "Reminder skipped Paymob — cash queued | workflow_id=%s installment=%s",
-                workflow.id,
-                number_for_mode,
-            )
-            return None
+            try:
+                await orchestrator.queue_cash_with_intake_link(
+                    workflow,
+                    lead=lead,
+                    due_amount=plan.amount,
+                    installment_number=number_for_mode,
+                    entity_type="LEAD",
+                    entity_id=workflow.bitrix_lead_id,
+                    charge_source=plan.source,
+                    amount_locked=plan.locked,
+                )
+            except Exception as exc:
+                from app.services.cash_collection_service import CashCollectionQueued
+
+                if isinstance(exc, CashCollectionQueued):
+                    logger.info(
+                        "Reminder cash intake queued | workflow_id=%s installment=%s",
+                        workflow.id,
+                        number_for_mode,
+                    )
+                    return None
+                raise
 
         channel = CHANNEL_ONLINE
         if await resolve_is_bank_transfer_payment_mode(

@@ -175,6 +175,11 @@ class CashCollectionService:
                 existing.collected_by_id = None
                 existing.collected_at = None
                 existing.collected_amount = Decimal("0.00")
+                existing.details_ready_at = None
+                existing.payment_session_id = None
+                existing.proof_path = None
+                existing.proof_content_type = None
+                existing.proof_original_name = None
             existing.due_amount = due_amount
             existing.course_title = course_title_from_workflow(workflow)
             existing.customer_name = workflow.customer_name
@@ -259,12 +264,60 @@ class CashCollectionService:
             raise ValueError("Already collected")
         if row.status == STATUS_CLAIMED and row.claimed_by_id != staff.id:
             raise ValueError("Already claimed by another employee")
+        if not row.details_ready_at:
+            raise ValueError(
+                "Customer must complete the details form and accept terms before this case can be claimed"
+            )
         if row.status == STATUS_OPEN:
             row.status = STATUS_CLAIMED
             row.claimed_by_id = staff.id
             row.claimed_at = datetime.now(timezone.utc)
             self.db.commit()
             self.db.refresh(row)
+        return row
+
+    def link_payment_session(self, row: CashCollection, session_id: int) -> CashCollection:
+        row.payment_session_id = session_id
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def mark_details_ready(
+        self,
+        *,
+        workflow_id: int,
+        installment_number: int | None,
+        payment_session_id: int | None,
+        customer_name: str,
+        customer_email: str,
+        customer_phone: str,
+    ) -> CashCollection | None:
+        row: CashCollection | None = None
+        if payment_session_id:
+            row = self.db.scalar(
+                select(CashCollection).where(
+                    CashCollection.payment_session_id == payment_session_id
+                )
+            )
+        if not row:
+            number = installment_number or 1
+            row = self.db.scalar(
+                select(CashCollection).where(
+                    CashCollection.workflow_id == workflow_id,
+                    CashCollection.installment_number == number,
+                )
+            )
+        if not row or row.status == STATUS_COLLECTED:
+            return row
+        row.customer_name = customer_name
+        row.customer_email = customer_email
+        row.customer_phone = customer_phone
+        if payment_session_id:
+            row.payment_session_id = payment_session_id
+        if not row.details_ready_at:
+            row.details_ready_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(row)
         return row
 
     def employee_balances(self, employee_id: int) -> dict[str, Decimal]:
@@ -428,6 +481,9 @@ class CashCollectionService:
             "amount_paid": str(paid),
             "remaining_balance": str(remaining),
             "is_collected": row.status == STATUS_COLLECTED,
+            "details_ready": bool(row.details_ready_at),
+            "details_ready_at": row.details_ready_at.isoformat() if row.details_ready_at else None,
+            "payment_session_id": row.payment_session_id,
             "has_proof": bool(row.proof_path),
             "proof_original_name": row.proof_original_name,
             "proof_url": (

@@ -153,6 +153,9 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
         "required_percent": str(required_percent),
         "courses": courses,
         "total_seats": total_seats(courses),
+        "customer_name": workflow.customer_name,
+        "customer_email": workflow.customer_email,
+        "customer_phone": workflow.customer_phone,
     }
 
 

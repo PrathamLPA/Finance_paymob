@@ -257,11 +257,11 @@ class TermsService:
             session.workflow, payment_amount, session=session
         )
 
-        from app.models.payment_session import CHANNEL_BANK_TRANSFER
+        from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_CASH
 
-        is_bank_transfer = (
-            getattr(session, "channel", None) or ""
-        ).strip().lower() == CHANNEL_BANK_TRANSFER
+        channel = (getattr(session, "channel", None) or "").strip().lower()
+        is_bank_transfer = channel == CHANNEL_BANK_TRANSFER
+        is_cash = channel == CHANNEL_CASH
 
         # Always use the form details for Paymob / Bitrix — even on re-submit.
         workflow = session.workflow
@@ -309,6 +309,24 @@ class TermsService:
             if amount != session.charge_amount:
                 session.charge_amount = amount
                 self.db.commit()
+
+        if is_cash:
+            if amount != session.charge_amount:
+                session.charge_amount = amount
+                self.db.commit()
+            from app.services.cash_collection_service import CashCollectionService
+
+            CashCollectionService(self.db, self.settings).mark_details_ready(
+                workflow_id=workflow.id,
+                installment_number=getattr(session, "installment_number", None),
+                payment_session_id=session.id,
+                customer_name=registrant_name.strip(),
+                customer_email=registrant_email.strip(),
+                customer_phone=registrant_phone.strip(),
+            )
+            return self.session_service.build_cash_thank_you_url(
+                session, name=registrant_name.strip()
+            )
 
         if is_bank_transfer:
             if amount != session.charge_amount:

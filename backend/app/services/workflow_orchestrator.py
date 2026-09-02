@@ -180,6 +180,99 @@ class WorkflowOrchestrator:
         )
         return True
 
+    async def queue_cash_with_intake_link(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        lead: dict[str, Any],
+        due_amount: Decimal,
+        installment_number: int,
+        entity_type: str,
+        entity_id: int,
+        charge_source: str = "installment_1",
+        amount_locked: bool = True,
+        email_client: bool = True,
+    ):
+        """Enqueue Cash Desk item + email customer fill-details/terms link."""
+        from app.models.payment_session import CHANNEL_CASH
+        from app.services.cash_collection_service import (
+            CashCollectionQueued,
+            CashCollectionService,
+        )
+
+        expired = self.session_service.expire_active_sessions_for_workflow(
+            workflow, exclude_channels={CHANNEL_CASH}
+        )
+        if expired:
+            logger.info(
+                "Expired %s payment session(s) before cash intake | lead_id=%s",
+                expired,
+                workflow.bitrix_lead_id,
+            )
+
+        cash = CashCollectionService(self.db, self.settings)
+        collection = cash.enqueue_from_workflow(
+            workflow,
+            lead=lead,
+            due_amount=due_amount,
+            installment_number=installment_number,
+        )
+
+        session = await self.session_service.get_or_create_reusable_session(
+            workflow,
+            charge_amount=due_amount,
+            charge_source=charge_source,
+            amount_locked=amount_locked,
+            installment_number=installment_number,
+            channel=CHANNEL_CASH,
+        )
+        cash.link_payment_session(collection, session.id)
+        payment_url = self.session_service.build_payment_url(session.token)
+
+        comment = (
+            f"Cash collection queued (Cash Desk)\n"
+            f"Installment {collection.installment_number}: "
+            f"{collection.due_amount} {collection.currency}\n"
+            f"Customer must fill name / email / phone and accept Terms first.\n"
+            f"Fill-details link: {payment_url}\n"
+            f"After that, pay at the office desk — collect in Cash Desk."
+        )
+        try:
+            await self.bitrix.add_timeline_comment(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                comment=comment,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to comment cash intake on %s %s", entity_type, entity_id
+            )
+
+        await self.announce_payment_link(
+            session, entity_type=entity_type, entity_id=entity_id, force=True
+        )
+
+        if email_client and workflow.customer_email:
+            self.email.send_payment_request(
+                to_email=workflow.customer_email,
+                customer_name=workflow.customer_name,
+                payment_url=payment_url,
+            )
+            workflow.last_reminder_at = datetime.now(timezone.utc)
+            self.db.commit()
+
+        logger.info(
+            "Cash intake queued | lead_id=%s installment=%s collection_id=%s "
+            "session=%s amount=%s emailed=%s",
+            workflow.bitrix_lead_id,
+            installment_number,
+            collection.id,
+            session.id,
+            collection.due_amount,
+            bool(email_client and workflow.customer_email),
+        )
+        raise CashCollectionQueued(collection)
+
     def get_workflow_by_finance_deal(self, finance_deal_id: int) -> CustomerWorkflow | None:
         return self.db.scalar(
             select(CustomerWorkflow).where(CustomerWorkflow.finance_deal_id == finance_deal_id)
@@ -655,10 +748,6 @@ class WorkflowOrchestrator:
             plan.locked,
         )
 
-        from app.services.cash_collection_service import (
-            CashCollectionQueued,
-            CashCollectionService,
-        )
         from app.services.installment_plan import charge_installment_number_for_workflow
         from app.services.payment_mode import (
             resolve_is_bank_transfer_payment_mode,
@@ -677,45 +766,16 @@ class WorkflowOrchestrator:
             settings=self.settings,
             bitrix=self.bitrix,
         ):
-            expired = self.session_service.expire_active_sessions_for_workflow(workflow)
-            if expired:
-                logger.info(
-                    "Expired %s online payment session(s) before cash queue | lead_id=%s",
-                    expired,
-                    lead_id,
-                )
-            cash = CashCollectionService(self.db, self.settings)
-            collection = cash.enqueue_from_workflow(
+            await self.queue_cash_with_intake_link(
                 workflow,
                 lead=lead,
                 due_amount=plan.amount,
                 installment_number=number_for_mode,
+                entity_type="LEAD",
+                entity_id=lead_id,
+                charge_source=plan.source,
+                amount_locked=plan.locked,
             )
-            comment = (
-                f"Cash collection queued (Cash Desk)\n"
-                f"Installment {collection.installment_number}: "
-                f"{collection.due_amount} {collection.currency}\n"
-                f"Customer: {collection.customer_name or '-'}\n"
-                f"No Paymob link was created — collect cash in Cash Desk."
-            )
-            try:
-                await self.bitrix.add_timeline_comment(
-                    entity_type="LEAD",
-                    entity_id=lead_id,
-                    comment=comment,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to comment cash queue on lead %s", lead_id
-                )
-            logger.info(
-                "Cash queued | lead_id=%s installment=%s collection_id=%s amount=%s",
-                lead_id,
-                number_for_mode,
-                collection.id,
-                collection.due_amount,
-            )
-            raise CashCollectionQueued(collection)
 
         channel = CHANNEL_ONLINE
         if await resolve_is_bank_transfer_payment_mode(
@@ -1409,10 +1469,6 @@ class WorkflowOrchestrator:
         plan = resolve_first_charge_for_workflow(
             workflow, lead=lead, settings=self.settings
         )
-        from app.services.cash_collection_service import (
-            CashCollectionQueued,
-            CashCollectionService,
-        )
         from app.services.installment_plan import charge_installment_number_for_workflow
         from app.services.payment_mode import (
             resolve_is_bank_transfer_payment_mode,
@@ -1431,37 +1487,16 @@ class WorkflowOrchestrator:
             settings=self.settings,
             bitrix=self.bitrix,
         ):
-            expired = self.session_service.expire_active_sessions_for_workflow(workflow)
-            if expired:
-                logger.info(
-                    "Expired %s online payment session(s) before cash queue | lead_id=%s",
-                    expired,
-                    workflow.bitrix_lead_id,
-                )
-            cash = CashCollectionService(self.db, self.settings)
-            collection = cash.enqueue_from_workflow(
+            await self.queue_cash_with_intake_link(
                 workflow,
                 lead=lead,
                 due_amount=plan.amount,
                 installment_number=number_for_mode,
+                entity_type="DEAL",
+                entity_id=finance_deal_id,
+                charge_source=plan.source,
+                amount_locked=plan.locked,
             )
-            comment = (
-                f"Cash collection queued (Cash Desk)\n"
-                f"Installment {collection.installment_number}: "
-                f"{collection.due_amount} {collection.currency}\n"
-                f"No Paymob link was created — collect cash in Cash Desk."
-            )
-            try:
-                await self.bitrix.add_timeline_comment(
-                    entity_type="DEAL",
-                    entity_id=finance_deal_id,
-                    comment=comment,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to comment cash queue on finance deal %s", finance_deal_id
-                )
-            raise CashCollectionQueued(collection)
 
         channel = CHANNEL_ONLINE
         if await resolve_is_bank_transfer_payment_mode(
@@ -1645,6 +1680,10 @@ class WorkflowOrchestrator:
             raise ValueError("Only the claiming employee can collect this cash")
         if not row.proof_path:
             raise ValueError("Upload a cash collection photo before confirming")
+        if not row.details_ready_at:
+            raise ValueError(
+                "Customer must complete the details form and accept terms before cash can be collected"
+            )
 
         staff = self.db.get(StaffUser, staff_id)
         if not staff or not staff.is_active:

@@ -107,6 +107,7 @@ def _form_context(
         "total_seats": int(data.get("total_seats") or 0),
         "participants_json": json.dumps(participants or []),
         "error": error,
+        "channel": (data.get("channel") or "online"),
     }
 
 
@@ -144,6 +145,38 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
                 "course_for": None,
                 "auto_redirect_seconds": 0,
                 "variant": "bank_transfer",
+            },
+        )
+
+    if kind == "cash":
+        amount = (params.get("amount") or "").strip()
+        currency = (params.get("currency") or "AED").upper()
+        amount_display = f"{amount} {currency}" if amount else None
+        name = (params.get("name") or "").strip()
+        return templates.TemplateResponse(
+            "thank_you.html",
+            {
+                "request": request,
+                "page_title": "Visit the office desk",
+                "heading": "Thank you — please pay at the office desk",
+                "message": (
+                    f"Hi {name}, your details and terms acceptance are complete. "
+                    if name
+                    else "Your details and terms acceptance are complete. "
+                )
+                + "Please make your cash payment at the Learners Point office desk. "
+                "Our team will confirm your payment there.",
+                "footnote": (
+                    "You can safely close this page. "
+                    "Bring a payment reference or this confirmation when you visit the desk."
+                ),
+                "amount_display": amount_display,
+                "merchant_order_id": "",
+                "show_lms": False,
+                "lms_url": None,
+                "course_for": None,
+                "auto_redirect_seconds": 0,
+                "variant": "cash",
             },
         )
 
@@ -255,6 +288,20 @@ async def payment_terms_page(token: str, request: Request) -> HTMLResponse:
         and data.get("bank_transfer")
     ):
         return RedirectResponse(url=f"/payment/{token}/receipt", status_code=303)
+
+    # Cash: after Terms, show office-desk thank you
+    if data.get("channel") == "cash" and data.get("status") == "terms_accepted":
+        from urllib.parse import urlencode
+
+        qs = urlencode(
+            {
+                "kind": "cash",
+                "amount": str(data.get("payment_amount") or ""),
+                "currency": str(data.get("currency") or "AED"),
+                "name": str(data.get("customer_name") or ""),
+            }
+        )
+        return RedirectResponse(url=f"/payment/thank-you?{qs}", status_code=303)
 
     return templates.TemplateResponse("terms.html", _form_context(request, token, data))
 

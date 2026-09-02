@@ -32,6 +32,8 @@ type Collection = {
   has_proof?: boolean;
   proof_url?: string | null;
   proof_original_name?: string | null;
+  details_ready?: boolean;
+  details_ready_at?: string | null;
 };
 
 type Summary = {
@@ -101,6 +103,7 @@ function CollectionDetailModal({
   const isOpen = row.status === "open";
   const isClaimed = row.status === "claimed";
   const isCollected = row.status === "collected";
+  const detailsReady = Boolean(row.details_ready);
 
   return createPortal(
     <div className="txn-modal" role="presentation">
@@ -152,8 +155,19 @@ function CollectionDetailModal({
               >
                 {row.status}
               </Badge>
+              {detailsReady ? (
+                <Badge variant="success">Form completed</Badge>
+              ) : (
+                <Badge variant="warning">Waiting for customer form</Badge>
+              )}
               {row.has_proof ? <Badge variant="cash">Photo on file</Badge> : null}
             </div>
+            {!detailsReady && !isCollected ? (
+              <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Customer must open the email link, fill name / email / phone, and accept
+                Terms before you can claim or collect cash.
+              </p>
+            ) : null}
             <dl>
               <DetailRow label="Installment" value={`I${row.installment_number}`} />
               <DetailRow
@@ -179,7 +193,7 @@ function CollectionDetailModal({
             </dl>
           </section>
 
-          {isClaimed ? (
+          {isClaimed && detailsReady ? (
             <section className="txn-modal-panel">
               <h3 className="text-sm font-semibold text-stone-900">Collection photo</h3>
               <p className="mt-1 text-sm leading-relaxed text-stone-600">
@@ -236,17 +250,29 @@ function CollectionDetailModal({
             Close
           </Button>
           {isOpen ? (
-            <Button disabled={busy} onClick={onClaim} className="min-w-[10rem]">
-              {busy ? "Claiming…" : "Claim this collection"}
+            <Button
+              disabled={busy || !detailsReady}
+              onClick={onClaim}
+              className="min-w-[10rem]"
+            >
+              {busy
+                ? "Claiming…"
+                : detailsReady
+                  ? "Claim this collection"
+                  : "Waiting for form"}
             </Button>
           ) : null}
           {isClaimed ? (
             <Button
-              disabled={busy || !proofFile}
+              disabled={busy || !proofFile || !detailsReady}
               onClick={onCollect}
               className="min-w-[10rem]"
             >
-              {busy ? "Saving…" : "Confirm cash received"}
+              {busy
+                ? "Saving…"
+                : detailsReady
+                  ? "Confirm cash received"
+                  : "Waiting for form"}
             </Button>
           ) : null}
         </footer>
@@ -304,6 +330,9 @@ function CollectionCard({
             {row.status}
           </Badge>
         </div>
+        {!row.details_ready && row.status !== "collected" ? (
+          <p className="mt-2 text-xs font-medium text-amber-800">Waiting for customer form</p>
+        ) : null}
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid grid-cols-2 gap-3 text-sm">
@@ -465,7 +494,7 @@ function EmployeeDesk({ userId }: { userId: number }) {
     <div className="space-y-8">
       <PageHeader
         title="Collections"
-        description="Claim a cash case, upload a handover photo, then confirm collection. Review collected cases anytime."
+        description="Cases appear when Bitrix is cash. Customer must fill the email link and accept Terms before you can claim or collect."
       />
 
       <div className="grid gap-4 sm:grid-cols-3">

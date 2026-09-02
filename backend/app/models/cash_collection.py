@@ -51,6 +51,13 @@ class CashCollection(Base):
         ForeignKey("staff_users.id"), nullable=True, index=True
     )
     collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Customer fill-details + terms session (required before employee can collect)
+    payment_session_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("payment_sessions.id"), nullable=True, index=True
+    )
+    details_ready_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Photo / screenshot of cash handover (required at collect time)
     proof_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     proof_content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
