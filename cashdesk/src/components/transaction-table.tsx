@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -40,9 +41,9 @@ type RetriggerResult = {
 
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="grid grid-cols-[7.5rem_1fr] gap-3 border-b border-stone-200/70 py-2.5 last:border-b-0">
-      <dt className="text-xs font-medium uppercase tracking-wide text-stone-500">{label}</dt>
-      <dd className="text-sm text-stone-900">{value || "—"}</dd>
+    <div className="grid grid-cols-[6.75rem_1fr] gap-x-3 gap-y-1 border-b border-stone-200/70 py-2 last:border-b-0 sm:grid-cols-[7.5rem_1fr]">
+      <dt className="text-[11px] font-medium uppercase tracking-wide text-stone-500">{label}</dt>
+      <dd className="break-words text-sm text-stone-900">{value || "—"}</dd>
     </div>
   );
 }
@@ -63,21 +64,30 @@ function TransactionDetailModal({
   onRetrigger: () => void;
 }) {
   const titleId = useId();
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const prev = document.body.style.overflow;
+    setMounted(true);
+    const prevOverflow = document.body.style.overflow;
+    const prevPadding = document.body.style.paddingRight;
+    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
     document.body.style.overflow = "hidden";
+    if (scrollbar > 0) document.body.style.paddingRight = `${scrollbar}px`;
+
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => {
-      document.body.style.overflow = prev;
+      document.body.style.overflow = prevOverflow;
+      document.body.style.paddingRight = prevPadding;
       document.removeEventListener("keydown", onKey);
     };
   }, [onClose]);
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal(
     <div className="txn-modal" role="presentation">
       <button
         type="button"
@@ -90,13 +100,17 @@ function TransactionDetailModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        onClick={(event) => event.stopPropagation()}
       >
         <header className="txn-modal-header">
-          <div>
+          <div className="min-w-0 pr-2">
             <p className="text-xs font-medium uppercase tracking-[0.14em] text-teal-800/70">
               Payment details
             </p>
-            <h2 id={titleId} className="mt-1 text-xl font-semibold tracking-tight text-stone-900">
+            <h2
+              id={titleId}
+              className="mt-1 truncate text-xl font-semibold tracking-tight text-stone-900"
+            >
               {row.customer_name || "Customer"}
             </h2>
             <p className="mt-1 text-sm text-stone-500">
@@ -106,7 +120,7 @@ function TransactionDetailModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-stone-200 bg-white/70 p-2 text-stone-600 transition hover:bg-white hover:text-stone-900"
+            className="shrink-0 rounded-lg border border-stone-200 bg-white/80 p-2 text-stone-600 transition hover:bg-white hover:text-stone-900"
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -115,7 +129,7 @@ function TransactionDetailModal({
 
         <div className="txn-modal-body">
           <section className="txn-modal-panel">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
               <Badge variant={row.channel === "cash" ? "cash" : "online"}>{row.channel}</Badge>
               {row.invoice_synced ? (
                 <Badge variant="success">Invoice sent</Badge>
@@ -164,25 +178,28 @@ function TransactionDetailModal({
             </p>
             {notice ? <p className="mt-3 text-sm text-emerald-800">{notice}</p> : null}
             {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                disabled={busy || !row.workflow_id}
-                onClick={onRetrigger}
-              >
-                {busy
-                  ? "Working…"
-                  : row.invoice_synced
-                    ? "Resend invoice"
-                    : "Create & send invoice"}
-              </Button>
-              <Button variant="outline" onClick={onClose}>
-                Close
-              </Button>
-            </div>
           </section>
         </div>
+
+        <footer className="txn-modal-footer">
+          <Button variant="outline" onClick={onClose} className="min-w-[6.5rem]">
+            Close
+          </Button>
+          <Button
+            disabled={busy || !row.workflow_id}
+            onClick={onRetrigger}
+            className="min-w-[10rem]"
+          >
+            {busy
+              ? "Working…"
+              : row.invoice_synced
+                ? "Resend invoice"
+                : "Create & send invoice"}
+          </Button>
+        </footer>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
