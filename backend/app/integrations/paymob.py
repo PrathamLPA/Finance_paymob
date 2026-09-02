@@ -580,6 +580,24 @@ class RealPaymobClient(MockPaymobClient):
         last_name = " ".join(name.split()[1:]) or "User"
         base = self.settings.paymob_base_url.rstrip("/")
         email = customer_email or "customer@example.com"
+        # Paymob rejects many reserved/fake domains; fail early with a clear message.
+        lowered = email.strip().lower()
+        bad_domains = (
+            "@example.com",
+            "@example.org",
+            "@example.net",
+            "@test.com",
+            "@invalid",
+        )
+        if (
+            "@" not in lowered
+            or lowered.endswith(bad_domains)
+            or lowered.count("@") != 1
+            or " " in lowered
+        ):
+            raise ValueError(
+                'Paymob intention failed (400): {"billing_data":{"email":["Enter a valid email address."]}}'
+            )
         na = "NA"
 
         intention_payload = {

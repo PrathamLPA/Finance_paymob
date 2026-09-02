@@ -50,7 +50,11 @@ def courses_from_product_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
 async def load_lead_courses(bitrix: BitrixIntegration, lead_id: int | None) -> list[dict[str, Any]]:
     if not lead_id:
         return []
-    rows = await bitrix.list_product_rows(owner_type="L", owner_id=int(lead_id))
+    try:
+        rows = await bitrix.list_product_rows(owner_type="L", owner_id=int(lead_id))
+    except Exception:
+        # Mock / inaccessible leads should not break the payment page.
+        return []
     return courses_from_product_rows(rows)
 
 

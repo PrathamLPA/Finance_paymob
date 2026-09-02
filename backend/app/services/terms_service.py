@@ -263,12 +263,13 @@ class TermsService:
             getattr(session, "channel", None) or ""
         ).strip().lower() == CHANNEL_BANK_TRANSFER
 
-        if (
-            not is_bank_transfer
-            and session.status == SESSION_TERMS_ACCEPTED
-            and session.paymob_checkout_url
-        ):
-            return await self.session_service.refresh_paymob_checkout(session, amount=amount)
+        # Always use the form details for Paymob / Bitrix — even on re-submit.
+        workflow = session.workflow
+        workflow.customer_name = registrant_name.strip()
+        workflow.customer_email = registrant_email.strip()
+        workflow.customer_phone = registrant_phone.strip()
+        self.db.commit()
+        self.db.refresh(workflow)
 
         if session.status != SESSION_TERMS_ACCEPTED:
             pdf_path = self.generate_acceptance_pdf(
@@ -294,13 +295,6 @@ class TermsService:
             self.db.add(acceptance)
             self.session_service.mark_terms_accepted(session)
 
-            workflow = session.workflow
-            workflow.customer_name = registrant_name.strip()
-            workflow.customer_email = registrant_email.strip()
-            workflow.customer_phone = registrant_phone.strip()
-            self.db.commit()
-            self.db.refresh(workflow)
-
             await self._sync_registrant_to_bitrix(workflow)
 
             if workflow.customer_email:
@@ -325,10 +319,25 @@ class TermsService:
             BankTransferService(self.db, self.settings).enqueue_for_session(session)
             return self.session_service.build_receipt_upload_url(session.token)
 
-        if amount != session.charge_amount or not session.paymob_checkout_url:
+        try:
+            if amount != session.charge_amount or not session.paymob_checkout_url:
+                return await self.session_service.refresh_paymob_checkout(session, amount=amount)
+            # Re-create checkout so Paymob gets the latest registrant email/name.
             return await self.session_service.refresh_paymob_checkout(session, amount=amount)
-
-        return session.paymob_checkout_url
+        except ValueError as exc:
+            message = str(exc)
+            if "valid email" in message.lower() or "billing_data" in message.lower():
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Paymob rejected the email address. "
+                        "Use a real inbox (not example.com / test.com) and try again."
+                    ),
+                ) from exc
+            raise HTTPException(
+                status_code=400,
+                detail="Could not start Paymob checkout. Please try again or ask for a new payment link.",
+            ) from exc
 
     async def _sync_registrant_to_bitrix(self, workflow: CustomerWorkflow) -> None:
         bitrix = get_bitrix_client(self.settings)

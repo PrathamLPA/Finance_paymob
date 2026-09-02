@@ -22,27 +22,27 @@ logger = logging.getLogger(__name__)
 
 MOCK_CUSTOMERS = [
     {
-        "lead_id": 2001,
+        "lead_id": 92001,
         "name": "Ahmed Al Rashid",
-        "email": "ahmed.rashid@example.com",
+        "email": "ahmed.rashid@learnerspoint.org",
         "phone": "+971501234567",
         "total": Decimal("15000.00"),
         "paid": Decimal("5000.00"),
         "with_payment": True,
     },
     {
-        "lead_id": 2002,
+        "lead_id": 92002,
         "name": "Sarah Johnson",
-        "email": "sarah.j@example.com",
+        "email": "sarah.j@learnerspoint.org",
         "phone": "+971509876543",
         "total": Decimal("8500.00"),
         "paid": Decimal("0.00"),
         "with_payment": False,
     },
     {
-        "lead_id": 2003,
+        "lead_id": 92003,
         "name": "Mohammed Hassan",
-        "email": "m.hassan@example.com",
+        "email": "m.hassan@learnerspoint.org",
         "phone": "+971551112233",
         "total": Decimal("22000.00"),
         "paid": Decimal("11000.00"),
@@ -81,9 +81,10 @@ def seed_mock_data(db: Session) -> dict:
         if customer["with_payment"] and customer["paid"] > 0:
             workflow.amount_paid = customer["paid"]
             workflow.first_payment_at = datetime.now(timezone.utc) - timedelta(days=2)
-            workflow.sales_deal_id = 900001 + customer["lead_id"]
-            workflow.finance_deal_id = 900002 + customer["lead_id"]
-            workflow.b2c_deal_id = 900003 + customer["lead_id"]
+            # Do not invent Bitrix deal IDs — syncing fake IDs pollutes production CRM.
+            workflow.sales_deal_id = None
+            workflow.finance_deal_id = None
+            workflow.b2c_deal_id = None
             workflow.zoho_invoice_id = f"MOCK-INV-{workflow.id}"
 
             txn_id = f"PM-{customer['lead_id']}-001"
