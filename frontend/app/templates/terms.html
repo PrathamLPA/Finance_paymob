@@ -595,9 +595,14 @@
             const ready = !blocker;
             submitBtn.disabled = !ready;
             if (blockerHint) {
-                blockerHint.textContent = ready
-                    ? "You'll be redirected to Paymob's secure checkout to complete your payment."
-                    : blocker;
+                const channel = {{ (channel or 'online') | tojson }};
+                let readyHint = "You'll be redirected to Paymob's secure checkout to complete your payment.";
+                if (channel === 'cash') {
+                    readyHint = 'After this step, please make your cash payment at the Learners Point office desk.';
+                } else if (channel === 'bank_transfer') {
+                    readyHint = 'Next you will upload a clear photo or PDF of your transfer receipt.';
+                }
+                blockerHint.textContent = ready ? readyHint : blocker;
                 blockerHint.classList.toggle('field-hint-error', !ready);
             }
         }
