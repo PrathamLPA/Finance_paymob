@@ -399,15 +399,10 @@ class PriceApprovalService:
             if channels
             else (
                 "Could not email or notify the manager automatically "
-                "(Bitrix mail/chat not available to this webhook) - "
-                "share the link below with them."
+                "(Bitrix mail/chat not available to this webhook). "
+                "Ask finance to share the approval email with the manager."
             )
         )
-        summary = ""
-        if gate is not None:
-            summary = gate.summary_comment(
-                currency=approval.currency, amount_paid=workflow.amount_paid
-            ) + "\n\n"
         installment_block = ""
         if installment_policy and installment_policy.get("reasons"):
             installment_block = (
@@ -415,15 +410,16 @@ class PriceApprovalService:
                 + "\n".join(f"- {r}" for r in installment_policy["reasons"])
                 + "\n\n"
             )
+        # Keep Bitrix timeline short: no approval URL (email/chat already has it),
+        # and no second copy of the full price-gate summary (already posted above).
         try:
             await self.bitrix.add_timeline_comment(
                 entity_type="LEAD",
                 entity_id=workflow.bitrix_lead_id,
                 comment=(
-                    f"{summary}{installment_block}"
+                    f"{installment_block}"
                     f"Pending manager approval - {manager_email}.\n"
-                    f"{delivery}\n"
-                    f"Approval link: {approval_url}"
+                    f"{delivery}"
                 ),
             )
         except Exception:

@@ -384,8 +384,9 @@ async def bitrix24_webhook(
         )
 
         workflow = orchestrator.get_or_create_workflow(lead_id)
-        # Re-announce the link when the lead re-enters the stage, not on every edit.
-        entered_stage = (workflow.bitrix_lead_stage_id or "") != stage_id
+        # Re-announce only when the lead truly re-enters this stage (not on every edit/comment).
+        previous_stage = workflow.bitrix_lead_stage_id or ""
+        entered_stage = previous_stage != stage_id
         active_session = orchestrator.session_service.get_active_session_for_workflow(workflow)
         if active_session:
             from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_ONLINE
@@ -442,20 +443,37 @@ async def bitrix24_webhook(
                     payment_url = orchestrator.session_service.build_payment_url(
                         active_session.token
                     )
+                    # Our own timeline comments fire ONCRMLEADUPDATE. Without this
+                    # guard, force=True re-posts "Payment reminder" right after create.
+                    from datetime import datetime, timezone
+
+                    recently_commented = False
+                    if active_session.link_commented_at:
+                        commented_at = active_session.link_commented_at
+                        if commented_at.tzinfo is None:
+                            commented_at = commented_at.replace(tzinfo=timezone.utc)
+                        recently_commented = (
+                            datetime.now(timezone.utc) - commented_at
+                        ).total_seconds() < 600
+                    should_force = entered_stage and not recently_commented
                     commented = await orchestrator.announce_payment_link(
                         active_session,
                         entity_type="LEAD",
                         entity_id=lead_id,
-                        force=entered_stage,
+                        force=should_force,
                     )
+                    orchestrator.note_lead_stage(lead_id, stage_id)
                     logger.info(
                         "SKIP new link | lead_id=%s title=%s | reason=link_already_active "
-                        "estimate_id=%s channel=%s commented=%s url=%s",
+                        "estimate_id=%s channel=%s commented=%s entered_stage=%s "
+                        "recently_commented=%s url=%s",
                         lead_id,
                         summary["title"],
                         workflow.bitrix_estimate_id or "-",
                         current_channel,
                         "yes" if commented else "already",
+                        entered_stage,
+                        recently_commented,
                         payment_url,
                     )
                     return {
@@ -469,6 +487,7 @@ async def bitrix24_webhook(
             session = await orchestrator.initiate_payment_from_lead(lead_id, lead_data=lead)
         except PriceApprovalPending as exc:
             workflow = orchestrator.get_or_create_workflow(lead_id)
+            orchestrator.note_lead_stage(lead_id, stage_id)
             logger.warning(
                 "PENDING manager approval | lead_id=%s title=%s amount=%s estimate_id=%s "
                 "approval_id=%s url=%s | %s",
@@ -515,6 +534,7 @@ async def bitrix24_webhook(
             return {"status": "error", "reason": str(exc), "lead_id": lead_id}
 
         workflow = orchestrator.get_or_create_workflow(lead_id)
+        orchestrator.note_lead_stage(lead_id, stage_id)
         payment_url = orchestrator.session_service.build_payment_url(session.token)
         logger.info(
             "OK payment link created | lead_id=%s title=%s stage=%s estimate_id=%s "

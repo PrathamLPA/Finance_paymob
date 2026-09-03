@@ -684,17 +684,20 @@ class RealPaymobClient(MockPaymobClient):
                 detail_text = str(detail)
                 card_only = [int(self.settings.paymob_integration_id_card or 0) or int(self.settings.paymob_integration_id or 0)]
                 card_only = [m for m in card_only if m > 0]
+                # Fallback when any BNPL/extra integration ID is unknown to Paymob —
+                # including Tabby-only / Tamara-only (previously only multi-method lists).
                 can_fallback = (
                     intention_resp.status_code == 404
                     and "integration" in detail_text.lower()
-                    and len(methods) > 1
                     and card_only
                     and methods != card_only
                 )
                 if can_fallback:
                     logger.warning(
-                        "Paymob intention failed with methods=%s (%s): %s — "
-                        "retrying with card only %s",
+                        "Paymob intention failed with methods=%s (%s): %s - "
+                        "retrying with card only %s "
+                        "(fix PAYMOB_INTEGRATION_ID_TABBY / TAMARA in Railway "
+                        "from Paymob → Developers → Payment Integrations)",
                         methods,
                         intention_resp.status_code,
                         detail_text[:300],

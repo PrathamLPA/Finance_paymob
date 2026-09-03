@@ -483,8 +483,40 @@ class RealBitrixClient:
             raise RuntimeError("BITRIX24_WEBHOOK_URL is not configured")
 
         url = f"{self.base_url}{method}"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, json=params or {})
+        # Connect timeouts are common from Railway → Bitrix; keep connect short and
+        # retry once so a single blip does not fail the whole payment flow.
+        timeout = httpx.Timeout(connect=12.0, read=30.0, write=30.0, pool=12.0)
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(url, json=params or {})
+                break
+            except (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout) as exc:
+                last_exc = exc
+                if attempt == 0:
+                    logger.warning(
+                        "Bitrix %s transport blip (%s); retrying once",
+                        method,
+                        type(exc).__name__,
+                    )
+                    continue
+                raise BitrixApiError(
+                    method,
+                    status_code=0,
+                    code="connect_timeout",
+                    description=(
+                        f"Could not reach Bitrix ({type(exc).__name__}). "
+                        "Check BITRIX24_WEBHOOK_URL and Bitrix/network availability."
+                    ),
+                ) from exc
+        else:
+            raise BitrixApiError(
+                method,
+                status_code=0,
+                code="connect_timeout",
+                description=str(last_exc or "unreachable"),
+            )
 
         try:
             payload = response.json()
@@ -1175,9 +1207,13 @@ class RealBitrixClient:
                 user_id,
                 exc.code,
                 (
-                    f"add_scope={exc.missing_scope}"
-                    if exc.missing_scope
-                    else "check_im_scope_and_user_id"
+                    "retry_later_or_check_bitrix_reachability"
+                    if exc.code == "connect_timeout"
+                    else (
+                        f"add_scope={exc.missing_scope}"
+                        if exc.missing_scope
+                        else "check_im_scope_and_user_id"
+                    )
                 ),
                 (exc.description or "")[:200] or "-",
             )

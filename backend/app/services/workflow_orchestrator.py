@@ -615,6 +615,7 @@ class WorkflowOrchestrator:
         product_rows: list[dict],
         comment: str,
         awaiting_approval: bool = False,
+        post_timeline_comment: bool = True,
     ) -> None:
         lead_id = workflow.bitrix_lead_id
         currency = workflow.currency or self.settings.default_currency
@@ -631,15 +632,18 @@ class WorkflowOrchestrator:
                 workflow.bitrix_estimate_id,
                 next_step,
             )
-            await self._post_gate_comment(
-                workflow,
-                (
-                    f"{comment}\n\n"
-                    f"Estimate already exists: #{workflow.bitrix_estimate_id}. "
-                    f"{next_step.capitalize()}."
-                ),
-                state_key=f"{workflow.bitrix_estimate_id}|{next_step}|{comment}",
-            )
+            # When awaiting approval, request_manager_approval posts the pending note.
+            # Manager-approve path also skips (APPROVED comment is enough).
+            if post_timeline_comment and not awaiting_approval:
+                await self._post_gate_comment(
+                    workflow,
+                    (
+                        f"{comment}\n\n"
+                        f"Estimate already exists: #{workflow.bitrix_estimate_id}. "
+                        f"{next_step.capitalize()}."
+                    ),
+                    state_key=f"{workflow.bitrix_estimate_id}|{next_step}|{comment}",
+                )
             return
 
         contact_raw = lead.get("CONTACT_ID") or lead.get("contactId")
@@ -671,11 +675,12 @@ class WorkflowOrchestrator:
         self.db.commit()
         self.db.refresh(workflow)
 
-        await self._post_gate_comment(
-            workflow,
-            f"{comment}\n\nEstimate #{estimate_id} created. {next_step.capitalize()}.",
-            state_key=f"{estimate_id}|{next_step}|{comment}",
-        )
+        if post_timeline_comment:
+            await self._post_gate_comment(
+                workflow,
+                f"{comment}\n\nEstimate #{estimate_id} created. {next_step.capitalize()}.",
+                state_key=f"{estimate_id}|{next_step}|{comment}",
+            )
         logger.info(
             "OK estimate created | lead_id=%s estimate_id=%s total=%s %s next=%s",
             lead_id,
@@ -973,6 +978,8 @@ class WorkflowOrchestrator:
                 product_rows=product_rows_for_estimate(product_lines),
                 comment=comment,
                 awaiting_approval=False,
+                # APPROVED comment already posted; avoid a second "Manager-approved" block.
+                post_timeline_comment=False,
             )
         logger.info(
             "OK manager approve | lead_id=%s estimate_id=%s approval_id=%s next=send_payment_link",
