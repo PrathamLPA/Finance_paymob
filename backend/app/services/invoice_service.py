@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -77,7 +78,7 @@ class InvoiceService:
         await self._publish_invoice_to_bitrix(
             workflow, invoice, transaction, created_new=created_new
         )
-        self._email_invoice_to_customer(workflow, invoice, document.pdf_path)
+        await self._email_invoice_to_customer(workflow, invoice, document.pdf_path)
         return invoice
 
     async def retrigger_invoice_delivery(
@@ -195,7 +196,7 @@ class InvoiceService:
             if not workflow.customer_email:
                 steps["email"] = "skipped_no_email"
             else:
-                self._email_invoice_to_customer(workflow, invoice, document_path)
+                await self._email_invoice_to_customer(workflow, invoice, document_path)
                 steps["email"] = "ok"
         except Exception as exc:
             logger.exception(
@@ -315,7 +316,7 @@ class InvoiceService:
                     entity_id,
                 )
 
-    def _email_invoice_to_customer(
+    async def _email_invoice_to_customer(
         self,
         workflow: CustomerWorkflow,
         invoice: InvoiceReference,
@@ -325,7 +326,8 @@ class InvoiceService:
             logger.warning("No customer email for workflow %s — skipping invoice email", workflow.id)
             return
 
-        self.email.send_invoice(
+        await asyncio.to_thread(
+            self.email.send_invoice,
             to_email=workflow.customer_email,
             customer_name=workflow.customer_name,
             invoice_reference=invoice,

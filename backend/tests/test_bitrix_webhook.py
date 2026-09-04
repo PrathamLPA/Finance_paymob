@@ -10,23 +10,31 @@ from app.models.customer_workflow import CustomerWorkflow
 from tests.conftest import SAMPLE_REGISTRANT
 
 
-def _finance_deal(client, seed_lead, lead_id: int) -> int:
+def _finance_deal(client, seed_lead, db_session, lead_id: int) -> int:
     seed_lead(lead_id, email="bitrix@test.com", amount=Decimal("10000"))
     link = client.post(
         "/api/dev/send-payment-link",
         json={"lead_id": lead_id, "customer_email": "bitrix@test.com", "total_amount": "10000"},
     ).json()
     client.post(f"/api/payment/{link['token']}/accept", json={"accepted": True, **SAMPLE_REGISTRANT})
+    from app.models.payment_session import PaymentSession
+
+    session = db_session.scalar(
+        select(PaymentSession).where(PaymentSession.token == link["token"])
+    )
+    assert session is not None
+    merchant_reference = session.merchant_reference
+    db_session.expire_all()
     payment = client.post(
         "/api/dev/simulate-paymob-webhook",
-        json={"merchant_reference": link["merchant_reference"], "amount": "1000"},
+        json={"merchant_reference": merchant_reference, "amount": "1000"},
     ).json()
     return payment["finance_deal_id"]
 
 
-def test_form_encoded_deal_update_generates_link(client, seed_lead):
+def test_form_encoded_deal_update_generates_link(client, seed_lead, db_session):
     settings = get_settings()
-    deal_id = _finance_deal(client, seed_lead, 401)
+    deal_id = _finance_deal(client, seed_lead, db_session, 401)
 
     bitrix = get_bitrix_client()
     bitrix._mock_deals[deal_id]["STAGE_ID"] = settings.bitrix_finance_generate_link_stage_id
@@ -48,8 +56,8 @@ def test_form_encoded_deal_update_generates_link(client, seed_lead):
     assert bitrix._mock_deals[deal_id][settings.bitrix_field_payment_link] == body["payment_url"]
 
 
-def test_deal_update_in_other_stage_is_ignored(client, seed_lead):
-    deal_id = _finance_deal(client, seed_lead, 402)
+def test_deal_update_in_other_stage_is_ignored(client, seed_lead, db_session):
+    deal_id = _finance_deal(client, seed_lead, db_session, 402)
 
     bitrix = get_bitrix_client()
     bitrix._mock_deals[deal_id]["STAGE_ID"] = "SOME_OTHER_STAGE"
@@ -64,9 +72,9 @@ def test_deal_update_in_other_stage_is_ignored(client, seed_lead):
     assert response.json()["reason"] == "not_generate_link_stage"
 
 
-def test_repeat_update_does_not_create_second_link(client, seed_lead):
+def test_repeat_update_does_not_create_second_link(client, seed_lead, db_session):
     settings = get_settings()
-    deal_id = _finance_deal(client, seed_lead, 403)
+    deal_id = _finance_deal(client, seed_lead, db_session, 403)
 
     bitrix = get_bitrix_client()
     bitrix._mock_deals[deal_id]["STAGE_ID"] = settings.bitrix_finance_generate_link_stage_id
@@ -87,10 +95,10 @@ def test_repeat_update_does_not_create_second_link(client, seed_lead):
     assert second["payment_url"] == first["payment_url"]
 
 
-def test_application_token_is_validated(client, seed_lead, monkeypatch):
+def test_application_token_is_validated(client, seed_lead, monkeypatch, db_session):
     from app.config import Settings
 
-    deal_id = _finance_deal(client, seed_lead, 404)
+    deal_id = _finance_deal(client, seed_lead, db_session, 404)
 
     get_settings.cache_clear()
     monkeypatch.setenv("BITRIX_WEBHOOK_SECRET", "secret-token")

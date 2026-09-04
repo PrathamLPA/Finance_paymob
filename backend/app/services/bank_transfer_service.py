@@ -107,7 +107,25 @@ class BankTransferService:
             status=STATUS_AWAITING_UPLOAD,
         )
         self.db.add(row)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            existing = self.db.scalar(
+                select(BankTransferSubmission).where(
+                    BankTransferSubmission.workflow_id == workflow.id,
+                    BankTransferSubmission.installment_number == number,
+                )
+            )
+            if existing:
+                logger.info(
+                    "Bank transfer race recovered id=%s lead=%s installment=%s",
+                    existing.id,
+                    existing.bitrix_lead_id,
+                    existing.installment_number,
+                )
+                return existing
+            raise
         self.db.refresh(row)
         logger.info(
             "Bank transfer enqueued id=%s lead=%s installment=%s session=%s",

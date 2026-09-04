@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
@@ -92,6 +93,8 @@ class WorkflowOrchestrator:
         self.approval_service = PriceApprovalService(db, self.settings)
 
     def get_or_create_workflow(self, lead_id: int) -> CustomerWorkflow:
+        from sqlalchemy.exc import IntegrityError
+
         workflow = self.db.scalar(
             select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == lead_id)
         )
@@ -100,7 +103,15 @@ class WorkflowOrchestrator:
 
         workflow = CustomerWorkflow(bitrix_lead_id=lead_id)
         self.db.add(workflow)
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError:
+            self.db.rollback()
+            workflow = self.db.scalar(
+                select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == lead_id)
+            )
+            if not workflow:
+                raise
         return workflow
 
     def note_lead_stage(self, lead_id: int, stage_id: str) -> None:
@@ -155,6 +166,8 @@ class WorkflowOrchestrator:
         comment = (
             f"{prefix}"
             f"Payment link: {payment_url}\n"
+            f"Customer will choose payment method on the link "
+            f"(Card, Tabby, Tamara, Website payment, Bank transfer, or Cash).\n"
             f"Outstanding: {workflow.remaining_balance:.2f} {workflow.currency}\n"
             f"Minimum payable now: {minimum:.2f} {workflow.currency}"
         )
@@ -255,7 +268,8 @@ class WorkflowOrchestrator:
         self.db.commit()
 
         if email_client and workflow.customer_email:
-            self.email.send_payment_request(
+            await asyncio.to_thread(
+                self.email.send_payment_request,
                 to_email=workflow.customer_email,
                 customer_name=workflow.customer_name,
                 payment_url=payment_url,
@@ -768,61 +782,27 @@ class WorkflowOrchestrator:
         )
 
         from app.services.installment_plan import charge_installment_number_for_workflow
-        from app.services.payment_mode import (
-            resolve_is_bank_transfer_payment_mode,
-            resolve_is_cash_payment_mode,
-        )
-        from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_ONLINE
-        from app.services.bank_transfer_service import BankTransferService
+        from app.models.payment_session import CHANNEL_ONLINE
 
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
-        number_for_mode = installment_number or 1
-        if await resolve_is_cash_payment_mode(
-            lead,
-            installment_number=number_for_mode,
-            settings=self.settings,
-            bitrix=self.bitrix,
-        ):
-            await self.queue_cash_with_intake_link(
-                workflow,
-                lead=lead,
-                due_amount=plan.amount,
-                installment_number=number_for_mode,
-                entity_type="LEAD",
-                entity_id=lead_id,
-                charge_source=plan.source,
-                amount_locked=plan.locked,
-            )
-
-        channel = CHANNEL_ONLINE
-        if await resolve_is_bank_transfer_payment_mode(
-            lead,
-            installment_number=number_for_mode,
-            settings=self.settings,
-            bitrix=self.bitrix,
-        ):
-            channel = CHANNEL_BANK_TRANSFER
-
+        # Customer chooses Card / Tabby / Tamara / Website / Bank / Cash on the link.
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,
             charge_source=plan.source,
             amount_locked=plan.locked,
             installment_number=installment_number,
-            channel=channel,
+            channel=CHANNEL_ONLINE,
         )
-        if channel == CHANNEL_BANK_TRANSFER:
-            BankTransferService(self.db, self.settings).enqueue_for_session(
-                session, lead=lead
-            )
         payment_url = self.session_service.build_payment_url(session.token)
 
         await self.announce_payment_link(session, entity_type="LEAD", entity_id=lead_id)
 
         if workflow.customer_email:
-            self.email.send_payment_request(
+            await asyncio.to_thread(
+                self.email.send_payment_request,
                 to_email=workflow.customer_email,
                 customer_name=workflow.customer_name,
                 payment_url=payment_url,
@@ -834,7 +814,7 @@ class WorkflowOrchestrator:
             "Payment link created for lead %s - estimate_id=%s channel=%s token %s...",
             lead_id,
             workflow.bitrix_estimate_id or "-",
-            channel,
+            CHANNEL_ONLINE,
             session.token[:8],
         )
         return session
@@ -1305,7 +1285,8 @@ class WorkflowOrchestrator:
             )
             return
         try:
-            sent = self.email.send_agent_payment_notice(
+            sent = await asyncio.to_thread(
+                self.email.send_agent_payment_notice,
                 to_email=agent_email,
                 agent_name=agent_name,
                 subject=subject,
@@ -1491,55 +1472,20 @@ class WorkflowOrchestrator:
             workflow, lead=lead, settings=self.settings
         )
         from app.services.installment_plan import charge_installment_number_for_workflow
-        from app.services.payment_mode import (
-            resolve_is_bank_transfer_payment_mode,
-            resolve_is_cash_payment_mode,
-        )
-        from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_ONLINE
-        from app.services.bank_transfer_service import BankTransferService
+        from app.models.payment_session import CHANNEL_ONLINE
 
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
-        number_for_mode = installment_number or 1
-        if await resolve_is_cash_payment_mode(
-            lead,
-            installment_number=number_for_mode,
-            settings=self.settings,
-            bitrix=self.bitrix,
-        ):
-            await self.queue_cash_with_intake_link(
-                workflow,
-                lead=lead,
-                due_amount=plan.amount,
-                installment_number=number_for_mode,
-                entity_type="DEAL",
-                entity_id=finance_deal_id,
-                charge_source=plan.source,
-                amount_locked=plan.locked,
-            )
-
-        channel = CHANNEL_ONLINE
-        if await resolve_is_bank_transfer_payment_mode(
-            lead,
-            installment_number=number_for_mode,
-            settings=self.settings,
-            bitrix=self.bitrix,
-        ):
-            channel = CHANNEL_BANK_TRANSFER
-
+        # Customer chooses payment mode on the link (not from Bitrix Payment Mode).
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,
             charge_source=plan.source,
             amount_locked=plan.locked,
             installment_number=installment_number,
-            channel=channel,
+            channel=CHANNEL_ONLINE,
         )
-        if channel == CHANNEL_BANK_TRANSFER:
-            BankTransferService(self.db, self.settings).enqueue_for_session(
-                session, lead=lead
-            )
 
         payment_url = self.session_service.build_payment_url(session.token)
         # Write link to Bitrix deal field so Bitrix can email it (no SendGrid).
@@ -1784,6 +1730,8 @@ class WorkflowOrchestrator:
     async def handle_paymob_webhook(
         self, data: PaymentWebhookData, *, dev_simulate: bool = False
     ) -> CustomerWorkflow | None:
+        from sqlalchemy.exc import IntegrityError
+
         existing = self.db.scalar(
             select(PaymentTransaction).where(PaymentTransaction.transaction_id == data.transaction_id)
         )
@@ -1815,7 +1763,14 @@ class WorkflowOrchestrator:
         apply_paymob_fields(transaction, data)
         self.db.add(transaction)
         self.session_service.mark_completed(session)
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError:
+            self.db.rollback()
+            logger.info(
+                "Duplicate transaction ignored after race: %s", data.transaction_id
+            )
+            return None
 
         return await self.apply_recorded_payment(
             workflow,
@@ -2028,7 +1983,8 @@ class WorkflowOrchestrator:
             )
             return
         try:
-            sent = self.email.send_agent_payment_notice(
+            sent = await asyncio.to_thread(
+                self.email.send_agent_payment_notice,
                 to_email=agent_email,
                 agent_name=agent_name,
                 subject=subject,

@@ -295,6 +295,7 @@ async def bitrix24_webhook(
             logger.warning("Bitrix webhook ignored request_id=%s reason=missing_deal_id", request_id)
             return {"status": "ignored", "reason": "missing_deal_id"}
         try:
+            db.commit()
             session = await orchestrator.initiate_payment_from_finance_deal(deal_id)
             logger.info(
                 "Bitrix payment link processed request_id=%s source=button deal_id=%s session_id=%s",
@@ -389,101 +390,55 @@ async def bitrix24_webhook(
         entered_stage = previous_stage != stage_id
         active_session = orchestrator.session_service.get_active_session_for_workflow(workflow)
         if active_session:
-            from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_ONLINE
-            from app.services.installment_plan import charge_installment_number_for_workflow
-            from app.services.payment_mode import (
-                resolve_is_bank_transfer_payment_mode,
-                resolve_is_cash_payment_mode,
-            )
-
+            # Customer chooses payment mode on the link; do not replace the session
+            # when Bitrix Payment Mode UF changes.
             await orchestrator.sync_workflow_from_lead(workflow, lead)
-            mode_installment = charge_installment_number_for_workflow(workflow) or 1
-            if await resolve_is_cash_payment_mode(
-                lead,
-                installment_number=mode_installment,
-                settings=settings,
-                bitrix=orchestrator.bitrix,
-            ):
-                expired = orchestrator.session_service.expire_active_sessions_for_workflow(
-                    workflow
-                )
-                logger.info(
-                    "REPLACE online link with cash queue | lead_id=%s title=%s "
-                    "expired_sessions=%s installment=%s",
-                    lead_id,
-                    summary["title"],
-                    expired,
-                    mode_installment,
-                )
-                active_session = None
-            else:
-                want_bt = await resolve_is_bank_transfer_payment_mode(
-                    lead,
-                    installment_number=mode_installment,
-                    settings=settings,
-                    bitrix=orchestrator.bitrix,
-                )
-                want_channel = CHANNEL_BANK_TRANSFER if want_bt else CHANNEL_ONLINE
-                current_channel = (
-                    getattr(active_session, "channel", None) or CHANNEL_ONLINE
-                )
-                if current_channel != want_channel:
-                    expired = orchestrator.session_service.expire_active_sessions_for_workflow(
-                        workflow
-                    )
-                    logger.info(
-                        "REPLACE payment channel | lead_id=%s from=%s to=%s expired=%s",
-                        lead_id,
-                        current_channel,
-                        want_channel,
-                        expired,
-                    )
-                    active_session = None
-                else:
-                    payment_url = orchestrator.session_service.build_payment_url(
-                        active_session.token
-                    )
-                    # Our own timeline comments fire ONCRMLEADUPDATE. Without this
-                    # guard, force=True re-posts "Payment reminder" right after create.
-                    from datetime import datetime, timezone
+            payment_url = orchestrator.session_service.build_payment_url(
+                active_session.token
+            )
+            # Our own timeline comments fire ONCRMLEADUPDATE. Without this
+            # guard, force=True re-posts "Payment reminder" right after create.
+            from datetime import datetime, timezone
 
-                    recently_commented = False
-                    if active_session.link_commented_at:
-                        commented_at = active_session.link_commented_at
-                        if commented_at.tzinfo is None:
-                            commented_at = commented_at.replace(tzinfo=timezone.utc)
-                        recently_commented = (
-                            datetime.now(timezone.utc) - commented_at
-                        ).total_seconds() < 600
-                    should_force = entered_stage and not recently_commented
-                    commented = await orchestrator.announce_payment_link(
-                        active_session,
-                        entity_type="LEAD",
-                        entity_id=lead_id,
-                        force=should_force,
-                    )
-                    orchestrator.note_lead_stage(lead_id, stage_id)
-                    logger.info(
-                        "SKIP new link | lead_id=%s title=%s | reason=link_already_active "
-                        "estimate_id=%s channel=%s commented=%s entered_stage=%s "
-                        "recently_commented=%s url=%s",
-                        lead_id,
-                        summary["title"],
-                        workflow.bitrix_estimate_id or "-",
-                        current_channel,
-                        "yes" if commented else "already",
-                        entered_stage,
-                        recently_commented,
-                        payment_url,
-                    )
-                    return {
-                        "status": "ignored",
-                        "reason": "payment_link_already_active",
-                        "lead_id": lead_id,
-                        "payment_url": payment_url,
-                    }
+            recently_commented = False
+            if active_session.link_commented_at:
+                commented_at = active_session.link_commented_at
+                if commented_at.tzinfo is None:
+                    commented_at = commented_at.replace(tzinfo=timezone.utc)
+                recently_commented = (
+                    datetime.now(timezone.utc) - commented_at
+                ).total_seconds() < 600
+            should_force = entered_stage and not recently_commented
+            commented = await orchestrator.announce_payment_link(
+                active_session,
+                entity_type="LEAD",
+                entity_id=lead_id,
+                force=should_force,
+            )
+            orchestrator.note_lead_stage(lead_id, stage_id)
+            logger.info(
+                "SKIP new link | lead_id=%s title=%s | reason=link_already_active "
+                "estimate_id=%s channel=%s commented=%s entered_stage=%s "
+                "recently_commented=%s url=%s",
+                lead_id,
+                summary["title"],
+                workflow.bitrix_estimate_id or "-",
+                getattr(active_session, "channel", None) or "online",
+                "yes" if commented else "already",
+                entered_stage,
+                recently_commented,
+                payment_url,
+            )
+            return {
+                "status": "ignored",
+                "reason": "payment_link_already_active",
+                "lead_id": lead_id,
+                "payment_url": payment_url,
+            }
 
         try:
+            # Release the request DB connection before long Bitrix/Paymob work.
+            db.commit()
             session = await orchestrator.initiate_payment_from_lead(lead_id, lead_data=lead)
         except PriceApprovalPending as exc:
             workflow = orchestrator.get_or_create_workflow(lead_id)
@@ -566,15 +521,21 @@ async def bitrix24_webhook(
             logger.warning("Bitrix webhook ignored request_id=%s reason=missing_deal_id", request_id)
             return {"status": "ignored", "reason": "missing_deal_id"}
 
-        deal: dict[str, Any] = {}
+        # Always fetch the live deal so payment-link guard works even when
+        # STAGE_ID arrived in the webhook payload (otherwise deal stays {}).
+        payload_stage = stage_id
+        fetched_stage, deal = await _resolve_deal_stage(orchestrator, deal_id)
         if not stage_id:
-            stage_id, deal = await _resolve_deal_stage(orchestrator, deal_id)
+            stage_id = fetched_stage
+        elif not deal:
+            deal = {}
 
         if stage_id != settings.bitrix_finance_generate_link_stage_id:
             logger.debug(
-                "SKIP payment link | deal_id=%s stage=%s (need %s) | reason=wrong_stage",
+                "SKIP payment link | deal_id=%s stage=%s payload_stage=%s (need %s) | reason=wrong_stage",
                 deal_id,
                 stage_id or "-",
+                payload_stage or "-",
                 settings.bitrix_finance_generate_link_stage_id,
             )
             return {"status": "ignored", "reason": "not_generate_link_stage", "stage_id": stage_id}
@@ -604,6 +565,8 @@ async def bitrix24_webhook(
                 }
 
         try:
+            # Release the request DB connection before long Bitrix/Paymob work.
+            db.commit()
             session = await orchestrator.initiate_payment_from_finance_deal(deal_id)
             payment_url = orchestrator.session_service.build_payment_url(session.token)
             logger.info(

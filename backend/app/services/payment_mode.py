@@ -505,3 +505,188 @@ async def resolve_is_bank_transfer_payment_mode(
         settings=settings,
         bitrix_enum_labels=bitrix_labels or None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Customer-chosen payment mode (terms page)
+# ---------------------------------------------------------------------------
+
+CUSTOMER_PAYMENT_MODES = frozenset(
+    {
+        "card",
+        "tabby",
+        "tamara",
+        "website_payment",
+        "bank_transfer",
+        "cash",
+    }
+)
+
+# Preferred Bitrix enumeration IDs when writing Payment Mode UF back.
+_DEFAULT_CUSTOMER_MODE_WRITE_ENUMS: dict[str, str] = {
+    "card": "13156",
+    "tabby": "5782",
+    "tamara": "5784",
+    "website_payment": "5776",
+    "bank_transfer": "5778",
+    "cash": "5774",
+}
+
+_CUSTOMER_MODE_DISPLAY: dict[str, str] = {
+    "card": "Card",
+    "tabby": "Tabby",
+    "tamara": "Tamara",
+    "website_payment": "Website payment",
+    "bank_transfer": "Bank transfer",
+    "cash": "Cash",
+}
+
+
+def validate_customer_payment_mode(mode: str | None) -> str:
+    normalized = (mode or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if normalized == "website":
+        normalized = "website_payment"
+    if normalized not in CUSTOMER_PAYMENT_MODES:
+        raise ValueError(
+            "Select a payment method: Card, Tabby, Tamara, Website payment, "
+            "Bank transfer, or Cash."
+        )
+    return normalized
+
+
+def customer_payment_mode_display(mode: str) -> str:
+    return _CUSTOMER_MODE_DISPLAY.get(mode, mode.replace("_", " ").title())
+
+
+def channel_for_customer_payment_mode(mode: str) -> str:
+    from app.models.payment_session import (
+        CHANNEL_BANK_TRANSFER,
+        CHANNEL_CASH,
+        CHANNEL_ONLINE,
+    )
+
+    normalized = validate_customer_payment_mode(mode)
+    if normalized == "cash":
+        return CHANNEL_CASH
+    if normalized == "bank_transfer":
+        return CHANNEL_BANK_TRANSFER
+    return CHANNEL_ONLINE
+
+
+def bitrix_enum_id_for_customer_mode(mode: str, settings: Settings) -> str:
+    """Resolve the Bitrix enum ID to write for a customer-chosen mode."""
+    normalized = validate_customer_payment_mode(mode)
+    preferred = _DEFAULT_CUSTOMER_MODE_WRITE_ENUMS.get(normalized)
+    if preferred:
+        configured = _parse_mode_enum_map(settings)
+        if preferred in configured and configured[preferred] == normalized:
+            return preferred
+        # Prefer any configured ID that maps to this label.
+        for enum_id, label in configured.items():
+            if label == normalized:
+                return enum_id
+        return preferred
+    configured = _parse_mode_enum_map(settings)
+    for enum_id, label in configured.items():
+        if label == normalized:
+            return enum_id
+    raise ValueError(f"No Bitrix enum ID configured for payment mode {normalized}")
+
+
+def paymob_methods_for_customer_mode(mode: str, settings: Settings) -> list[int]:
+    """Map customer-chosen mode → Paymob Intention payment_methods list."""
+    normalized = validate_customer_payment_mode(mode)
+    card_id = _card_integration_id(settings)
+    tabby_id = int(getattr(settings, "paymob_integration_id_tabby", 0) or 0)
+    tamara_id = int(getattr(settings, "paymob_integration_id_tamara", 0) or 0)
+
+    methods: list[int] = []
+    if normalized == "tabby":
+        if tabby_id > 0:
+            methods = [tabby_id]
+    elif normalized == "tamara":
+        if tamara_id > 0:
+            methods = [tamara_id]
+    elif normalized == "website_payment":
+        for mid in (card_id, tabby_id, tamara_id):
+            if mid > 0 and mid not in methods:
+                methods.append(mid)
+    elif normalized == "card":
+        if card_id > 0:
+            methods = [card_id]
+    else:
+        # bank_transfer / cash — not Paymob
+        return []
+
+    if not methods and card_id > 0 and normalized in (
+        "card",
+        "tabby",
+        "tamara",
+        "website_payment",
+    ):
+        methods = [card_id]
+
+    logger.info(
+        "Paymob methods from customer mode | mode=%s methods=%s",
+        normalized,
+        methods,
+    )
+    return methods
+
+
+async def sync_customer_payment_mode_to_bitrix(
+    *,
+    bitrix: Any,
+    lead_id: int | None,
+    installment_number: int,
+    mode: str,
+    settings: Settings,
+    entity_type: str = "LEAD",
+    entity_id: int | None = None,
+) -> None:
+    """Write Payment Mode UF + timeline comment for the customer's choice."""
+    normalized = validate_customer_payment_mode(mode)
+    display = customer_payment_mode_display(normalized)
+    number = installment_number or 1
+    field = payment_mode_field_for_installment(settings, number)
+    enum_id = bitrix_enum_id_for_customer_mode(normalized, settings)
+
+    if lead_id and field:
+        try:
+            await bitrix.update_lead_fields(lead_id, {field: enum_id})
+            logger.info(
+                "Bitrix payment mode updated | lead=%s installment=%s field=%s "
+                "mode=%s enum=%s",
+                lead_id,
+                number,
+                field,
+                normalized,
+                enum_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to update Bitrix payment mode | lead=%s field=%s mode=%s",
+                lead_id,
+                field,
+                normalized,
+            )
+
+    comment_entity_type = entity_type
+    comment_entity_id = entity_id if entity_id is not None else lead_id
+    if comment_entity_id:
+        comment = (
+            f"Customer chose payment mode: {display}\n"
+            f"Installment: {number}"
+        )
+        try:
+            await bitrix.add_timeline_comment(
+                entity_type=comment_entity_type,
+                entity_id=comment_entity_id,
+                comment=comment,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to comment customer payment mode on Bitrix %s %s",
+                comment_entity_type,
+                comment_entity_id,
+            )

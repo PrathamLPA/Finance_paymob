@@ -426,8 +426,9 @@
             });
 
             form.addEventListener('submit', (event) => {
-                if (decisionInput.value === 'reject') return;
-                if (decisionInput.value !== 'approve') {
+                if (decisionInput.value === 'reject') {
+                    // fall through to disable UI below
+                } else if (decisionInput.value !== 'approve') {
                     const allApproved = cards.length === 0 || cards.every((c) => c.dataset.state === 'approved');
                     if (!allApproved) {
                         event.preventDefault();
@@ -435,12 +436,25 @@
                     }
                     decisionInput.value = 'approve';
                 }
-                rejectedCaseInput.value = '';
-                // Approve as-is - no price/amount/date overrides.
-                document.getElementById('overrides-json').value = JSON.stringify({
-                    product_prices: [],
-                    installments: [],
+                if (decisionInput.value !== 'reject') {
+                    rejectedCaseInput.value = '';
+                    // Approve as-is - no price/amount/date overrides.
+                    document.getElementById('overrides-json').value = JSON.stringify({
+                        product_prices: [],
+                        installments: [],
+                    });
+                }
+
+                const buttons = form.querySelectorAll('button');
+                buttons.forEach((btn) => {
+                    btn.disabled = true;
                 });
+                const finalBtn = document.getElementById('btn-final-approve');
+                if (finalBtn) {
+                    finalBtn.textContent = decisionInput.value === 'reject'
+                        ? 'Rejecting...'
+                        : 'Approving and generating link...';
+                }
             });
 
             if (cards.length === 0 && finalWrap) {

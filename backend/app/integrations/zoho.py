@@ -320,14 +320,31 @@ class RealZohoBooksClient(MockZohoBooksClient):
             query.update(self._org_params())
         url = f"{self.settings.zoho_books_api_url.rstrip('/')}/{path.lstrip('/')}"
 
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            response = await client.request(method, url, headers=headers, params=query, json=json)
-            if response.status_code == 401:
-                token = await self._get_access_token(force_refresh=True)
-                headers["Authorization"] = f"Zoho-oauthtoken {token}"
-                response = await client.request(method, url, headers=headers, params=query, json=json)
-            self._raise_for_zoho_response(response)
-            return response
+        from app.integrations.http_retry import request_with_retry
+
+        response = await request_with_retry(
+            method,
+            url,
+            headers=headers,
+            params=query,
+            json=json,
+            timeout=45.0,
+            label="Zoho",
+        )
+        if response.status_code == 401:
+            token = await self._get_access_token(force_refresh=True)
+            headers["Authorization"] = f"Zoho-oauthtoken {token}"
+            response = await request_with_retry(
+                method,
+                url,
+                headers=headers,
+                params=query,
+                json=json,
+                timeout=45.0,
+                label="Zoho",
+            )
+        self._raise_for_zoho_response(response)
+        return response
 
     async def list_organizations(self) -> list[dict[str, Any]]:
         """GET /organizations — used to pick ZOHO_ORGANIZATION_ID."""

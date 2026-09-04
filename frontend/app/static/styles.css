@@ -418,6 +418,32 @@ body.error-page-body {
     padding: 0;
 }
 
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.payment-mode-panel {
+    margin-top: 0.5rem;
+}
+
+.payment-mode-group {
+    grid-template-columns: 1fr 1fr;
+}
+
+@media (min-width: 640px) {
+    .payment-mode-group {
+        grid-template-columns: 1fr 1fr 1fr;
+    }
+}
+
 .field-label {
     display: block;
     font-size: 0.875rem;

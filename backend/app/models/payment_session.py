@@ -46,6 +46,8 @@ class PaymentSession(Base):
     currency: Mapped[str] = mapped_column(String(10), default="AED")
     # online (Paymob) | bank_transfer (receipt) | cash (details+terms then pay at desk)
     channel: Mapped[str] = mapped_column(String(30), default=CHANNEL_ONLINE, index=True)
+    # Customer choice on terms page: card|tabby|tamara|website_payment|bank_transfer|cash
+    customer_payment_mode: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     paymob_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     paymob_checkout_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     merchant_reference: Mapped[str] = mapped_column(String(100), index=True)

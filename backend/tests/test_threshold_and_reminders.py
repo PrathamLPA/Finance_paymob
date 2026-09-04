@@ -11,14 +11,23 @@ from app.services.reminder_service import ReminderService
 from tests.conftest import SAMPLE_REGISTRANT
 
 
-def _pay(client, lead_id: int, amount: str, email: str = "threshold@test.com"):
+def _pay(client, lead_id: int, amount: str, email: str = "threshold@test.com", db_session=None):
     link = client.post(
         "/api/dev/send-payment-link",
         json={"lead_id": lead_id, "customer_email": email, "customer_name": "Threshold User", "total_amount": "1000"},
     )
     token = link.json()["token"]
-    merchant_reference = link.json()["merchant_reference"]
     client.post(f"/api/payment/{token}/accept", json={"accepted": True, **SAMPLE_REGISTRANT})
+    merchant_reference = link.json()["merchant_reference"]
+    if db_session is not None:
+        from sqlalchemy import select
+
+        from app.models.payment_session import PaymentSession
+
+        session = db_session.scalar(select(PaymentSession).where(PaymentSession.token == token))
+        assert session is not None
+        merchant_reference = session.merchant_reference
+        db_session.expire_all()
     return client.post(
         "/api/dev/simulate-paymob-webhook",
         json={"merchant_reference": merchant_reference, "amount": amount},
@@ -27,7 +36,7 @@ def _pay(client, lead_id: int, amount: str, email: str = "threshold@test.com"):
 
 def test_partial_payment_below_threshold_keeps_reminders(client, seed_lead, db_session):
     seed_lead(301, email="threshold@test.com", amount=Decimal("1000"))
-    response = _pay(client, 301, "300")
+    response = _pay(client, 301, "300", db_session=db_session)
     assert response.status_code == 200
     data = response.json()
     assert data["payment_status"] == STATUS_PARTIAL
@@ -41,7 +50,7 @@ def test_partial_payment_below_threshold_keeps_reminders(client, seed_lead, db_s
 
 def test_threshold_payment_unlocks_finance_stage_and_stops_reminders(client, seed_lead, db_session):
     seed_lead(302, email="unlock@test.com", amount=Decimal("1000"))
-    response = _pay(client, 302, "500", email="unlock@test.com")
+    response = _pay(client, 302, "500", email="unlock@test.com", db_session=db_session)
     assert response.status_code == 200
     data = response.json()
     assert data["payment_status"] == STATUS_THRESHOLD_MET
@@ -74,8 +83,10 @@ def test_registrant_details_sync_to_workflow(client, seed_lead, db_session):
             "registrant_name": "New Registrant",
             "registrant_email": "new@test.com",
             "registrant_phone": "+971511111111",
+            "payment_mode": "card",
         },
     )
+    db_session.expire_all()
     workflow = db_session.scalar(select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 303))
     assert workflow.customer_name == "New Registrant"
     assert workflow.customer_email == "new@test.com"
@@ -84,7 +95,7 @@ def test_registrant_details_sync_to_workflow(client, seed_lead, db_session):
 
 def test_process_reminders_sends_for_due_workflows(client, seed_lead, db_session):
     seed_lead(304, email="remind@test.com", amount=Decimal("1000"))
-    _pay(client, 304, "100", email="remind@test.com")
+    _pay(client, 304, "100", email="remind@test.com", db_session=db_session)
 
     workflow = db_session.scalar(select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 304))
     assert workflow is not None

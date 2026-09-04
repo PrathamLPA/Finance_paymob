@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from app.api_client import (
 
 router = APIRouter(prefix="/payment", tags=["payment-ui"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+logger = logging.getLogger("frontend.payment")
 
 
 def _amount(data: dict, key: str) -> Decimal:
@@ -65,6 +68,7 @@ def _form_context(
     registrant_email: str = "",
     registrant_phone: str = "",
     payment_amount: str = "",
+    payment_mode: str = "",
     participants: list[dict] | None = None,
 ) -> dict:
     remaining = _amount(data, "remaining_balance")
@@ -108,6 +112,7 @@ def _form_context(
         "participants_json": json.dumps(participants or []),
         "error": error,
         "channel": (data.get("channel") or "online"),
+        "payment_mode": payment_mode or "",
     }
 
 
@@ -268,9 +273,16 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
 
 @router.get("/{token}", response_class=HTMLResponse)
 async def payment_terms_page(token: str, request: Request) -> HTMLResponse:
+    started = time.perf_counter()
     try:
         data = await get_payment(token)
     except BackendApiError as exc:
+        logger.warning(
+            "payment page load failed | token=%s... status=%s detail=%s",
+            token[:8],
+            exc.status_code,
+            exc.detail[:200],
+        )
         return templates.TemplateResponse(
             "error.html",
             {"request": request, "message": exc.detail},
@@ -283,6 +295,11 @@ async def payment_terms_page(token: str, request: Request) -> HTMLResponse:
         and data.get("status") == "terms_accepted"
         and data.get("bank_transfer")
     ):
+        logger.info(
+            "payment page redirect receipt | token=%s... in %sms",
+            token[:8],
+            int((time.perf_counter() - started) * 1000),
+        )
         return RedirectResponse(url=f"/payment/{token}/receipt", status_code=303)
 
     # Cash: after Terms, show office-desk thank you
@@ -297,8 +314,20 @@ async def payment_terms_page(token: str, request: Request) -> HTMLResponse:
                 "name": str(data.get("customer_name") or ""),
             }
         )
+        logger.info(
+            "payment page redirect cash thank-you | token=%s... in %sms",
+            token[:8],
+            int((time.perf_counter() - started) * 1000),
+        )
         return RedirectResponse(url=f"/payment/thank-you?{qs}", status_code=303)
 
+    logger.info(
+        "payment page loaded | token=%s... channel=%s status=%s in %sms",
+        token[:8],
+        data.get("channel"),
+        data.get("status"),
+        int((time.perf_counter() - started) * 1000),
+    )
     return templates.TemplateResponse("terms.html", _form_context(request, token, data))
 
 
@@ -393,6 +422,7 @@ async def accept_terms_and_redirect(
     registrant_email: str | None = Form(default=None),
     registrant_phone: str | None = Form(default=None),
     payment_amount: str | None = Form(default=None),
+    payment_mode: str | None = Form(default=None),
     participants_json: str | None = Form(default=None),
 ) -> Response:
     participants = _parse_participants(participants_json)
@@ -420,6 +450,7 @@ async def accept_terms_and_redirect(
                 registrant_email=registrant_email or "",
                 registrant_phone=registrant_phone or "",
                 payment_amount=payment_amount or "",
+                payment_mode=payment_mode or "",
                 participants=participants,
             ),
             status_code=status_code,
@@ -435,6 +466,16 @@ async def accept_terms_and_redirect(
         except InvalidOperation:
             return await _reject("Please enter a valid payment amount.")
 
+    if not (payment_mode or "").strip():
+        return await _reject("Choose a payment method.")
+
+    started = time.perf_counter()
+    logger.info(
+        "accept start | token=%s... mode=%s course_for=%s",
+        token[:8],
+        (payment_mode or "").strip(),
+        course_for or "",
+    )
     try:
         result = await accept_payment(
             token,
@@ -445,12 +486,28 @@ async def accept_terms_and_redirect(
                 "registrant_email": registrant_email or "",
                 "registrant_phone": registrant_phone or "",
                 "payment_amount": str(chosen_amount) if chosen_amount is not None else None,
+                "payment_mode": (payment_mode or "").strip(),
                 "participants": participants,
             },
         )
     except BackendApiError as exc:
+        logger.warning(
+            "accept failed | token=%s... status=%s detail=%s in %sms",
+            token[:8],
+            exc.status_code,
+            exc.detail[:200],
+            int((time.perf_counter() - started) * 1000),
+        )
         return await _reject(
             exc.detail, exc.status_code if 400 <= exc.status_code < 500 else 400
         )
 
-    return RedirectResponse(url=result["checkout_url"], status_code=303)
+    checkout_url = result["checkout_url"]
+    logger.info(
+        "accept ok | token=%s... mode=%s redirect=%s in %sms",
+        token[:8],
+        (payment_mode or "").strip(),
+        (checkout_url[:80] + "...") if len(checkout_url) > 80 else checkout_url,
+        int((time.perf_counter() - started) * 1000),
+    )
+    return RedirectResponse(url=checkout_url, status_code=303)

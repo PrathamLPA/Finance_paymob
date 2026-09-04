@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from typing import Any
 from fastapi import BackgroundTasks, HTTPException
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
@@ -255,7 +257,8 @@ class TermsService:
 
             await service._sync_registrant_to_bitrix(workflow)
             if workflow.customer_email:
-                service.email.send_terms_acceptance(
+                await asyncio.to_thread(
+                    service.email.send_terms_acceptance,
                     to_email=workflow.customer_email,
                     customer_name=workflow.customer_name,
                     pdf_path=pdf_path,
@@ -280,6 +283,7 @@ class TermsService:
         registrant_email: str,
         registrant_phone: str,
         payment_amount: Decimal | None = None,
+        payment_mode: str | None = None,
         participants: list[dict] | None = None,
         background_tasks: BackgroundTasks | None = None,
     ) -> str:
@@ -295,18 +299,34 @@ class TermsService:
         if validation_error:
             raise HTTPException(status_code=400, detail=validation_error)
 
+        from app.services.payment_mode import (
+            channel_for_customer_payment_mode,
+            sync_customer_payment_mode_to_bitrix,
+            validate_customer_payment_mode,
+        )
+
+        try:
+            chosen_mode = validate_customer_payment_mode(payment_mode)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         session = self.session_service.get_active_session_by_token(token)
         if not session:
             raise HTTPException(status_code=404, detail="Payment session not found or expired")
 
         bitrix = get_bitrix_client(self.settings)
-        courses = await load_lead_courses(bitrix, session.workflow.bitrix_lead_id)
-        if course_for == "self" and not participants:
-            participants = participants_for_buyer(
-                courses,
-                name=registrant_name.strip(),
-                email=registrant_email.strip(),
-            )
+        # Self-purchase: skip Bitrix product-row fetch on accept (page load already
+        # showed seats; empty courses means participant validation is a no-op).
+        if course_for == "self":
+            courses = []
+            if not participants:
+                participants = participants_for_buyer(
+                    courses,
+                    name=registrant_name.strip(),
+                    email=registrant_email.strip(),
+                )
+        else:
+            courses = await load_lead_courses(bitrix, session.workflow.bitrix_lead_id)
         participants_error = validate_participants(courses, participants)
         if participants_error:
             raise HTTPException(status_code=400, detail=participants_error)
@@ -318,9 +338,14 @@ class TermsService:
 
         from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_CASH
 
-        channel = (getattr(session, "channel", None) or "").strip().lower()
-        is_bank_transfer = channel == CHANNEL_BANK_TRANSFER
-        is_cash = channel == CHANNEL_CASH
+        chosen_channel = channel_for_customer_payment_mode(chosen_mode)
+        session.customer_payment_mode = chosen_mode
+        session.channel = chosen_channel
+        self.db.commit()
+        self.db.refresh(session)
+
+        is_bank_transfer = chosen_channel == CHANNEL_BANK_TRANSFER
+        is_cash = chosen_channel == CHANNEL_CASH
 
         # Always use the form details for Paymob / Bitrix, even on re-submit.
         workflow = session.workflow
@@ -330,6 +355,32 @@ class TermsService:
         self.db.commit()
         self.db.refresh(workflow)
 
+        # Bitrix UF + timeline comment: do not block redirect (cash/bank especially).
+        async def _bg_sync_payment_mode(**kwargs):
+            try:
+                await sync_customer_payment_mode_to_bitrix(**kwargs)
+            except Exception:
+                logger.exception(
+                    "Background Bitrix payment-mode sync failed | mode=%s lead=%s",
+                    kwargs.get("mode"),
+                    kwargs.get("lead_id"),
+                )
+
+        bitrix_mode_kwargs = {
+            "bitrix": bitrix,
+            "lead_id": workflow.bitrix_lead_id,
+            "installment_number": getattr(session, "installment_number", None) or 1,
+            "mode": chosen_mode,
+            "settings": self.settings,
+            "entity_type": "LEAD" if workflow.bitrix_lead_id else "DEAL",
+            "entity_id": workflow.bitrix_lead_id or workflow.finance_deal_id,
+        }
+        if background_tasks is not None:
+            background_tasks.add_task(_bg_sync_payment_mode, **bitrix_mode_kwargs)
+        else:
+            await _bg_sync_payment_mode(**bitrix_mode_kwargs)
+
+        first_accept_this_request = False
         if session.status != SESSION_TERMS_ACCEPTED:
             # Persist acceptance immediately; PDF / Bitrix / email run after response.
             acceptance = TermsAcceptance(
@@ -345,29 +396,49 @@ class TermsService:
             )
             self.db.add(acceptance)
             self.session_service.mark_terms_accepted(session)
-            self.db.commit()
-
-            side_effect_kwargs = {
-                "session_id": session.id,
-                "workflow_id": workflow.id,
-                "course_for": course_for,
-                "registrant_name": registrant_name.strip(),
-                "registrant_email": registrant_email.strip(),
-                "registrant_phone": registrant_phone.strip(),
-                "participants": cleaned_participants,
-            }
-            if background_tasks is not None:
-                background_tasks.add_task(
-                    TermsService.run_acceptance_side_effects,
-                    **side_effect_kwargs,
+            try:
+                self.db.commit()
+                first_accept_this_request = True
+            except IntegrityError:
+                # Concurrent double-submit: another request already accepted.
+                self.db.rollback()
+                session = self.session_service.get_active_session_by_token(token)
+                if not session:
+                    raise HTTPException(
+                        status_code=404, detail="Payment session not found or expired"
+                    )
+                self.db.refresh(session)
+                workflow = session.workflow
+                logger.info(
+                    "Terms accept race recovered | session_id=%s status=%s",
+                    session.id,
+                    session.status,
                 )
-            else:
-                await TermsService.run_acceptance_side_effects(**side_effect_kwargs)
+            if first_accept_this_request:
+                side_effect_kwargs = {
+                    "session_id": session.id,
+                    "workflow_id": workflow.id,
+                    "course_for": course_for,
+                    "registrant_name": registrant_name.strip(),
+                    "registrant_email": registrant_email.strip(),
+                    "registrant_phone": registrant_phone.strip(),
+                    "participants": cleaned_participants,
+                }
+                if background_tasks is not None:
+                    background_tasks.add_task(
+                        TermsService.run_acceptance_side_effects,
+                        **side_effect_kwargs,
+                    )
+                else:
+                    await TermsService.run_acceptance_side_effects(**side_effect_kwargs)
         else:
             # Already accepted: keep charge amount in sync
             if amount != session.charge_amount:
                 session.charge_amount = amount
                 self.db.commit()
+
+        # Release the DB connection before long Paymob / enqueue work.
+        self.db.commit()
 
         if is_cash:
             if amount != session.charge_amount:
@@ -375,7 +446,14 @@ class TermsService:
                 self.db.commit()
             from app.services.cash_collection_service import CashCollectionService
 
-            CashCollectionService(self.db, self.settings).mark_details_ready(
+            cash = CashCollectionService(self.db, self.settings)
+            collection = cash.enqueue_from_workflow(
+                workflow,
+                due_amount=amount,
+                installment_number=getattr(session, "installment_number", None) or 1,
+            )
+            cash.link_payment_session(collection, session.id)
+            cash.mark_details_ready(
                 workflow_id=workflow.id,
                 installment_number=getattr(session, "installment_number", None),
                 payment_session_id=session.id,
@@ -397,10 +475,18 @@ class TermsService:
             return self.session_service.build_receipt_upload_url(session.token)
 
         try:
-            if amount != session.charge_amount or not session.paymob_checkout_url:
-                return await self.session_service.refresh_paymob_checkout(session, amount=amount)
-            # Re-create checkout so Paymob gets the latest registrant email/name.
-            return await self.session_service.refresh_paymob_checkout(session, amount=amount)
+            # First accept always refreshes so Paymob gets registrant details.
+            # Re-submit reuses checkout unless amount/URL require a new intention
+            # (avoids rotating merchant_reference on double-click).
+            if (
+                first_accept_this_request
+                or amount != session.charge_amount
+                or not session.paymob_checkout_url
+            ):
+                return await self.session_service.refresh_paymob_checkout(
+                    session, amount=amount
+                )
+            return session.paymob_checkout_url
         except ValueError as exc:
             message = str(exc)
             if "valid email" in message.lower() or "billing_data" in message.lower():

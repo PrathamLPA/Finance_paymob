@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -531,7 +532,8 @@ class PriceApprovalService:
             subject,
         )
         try:
-            sent = get_email_client(self.settings).send_price_approval(
+            sent = await asyncio.to_thread(
+                get_email_client(self.settings).send_price_approval,
                 to_email=approval.manager_email,
                 manager_name=approval.manager_name,
                 subject=subject,

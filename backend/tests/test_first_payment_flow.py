@@ -36,12 +36,18 @@ def test_first_payment_creates_three_deals_and_invoice(client, seed_lead, db_ses
         json={"lead_id": 202, "customer_email": "first@test.com", "total_amount": "10000"},
     )
     token = link.json()["token"]
-    merchant_reference = link.json()["merchant_reference"]
 
     client.post(
         f"/api/payment/{token}/accept",
         json={"accepted": True, **SAMPLE_REGISTRANT},
     )
+    # Accept refreshes Paymob checkout and rotates merchant_reference.
+    from app.models.payment_session import PaymentSession
+
+    session = db_session.scalar(select(PaymentSession).where(PaymentSession.token == token))
+    assert session is not None
+    merchant_reference = session.merchant_reference
+    db_session.expire_all()
 
     lookup = client.get(f"/api/payment/lookup/{merchant_reference}")
     assert lookup.status_code == 200
@@ -107,9 +113,15 @@ def test_first_payment_uses_sales_pipeline_and_notifies_agent(client, seed_lead,
         "/api/dev/send-payment-link",
         json={"lead_id": 204, "customer_email": "sales@test.com", "total_amount": "10000"},
     )
-    merchant_reference = link.json()["merchant_reference"]
     token = link.json()["token"]
     client.post(f"/api/payment/{token}/accept", json={"accepted": True, **SAMPLE_REGISTRANT})
+
+    from app.models.payment_session import PaymentSession
+
+    session = db_session.scalar(select(PaymentSession).where(PaymentSession.token == token))
+    assert session is not None
+    merchant_reference = session.merchant_reference
+    db_session.expire_all()
 
     payment = client.post(
         "/api/dev/simulate-paymob-webhook",

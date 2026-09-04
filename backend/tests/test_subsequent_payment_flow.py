@@ -5,10 +5,17 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.models.customer_workflow import CustomerWorkflow
+from app.models.payment_session import PaymentSession
 from tests.conftest import SAMPLE_REGISTRANT
 
 
-def _complete_first_payment(client, seed_lead, lead_id: int = 301) -> dict:
+def _merchant_ref_for_token(db_session, token: str) -> str:
+    session = db_session.scalar(select(PaymentSession).where(PaymentSession.token == token))
+    assert session is not None
+    return session.merchant_reference
+
+
+def _complete_first_payment(client, seed_lead, db_session, lead_id: int = 301) -> dict:
     seed_lead(lead_id, email="subsequent@test.com", amount=Decimal("10000"))
     link = client.post(
         "/api/dev/send-payment-link",
@@ -18,15 +25,17 @@ def _complete_first_payment(client, seed_lead, lead_id: int = 301) -> dict:
         f"/api/payment/{link['token']}/accept",
         json={"accepted": True, **SAMPLE_REGISTRANT},
     )
+    merchant_reference = _merchant_ref_for_token(db_session, link["token"])
+    db_session.expire_all()
     payment = client.post(
         "/api/dev/simulate-paymob-webhook",
-        json={"merchant_reference": link["merchant_reference"], "amount": "4000"},
+        json={"merchant_reference": merchant_reference, "amount": "4000"},
     ).json()
     return payment
 
 
 def test_second_payment_updates_same_invoice(client, seed_lead, db_session):
-    first = _complete_first_payment(client, seed_lead, lead_id=301)
+    first = _complete_first_payment(client, seed_lead, db_session, lead_id=301)
     invoice_id = first["zoho_invoice_id"]
     finance_deal_id = first["finance_deal_id"]
 
@@ -36,12 +45,13 @@ def test_second_payment_updates_same_invoice(client, seed_lead, db_session):
     )
     assert link.status_code == 200
     new_token = link.json()["token"]
-    new_ref = link.json()["merchant_reference"]
 
     client.post(
         f"/api/payment/{new_token}/accept",
         json={"accepted": True, **SAMPLE_REGISTRANT},
     )
+    new_ref = _merchant_ref_for_token(db_session, new_token)
+    db_session.expire_all()
 
     second = client.post(
         "/api/dev/simulate-paymob-webhook",
@@ -58,10 +68,10 @@ def test_second_payment_updates_same_invoice(client, seed_lead, db_session):
     assert len(workflow.transactions) == 2
 
 
-def test_finance_deal_trigger_creates_new_session(client, seed_lead):
+def test_finance_deal_trigger_creates_new_session(client, seed_lead, db_session):
     from app.config import get_settings
 
-    first = _complete_first_payment(client, seed_lead, lead_id=302)
+    first = _complete_first_payment(client, seed_lead, db_session, lead_id=302)
     finance_deal_id = first["finance_deal_id"]
     stage_id = get_settings().bitrix_finance_generate_link_stage_id
 

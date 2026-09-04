@@ -166,6 +166,7 @@ class RealEmailClient(MockEmailClient):
         body: str,
         attachment_path: str | None = None,
     ) -> bool:
+        """Blocking SendGrid send — call via asyncio.to_thread from async code."""
         try:
             from sendgrid import SendGridAPIClient
             from sendgrid.helpers.mail import Mail
@@ -208,18 +209,32 @@ class RealEmailClient(MockEmailClient):
                 "FAIL SendGrid | reason=package_not_installed action=install_sendgrid"
             )
             return False
-        except Exception as exc:
-            response_body = getattr(exc, "body", None)
+        except Exception:
             logger.exception(
-                "FAIL SendGrid exception | to=%s from=%s subject=%s error=%s "
-                "response=%s action=check_API_key_sender_verification_and_SendGrid_activity",
+                "FAIL SendGrid exception | to=%s subject=%s",
                 to_email,
-                self.settings.sendgrid_from_email,
                 subject,
-                type(exc).__name__,
-                response_body or "-",
             )
             return False
+
+    async def _send_mail_async(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        body: str,
+        attachment_path: str | None = None,
+    ) -> bool:
+        """Non-blocking wrapper — keeps the FastAPI event loop free during SendGrid I/O."""
+        import asyncio
+
+        return await asyncio.to_thread(
+            self._send_mail,
+            to_email=to_email,
+            subject=subject,
+            body=body,
+            attachment_path=attachment_path,
+        )
 
     def send_payment_request(
         self,

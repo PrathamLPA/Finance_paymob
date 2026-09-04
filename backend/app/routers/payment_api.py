@@ -35,6 +35,7 @@ class AcceptTermsBody(BaseModel):
     registrant_email: str = ""
     registrant_phone: str = ""
     payment_amount: Decimal | None = None
+    payment_mode: str = ""
     participants: list[ParticipantBody] = Field(default_factory=list)
 
 
@@ -181,6 +182,7 @@ async def accept_payment_terms(
         registrant_email=body.registrant_email,
         registrant_phone=body.registrant_phone,
         payment_amount=body.payment_amount,
+        payment_mode=body.payment_mode,
         participants=[p.model_dump() for p in body.participants],
         background_tasks=background_tasks,
     )

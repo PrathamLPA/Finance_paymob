@@ -31,6 +31,7 @@ SAMPLE_REGISTRANT = {
     "registrant_name": "Test Customer",
     "registrant_email": "customer@example.com",
     "registrant_phone": "+971500000000",
+    "payment_mode": "card",
 }
 
 

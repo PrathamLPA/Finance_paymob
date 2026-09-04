@@ -77,8 +77,13 @@ def test_installment_due_date_emails_client_from_uf_field(client, seed_lead, db_
         json={"lead_id": 306, "customer_email": "crm-email@test.com", "total_amount": "1500"},
     )
     token = link.json()["token"]
-    merchant_reference = link.json()["merchant_reference"]
     client.post(f"/api/payment/{token}/accept", json={"accepted": True, **SAMPLE_REGISTRANT})
+    from app.models.payment_session import PaymentSession
+
+    session = db_session.scalar(select(PaymentSession).where(PaymentSession.token == token))
+    assert session is not None
+    merchant_reference = session.merchant_reference
+    db_session.expire_all()
     paid = client.post(
         "/api/dev/simulate-paymob-webhook",
         json={"merchant_reference": merchant_reference, "amount": "500"},

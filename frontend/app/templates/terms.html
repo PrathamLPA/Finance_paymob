@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment - Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=18">
+    <link rel="stylesheet" href="/static/styles.css?v=19">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -56,7 +56,12 @@
             </div>
             <div class="step-line" aria-hidden="true"></div>
             <div class="step">
-                <span class="step-num" id="nav-num-pay">4</span>
+                <span class="step-num" id="nav-num-mode">4</span>
+                <span class="step-label">Pay</span>
+            </div>
+            <div class="step-line" aria-hidden="true"></div>
+            <div class="step">
+                <span class="step-num" id="nav-num-pay">5</span>
                 <span class="step-label">Terms</span>
             </div>
         </nav>
@@ -78,7 +83,7 @@
                         <h1>Secure Payment</h1>
                     </div>
                     <p class="card-subtitle">
-                        Confirm purchase details, review terms at the bottom, then continue to Paymob.
+                        Confirm purchase details, choose how you want to pay, review terms at the bottom, then continue.
                     </p>
                 </div>
             </div>
@@ -330,9 +335,60 @@
                     </label>
                 </section>
 
+                <section class="payment-mode-panel" aria-labelledby="payment-mode-heading">
+                    <div class="panel-header">
+                        <span class="panel-step-badge" id="badge-payment-mode">Step 4</span>
+                        <div>
+                            <h2 class="section-heading" id="payment-mode-heading">Payment method</h2>
+                            <p class="terms-divider-hint">Choose how you want to pay. This is required before you continue.</p>
+                        </div>
+                    </div>
+                    <fieldset class="course-for-fieldset payment-mode-fieldset">
+                        <legend class="sr-only">Payment method</legend>
+                        <div class="toggle-group payment-mode-group">
+                            <label class="toggle-btn{% if payment_mode == 'card' %} selected{% endif %}">
+                                <input type="radio" name="payment_mode" value="card" required
+                                    {% if payment_mode == 'card' %}checked{% endif %}>
+                                <span class="toggle-label">Card</span>
+                                <span class="toggle-hint">Debit or credit via Paymob</span>
+                            </label>
+                            <label class="toggle-btn{% if payment_mode == 'tabby' %} selected{% endif %}">
+                                <input type="radio" name="payment_mode" value="tabby" required
+                                    {% if payment_mode == 'tabby' %}checked{% endif %}>
+                                <span class="toggle-label">Tabby</span>
+                                <span class="toggle-hint">Pay in installments</span>
+                            </label>
+                            <label class="toggle-btn{% if payment_mode == 'tamara' %} selected{% endif %}">
+                                <input type="radio" name="payment_mode" value="tamara" required
+                                    {% if payment_mode == 'tamara' %}checked{% endif %}>
+                                <span class="toggle-label">Tamara</span>
+                                <span class="toggle-hint">Buy now, pay later</span>
+                            </label>
+                            <label class="toggle-btn{% if payment_mode == 'website_payment' %} selected{% endif %}">
+                                <input type="radio" name="payment_mode" value="website_payment" required
+                                    {% if payment_mode == 'website_payment' %}checked{% endif %}>
+                                <span class="toggle-label">Website payment</span>
+                                <span class="toggle-hint">Card, Tabby, or Tamara</span>
+                            </label>
+                            <label class="toggle-btn{% if payment_mode == 'bank_transfer' %} selected{% endif %}">
+                                <input type="radio" name="payment_mode" value="bank_transfer" required
+                                    {% if payment_mode == 'bank_transfer' %}checked{% endif %}>
+                                <span class="toggle-label">Bank transfer</span>
+                                <span class="toggle-hint">Transfer then upload receipt</span>
+                            </label>
+                            <label class="toggle-btn{% if payment_mode == 'cash' %} selected{% endif %}">
+                                <input type="radio" name="payment_mode" value="cash" required
+                                    {% if payment_mode == 'cash' %}checked{% endif %}>
+                                <span class="toggle-label">Cash</span>
+                                <span class="toggle-hint">Pay at the office desk</span>
+                            </label>
+                        </div>
+                    </fieldset>
+                </section>
+
                 <section class="terms-accept-panel" id="terms-accept-section" aria-labelledby="terms-heading">
                     <div class="panel-header">
-                        <span class="panel-step-badge muted" id="badge-terms">Step 4</span>
+                        <span class="panel-step-badge muted" id="badge-terms">Step 5</span>
                         <div>
                             <h2 class="section-heading" id="terms-heading">Terms &amp; Conditions</h2>
                             <p class="terms-divider-hint">Open the policy, scroll to the end, then confirm. The checkbox will be ticked for you.</p>
@@ -340,18 +396,12 @@
                     </div>
                     <div class="consent-row" id="consent-box">
                         <input type="checkbox" name="accepted" value="yes" id="accept-checkbox" required>
-                        <p class="consent-text">
+                        <p class="consent-text" id="consent-pay-copy">
                             I have read and agree to the
                             <button type="button" class="terms-link-btn" id="open-terms-modal">
                                 Terms and Conditions &amp; Refund Policy
                             </button>.
-                            {% if channel == 'cash' %}
-                            I understand I will complete registration here and pay cash at the office desk.
-                            {% elif channel == 'bank_transfer' %}
-                            I understand I will upload my bank transfer receipt on the next step.
-                            {% else %}
-                            I understand I will be redirected to <strong>Paymob</strong> to complete payment securely.
-                            {% endif %}
+                            <span id="consent-mode-note">Select a payment method above to continue.</span>
                         </p>
                     </div>
                     <button type="submit" class="btn-paymob" id="submit-btn" disabled>
@@ -359,19 +409,13 @@
                             <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
                             <path d="M8 11V8a4 4 0 118 0v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                         </svg>
-                        <span>{% if channel == 'cash' %}Confirm &amp; finish{% else %}Continue to payment{% endif %}</span>
+                        <span id="submit-btn-label">Continue to payment</span>
                         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                             <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </button>
                     <p class="form-footer-note" id="submit-blocker-hint">
-                        {% if channel == 'cash' %}
-                        After this step, please make your cash payment at the Learners Point office desk.
-                        {% elif channel == 'bank_transfer' %}
-                        Next you will upload a clear photo or PDF of your transfer receipt.
-                        {% else %}
-                        You'll be redirected to Paymob's secure checkout to complete your payment.
-                        {% endif %}
+                        Choose a payment method, accept the terms, then continue.
                     </p>
                 </section>
             </form>
@@ -445,7 +489,6 @@
         const amountInput = document.getElementById('payment-amount');
         const amountHint = document.getElementById('amount-hint');
         const amountLocked = {{ 'true' if amount_locked else 'false' }};
-        const channel = {{ (channel or '') | tojson }};
         const minAmount = parseFloat(amountInput.min || '0');
         const maxAmount = parseFloat(amountInput.max || '0');
         const courses = {{ courses | tojson }};
@@ -542,11 +585,51 @@
             document.getElementById('badge-amount').textContent = 'Step ' + step;
             document.getElementById('nav-num-amount').textContent = step;
             step++;
+            const badgeMode = document.getElementById('badge-payment-mode');
+            if (badgeMode) badgeMode.textContent = 'Step ' + step;
+            const navMode = document.getElementById('nav-num-mode');
+            if (navMode) navMode.textContent = step;
+            step++;
             document.getElementById('badge-terms').textContent = 'Step ' + step;
             document.getElementById('nav-num-pay').textContent = step;
 
             if (navStepCandidates) navStepCandidates.hidden = !showCandidates;
             if (navLineCandidates) navLineCandidates.hidden = !showCandidates;
+        }
+
+        function paymentModeValue() {
+            const checked = form.querySelector('input[name="payment_mode"]:checked');
+            return checked ? checked.value : '';
+        }
+
+        function applyPaymentModeCopy() {
+            const mode = paymentModeValue();
+            const consentNote = document.getElementById('consent-mode-note');
+            const label = document.getElementById('submit-btn-label');
+            let consentExtra = 'Select a payment method above to continue.';
+            let buttonLabel = 'Continue to payment';
+            let footerHint = 'Choose a payment method, accept the terms, then continue.';
+
+            if (mode === 'cash') {
+                consentExtra = 'I understand I will complete registration here and pay cash at the office desk.';
+                buttonLabel = 'Confirm & finish';
+                footerHint = 'After this step, please make your cash payment at the Learners Point office desk.';
+            } else if (mode === 'bank_transfer') {
+                consentExtra = 'I understand I will upload my bank transfer receipt on the next step.';
+                buttonLabel = 'Continue to upload receipt';
+                footerHint = 'Next you will upload a clear photo or PDF of your transfer receipt.';
+            } else if (mode === 'card' || mode === 'tabby' || mode === 'tamara' || mode === 'website_payment') {
+                consentExtra = 'I understand I will be redirected to Paymob to complete payment securely.';
+                buttonLabel = 'Continue to Paymob';
+                footerHint = "You'll be redirected to Paymob's secure checkout to complete your payment.";
+            }
+
+            if (consentNote) consentNote.textContent = consentExtra;
+            submitBtn.dataset.modeLabel = buttonLabel;
+            submitBtn.dataset.modeHint = footerHint;
+            if (label && !submitBtn.dataset.submitting) {
+                label.textContent = buttonLabel;
+            }
         }
 
         function updateVisibility() {
@@ -563,10 +646,13 @@
             const name = document.getElementById('registrant-name').value.trim();
             const email = document.getElementById('registrant-email').value.trim();
             const phone = document.getElementById('registrant-phone').value.trim();
+            const paymentMode = paymentModeValue();
             const problem = amountError();
             const seatProblem = seatsError();
             const blockerHint = document.getElementById('submit-blocker-hint');
             let blocker = '';
+
+            applyPaymentModeCopy();
 
             if (!amountLocked) {
                 amountHint.classList.toggle('field-hint-error', Boolean(problem));
@@ -588,6 +674,8 @@
                 blocker = seatProblem;
             } else if (problem) {
                 blocker = problem;
+            } else if (!paymentMode) {
+                blocker = 'Choose a payment method above.';
             } else if (!termsReadComplete || !checkbox.checked) {
                 blocker = 'Open the Terms and Conditions link, scroll to the end, then confirm.';
             }
@@ -597,7 +685,7 @@
             submitBtn.disabled = !ready;
             if (blockerHint) {
                 blockerHint.textContent = ready
-                    ? "You'll be redirected to Paymob's secure checkout to complete your payment."
+                    ? (submitBtn.dataset.modeHint || 'Continue when ready.')
                     : blocker;
                 blockerHint.classList.toggle('field-hint-error', !ready);
             }
@@ -641,7 +729,9 @@
         }
 
         function bindToggleGroup(selector) {
-            const buttons = form.querySelectorAll(selector + ' .toggle-btn');
+            const root = form.querySelector(selector);
+            if (!root) return;
+            const buttons = root.querySelectorAll('.toggle-btn');
             buttons.forEach((btn) => {
                 btn.addEventListener('click', () => {
                     buttons.forEach((b) => b.classList.remove('selected'));
@@ -652,7 +742,8 @@
             });
         }
 
-        bindToggleGroup('.toggle-group');
+        bindToggleGroup('.course-for-fieldset .toggle-group');
+        bindToggleGroup('.payment-mode-group');
         bindToggleGroup('.amount-choice');
 
         form.querySelectorAll('input[name="amount_choice"]').forEach((radio) => {
@@ -699,9 +790,11 @@
                 return;
             }
             submitBtn.disabled = true;
-            const label = submitBtn.querySelector('span');
+            submitBtn.dataset.submitting = '1';
+            const label = document.getElementById('submit-btn-label');
+            const mode = paymentModeValue();
             if (label) {
-                label.textContent = channel === 'cash' ? 'Saving...' : 'Continuing...';
+                label.textContent = mode === 'cash' ? 'Saving...' : 'Continuing...';
             }
             const hint = document.getElementById('submit-blocker-hint');
             if (hint) {

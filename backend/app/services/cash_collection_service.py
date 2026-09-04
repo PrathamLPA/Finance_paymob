@@ -204,7 +204,25 @@ class CashCollectionService:
             status=STATUS_OPEN,
         )
         self.db.add(row)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            existing = self.db.scalar(
+                select(CashCollection).where(
+                    CashCollection.workflow_id == workflow.id,
+                    CashCollection.installment_number == number,
+                )
+            )
+            if existing:
+                logger.info(
+                    "Cash collection race recovered id=%s lead=%s installment=%s",
+                    existing.id,
+                    existing.bitrix_lead_id,
+                    existing.installment_number,
+                )
+                return existing
+            raise
         self.db.refresh(row)
         logger.info(
             "Cash collection enqueued id=%s lead=%s installment=%s amount=%s",

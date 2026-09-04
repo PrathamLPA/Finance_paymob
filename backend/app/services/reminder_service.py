@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -279,7 +280,8 @@ class ReminderService:
 
         if client_email and slot:
             amount = f"{slot.amount:.2f}" if slot.amount is not None else None
-            self.email.send_installment_reminder(
+            await asyncio.to_thread(
+                self.email.send_installment_reminder,
                 to_email=client_email,
                 customer_name=workflow.customer_name,
                 payment_url=payment_url,
@@ -289,7 +291,8 @@ class ReminderService:
                 currency=workflow.currency,
             )
         elif client_email:
-            self.email.send_payment_request(
+            await asyncio.to_thread(
+                self.email.send_payment_request,
                 to_email=client_email,
                 customer_name=workflow.customer_name,
                 payment_url=payment_url,
