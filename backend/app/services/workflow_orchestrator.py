@@ -1626,8 +1626,11 @@ class WorkflowOrchestrator:
         *,
         staff_id: int,
         amount: Decimal | None = None,
+        collect_method: str = "cash",
     ) -> CustomerWorkflow:
         from app.models.cash_collection import (
+            COLLECT_METHOD_CASH,
+            COLLECT_METHOD_POS,
             STATUS_CLAIMED,
             STATUS_COLLECTED,
             STATUS_OPEN,
@@ -1636,20 +1639,28 @@ class WorkflowOrchestrator:
         from app.models.staff_user import StaffUser
         from app.services.cash_collection_service import CashCollectionService
 
+        method = (collect_method or COLLECT_METHOD_CASH).strip().lower()
+        if method not in {COLLECT_METHOD_CASH, COLLECT_METHOD_POS}:
+            raise ValueError("collect_method must be 'cash' or 'pos'")
+
         row = self.db.get(CashCollection, collection_id)
         if not row:
             raise ValueError("Cash collection not found")
         if row.status == STATUS_COLLECTED:
             raise ValueError("Already collected")
         if row.status == STATUS_OPEN:
-            raise ValueError("Claim this collection before recording cash")
+            raise ValueError("Claim this collection before recording payment")
         if row.status != STATUS_CLAIMED or row.claimed_by_id != staff_id:
-            raise ValueError("Only the claiming employee can collect this cash")
+            raise ValueError("Only the claiming employee can collect this payment")
         if not row.proof_path:
-            raise ValueError("Upload a cash collection photo before confirming")
+            raise ValueError(
+                "Upload a payment photo before confirming"
+                if method == COLLECT_METHOD_POS
+                else "Upload a cash collection photo before confirming"
+            )
         if not CashCollectionService(self.db, self.settings)._collection_details_ready(row):
             raise ValueError(
-                "Customer must complete the details form and accept terms before cash can be collected"
+                "Customer must complete the details form and accept terms before payment can be collected"
             )
 
         staff = self.db.get(StaffUser, staff_id)
@@ -1668,12 +1679,18 @@ class WorkflowOrchestrator:
         if not workflow:
             raise ValueError("Workflow not found")
 
-        txn_id = CashCollectionService.new_cash_transaction_id(row.id)
+        if method == COLLECT_METHOD_POS:
+            txn_id = CashCollectionService.new_pos_transaction_id(row.id)
+            source_type = COLLECT_METHOD_POS
+        else:
+            txn_id = CashCollectionService.new_cash_transaction_id(row.id)
+            source_type = COLLECT_METHOD_CASH
+
         existing = self.db.scalar(
             select(PaymentTransaction).where(PaymentTransaction.transaction_id == txn_id)
         )
         if existing:
-            raise ValueError("Duplicate cash transaction")
+            raise ValueError("Duplicate payment transaction")
 
         workflow.amount_paid += collect_amount
         remaining = workflow.remaining_balance
@@ -1686,13 +1703,14 @@ class WorkflowOrchestrator:
             currency=row.currency or workflow.currency,
             remaining_balance=remaining,
             raw_payload=None,
-            source_type="cash",
+            source_type=source_type,
             success=True,
             pending=False,
         )
         self.db.add(transaction)
 
         row.collected_amount = collect_amount
+        row.collect_method = method
         row.status = STATUS_COLLECTED
         row.collected_by_id = staff_id
         row.collected_at = datetime.now(timezone.utc)
@@ -1704,20 +1722,38 @@ class WorkflowOrchestrator:
             if row.proof_original_name
             else "Proof photo uploaded"
         )
-        comment_prefix = (
-            f"Cash payment confirmed via Cash Desk\n"
-            f"Collected by: {staff.name} ({staff.email})\n"
-            f"Course: {course}\n"
-            f"Installment {row.installment_number}\n"
-            f"{proof_note}"
-        )
-        logger.info(
-            "Cash collected | lead_id=%s installment=%s amount=%s employee=%s",
-            workflow.bitrix_lead_id,
-            row.installment_number,
-            collect_amount,
-            staff.email,
-        )
+        if method == COLLECT_METHOD_POS:
+            comment_prefix = (
+                f"POS / card machine payment confirmed via Cash Desk\n"
+                f"Collected by: {staff.name} ({staff.email})\n"
+                f"Course: {course}\n"
+                f"Installment {row.installment_number}\n"
+                f"Method: POS (not added to employee cash on hand)\n"
+                f"{proof_note}"
+            )
+            logger.info(
+                "POS collected | lead_id=%s installment=%s amount=%s employee=%s",
+                workflow.bitrix_lead_id,
+                row.installment_number,
+                collect_amount,
+                staff.email,
+            )
+        else:
+            comment_prefix = (
+                f"Cash payment confirmed via Cash Desk\n"
+                f"Collected by: {staff.name} ({staff.email})\n"
+                f"Course: {course}\n"
+                f"Installment {row.installment_number}\n"
+                f"Method: Cash (added to employee cash on hand)\n"
+                f"{proof_note}"
+            )
+            logger.info(
+                "Cash collected | lead_id=%s installment=%s amount=%s employee=%s",
+                workflow.bitrix_lead_id,
+                row.installment_number,
+                collect_amount,
+                staff.email,
+            )
 
         return await self.apply_recorded_payment(
             workflow,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -16,6 +17,17 @@ from app.services.cash_collection_service import CashCollectionService
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 router = APIRouter(prefix="/api/staff", tags=["cash-desk"])
+
+
+def _parse_optional_date(value: str | None, field_name: str) -> date | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return date.fromisoformat(str(value).strip()[:10])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid {field_name}. Use YYYY-MM-DD."
+        ) from exc
 
 
 class EmployeeCreateBody(BaseModel):
@@ -87,8 +99,17 @@ async def cash_collect(
     staff: StaffUser = Depends(get_current_staff),
     proof: UploadFile = File(...),
     amount: str | None = Form(default=None),
+    collect_method: str = Form(default="cash"),
 ) -> dict[str, Any]:
-    from app.models.cash_collection import CashCollection
+    from app.models.cash_collection import (
+        COLLECT_METHOD_CASH,
+        COLLECT_METHOD_POS,
+        CashCollection,
+    )
+
+    method = (collect_method or COLLECT_METHOD_CASH).strip().lower()
+    if method not in {COLLECT_METHOD_CASH, COLLECT_METHOD_POS}:
+        raise HTTPException(status_code=400, detail="collect_method must be 'cash' or 'pos'")
 
     service = CashCollectionService(db)
     row = db.get(CashCollection, collection_id)
@@ -99,7 +120,7 @@ async def cash_collect(
     try:
         service.save_proof(
             row,
-            filename=proof.filename or "cash-proof.jpg",
+            filename=proof.filename or "payment-proof.jpg",
             content_type=proof.content_type,
             data=data,
             staff=staff,
@@ -117,7 +138,10 @@ async def cash_collect(
     orchestrator = WorkflowOrchestrator(db)
     try:
         workflow = await orchestrator.collect_cash(
-            collection_id, staff_id=staff.id, amount=chosen
+            collection_id,
+            staff_id=staff.id,
+            amount=chosen,
+            collect_method=method,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -210,13 +234,25 @@ def cash_deposit(
 @router.get("/cash/deposits")
 def cash_deposits_list(
     employee_id: int | None = None,
+    date_from: str | None = Query(default=None, description="YYYY-MM-DD"),
+    date_to: str | None = Query(default=None, description="YYYY-MM-DD"),
+    sort_by: Literal["deposited_at", "amount", "employee_name"] = Query(
+        default="deposited_at"
+    ),
+    sort_dir: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
     staff: StaffUser = Depends(get_current_staff),
 ) -> dict[str, Any]:
     service = CashCollectionService(db)
     if staff.role != ROLE_MANAGER:
         employee_id = staff.id
-    rows = service.list_deposits(employee_id=employee_id)
+    rows = service.list_deposits(
+        employee_id=employee_id,
+        date_from=_parse_optional_date(date_from, "date_from"),
+        date_to=_parse_optional_date(date_to, "date_to"),
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+    )
     return {
         "items": [
             {
@@ -292,14 +328,26 @@ def manager_dashboard(
 
 @router.get("/transactions")
 def manager_transactions(
-    channel: Literal["all", "cash", "online"] = Query(default="all"),
+    channel: Literal["all", "cash", "pos", "online"] = Query(default="all"),
     employee_id: int | None = None,
     q: str | None = None,
+    date_from: str | None = Query(default=None, description="YYYY-MM-DD"),
+    date_to: str | None = Query(default=None, description="YYYY-MM-DD"),
+    sort_by: Literal[
+        "paid_at", "amount", "customer_name", "channel", "course_title"
+    ] = Query(default="paid_at"),
+    sort_dir: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
     _manager: StaffUser = Depends(require_manager),
 ) -> dict[str, Any]:
     items = CashCollectionService(db).list_transactions(
-        channel=channel, employee_id=employee_id, q=q
+        channel=channel,
+        employee_id=employee_id,
+        q=q,
+        date_from=_parse_optional_date(date_from, "date_from"),
+        date_to=_parse_optional_date(date_to, "date_to"),
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
     return {"items": items}
 

@@ -20,6 +20,9 @@ STATUS_CLAIMED = "claimed"
 STATUS_COLLECTED = "collected"
 STATUS_CANCELLED = "cancelled"
 
+COLLECT_METHOD_CASH = "cash"
+COLLECT_METHOD_POS = "pos"
+
 
 class CashCollection(Base):
     __tablename__ = "cash_collections"
@@ -51,6 +54,10 @@ class CashCollection(Base):
         ForeignKey("staff_users.id"), nullable=True, index=True
     )
     collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Desk payment method: cash (adds to on-hand) or pos (card machine, no on-hand)
+    collect_method: Mapped[str] = mapped_column(
+        String(20), default=COLLECT_METHOD_CASH, server_default=COLLECT_METHOD_CASH
+    )
     # Customer fill-details + terms session (required before employee can collect)
     payment_session_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("payment_sessions.id"), nullable=True, index=True

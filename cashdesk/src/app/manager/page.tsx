@@ -25,6 +25,7 @@ type Dashboard = {
   total_deposited: string;
   pending_collections: number;
   cash_collected: string;
+  pos_collected?: string;
   online_collected: string;
   employee_count: number;
 };
@@ -67,6 +68,13 @@ function ManagerOverview() {
           accent="stone"
         />
         <StatCard label="Cash collected" value={money(dash?.cash_collected)} icon={Wallet} accent="teal" />
+        <StatCard
+          label="POS collected"
+          value={money(dash?.pos_collected)}
+          hint="Desk card machine — not in employee on hand"
+          icon={Receipt}
+          accent="sky"
+        />
         <StatCard label="Online collected" value={money(dash?.online_collected)} icon={TrendingUp} accent="sky" />
         <StatCard
           label="Active employees"

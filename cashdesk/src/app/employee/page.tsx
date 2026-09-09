@@ -34,7 +34,10 @@ type Collection = {
   proof_original_name?: string | null;
   details_ready?: boolean;
   details_ready_at?: string | null;
+  collect_method?: "cash" | "pos" | string | null;
 };
+
+type CollectMethod = "cash" | "pos";
 
 type Summary = {
   on_hand: string;
@@ -61,6 +64,8 @@ function CollectionDetailModal({
   proofFile,
   proofPreviewUrl,
   proofLoading,
+  collectMethod,
+  onCollectMethodChange,
   onProofChange,
   onClose,
   onClaim,
@@ -71,6 +76,8 @@ function CollectionDetailModal({
   proofFile: File | null;
   proofPreviewUrl: string | null;
   proofLoading: boolean;
+  collectMethod: CollectMethod;
+  onCollectMethodChange: (method: CollectMethod) => void;
   onProofChange: (file: File | null) => void;
   onClose: () => void;
   onClaim: () => void;
@@ -104,6 +111,9 @@ function CollectionDetailModal({
   const isClaimed = row.status === "claimed";
   const isCollected = row.status === "collected";
   const detailsReady = Boolean(row.details_ready);
+  const recordedMethod = (row.collect_method || "cash") as CollectMethod;
+  const activeMethod = isCollected ? recordedMethod : collectMethod;
+  const isPos = activeMethod === "pos";
 
   return createPortal(
     <div className="txn-modal" role="presentation">
@@ -155,6 +165,11 @@ function CollectionDetailModal({
               >
                 {row.status}
               </Badge>
+              {isCollected ? (
+                <Badge variant={recordedMethod === "pos" ? "online" : "cash"}>
+                  {recordedMethod === "pos" ? "POS machine" : "Cash"}
+                </Badge>
+              ) : null}
               {detailsReady ? (
                 <Badge variant="success">Form fill complete</Badge>
               ) : (
@@ -205,12 +220,58 @@ function CollectionDetailModal({
 
           {isClaimed && detailsReady ? (
             <section className="txn-modal-panel">
-              <h3 className="text-sm font-semibold text-stone-900">Collection photo</h3>
+              <h3 className="text-sm font-semibold text-stone-900">Payment method</h3>
               <p className="mt-1 text-sm leading-relaxed text-stone-600">
-                Upload a handover screenshot or photo before confirming cash received.
+                Choose how the customer is paying at the desk. Cash adds to your on-hand
+                balance. POS does not — only upload the machine slip.
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => onCollectMethodChange("cash")}
+                  className={`rounded-lg border px-3 py-3 text-left transition ${
+                    collectMethod === "cash"
+                      ? "border-teal-700 bg-teal-50 ring-2 ring-teal-700/30"
+                      : "border-stone-200 bg-white hover:border-stone-300"
+                  }`}
+                >
+                  <p className="text-sm font-semibold text-stone-900">Cash</p>
+                  <p className="mt-1 text-xs leading-relaxed text-stone-600">
+                    Collect notes/coins and add them to your cash in hand.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onCollectMethodChange("pos")}
+                  className={`rounded-lg border px-3 py-3 text-left transition ${
+                    collectMethod === "pos"
+                      ? "border-teal-700 bg-teal-50 ring-2 ring-teal-700/30"
+                      : "border-stone-200 bg-white hover:border-stone-300"
+                  }`}
+                >
+                  <p className="text-sm font-semibold text-stone-900">POS machine</p>
+                  <p className="mt-1 text-xs leading-relaxed text-stone-600">
+                    Card/terminal payment — does not add to cash in hand.
+                  </p>
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {isClaimed && detailsReady ? (
+            <section className="txn-modal-panel">
+              <h3 className="text-sm font-semibold text-stone-900">
+                {isPos ? "POS payment proof" : "Cash collection photo"}
+              </h3>
+              <p className="mt-1 text-sm leading-relaxed text-stone-600">
+                {isPos
+                  ? "Upload a clear photo or screenshot of the POS slip / successful payment screen."
+                  : "Upload a handover screenshot or photo before confirming cash received."}
               </p>
               <label className="mt-3 block space-y-1.5">
-                <span className="sr-only">Collection photo</span>
+                <span className="sr-only">
+                  {isPos ? "POS payment proof" : "Collection photo"}
+                </span>
                 <input
                   type="file"
                   accept="image/jpeg,image/png,image/webp,application/pdf"
@@ -280,9 +341,11 @@ function CollectionDetailModal({
             >
               {busy
                 ? "Saving…"
-                : detailsReady
-                  ? "Confirm cash received"
-                  : "Form fill incomplete"}
+                : !detailsReady
+                  ? "Form fill incomplete"
+                  : isPos
+                    ? "Confirm POS payment"
+                    : "Confirm cash received"}
             </Button>
           ) : null}
         </footer>
@@ -328,17 +391,24 @@ function CollectionCard({
               Lead #{row.bitrix_lead_id} · {row.course_title || "Course"}
             </CardDescription>
           </div>
-          <Badge
-            variant={
-              row.status === "collected"
-                ? "success"
-                : row.status === "claimed"
-                  ? "warning"
-                  : "muted"
-            }
-          >
-            {row.status}
-          </Badge>
+          <div className="flex flex-col items-end gap-1">
+            <Badge
+              variant={
+                row.status === "collected"
+                  ? "success"
+                  : row.status === "claimed"
+                    ? "warning"
+                    : "muted"
+              }
+            >
+              {row.status}
+            </Badge>
+            {row.status === "collected" ? (
+              <Badge variant={row.collect_method === "pos" ? "online" : "cash"}>
+                {row.collect_method === "pos" ? "POS" : "Cash"}
+              </Badge>
+            ) : null}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -401,6 +471,7 @@ function EmployeeDesk({ userId }: { userId: number }) {
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofPreviewUrl, setProofPreviewUrl] = useState<string | null>(null);
   const [proofLoading, setProofLoading] = useState(false);
+  const [collectMethod, setCollectMethod] = useState<CollectMethod>("cash");
 
   const refresh = useCallback(async () => {
     const [queue, collected, bal] = await Promise.all([
@@ -461,6 +532,7 @@ function EmployeeDesk({ userId }: { userId: number }) {
   function openRow(row: Collection) {
     setSelected(row);
     setProofFile(null);
+    setCollectMethod("cash");
     setError("");
   }
 
@@ -470,12 +542,13 @@ function EmployeeDesk({ userId }: { userId: number }) {
     setSuccess("");
     try {
       await api(`/api/staff/cash/${id}/claim`, { method: "POST" });
-      setSuccess("Case claimed. Upload a photo, then confirm cash received.");
+      setSuccess("Case claimed. Choose Cash or POS, upload proof, then confirm.");
       await refresh();
       setTab("claimed");
       const queue = await api<{ items: Collection[] }>("/api/staff/cash/queue");
       const updated = queue.items.find((i) => i.id === id) || null;
       setSelected(updated);
+      setCollectMethod("cash");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Claim failed");
     } finally {
@@ -485,7 +558,11 @@ function EmployeeDesk({ userId }: { userId: number }) {
 
   async function collect(id: number) {
     if (!proofFile) {
-      setError("Please attach a photo or screenshot before confirming cash received.");
+      setError(
+        collectMethod === "pos"
+          ? "Please attach the POS slip or payment screenshot before confirming."
+          : "Please attach a photo or screenshot before confirming cash received."
+      );
       return;
     }
     setBusyId(id);
@@ -494,9 +571,15 @@ function EmployeeDesk({ userId }: { userId: number }) {
     try {
       const body = new FormData();
       body.append("proof", proofFile);
+      body.append("collect_method", collectMethod);
       await api(`/api/staff/cash/${id}/collect`, { method: "POST", body });
-      setSuccess("Cash recorded with photo. Bitrix lead timeline and assigned agent were notified.");
+      setSuccess(
+        collectMethod === "pos"
+          ? "POS payment recorded with proof. It was not added to your cash in hand."
+          : "Cash recorded with photo and added to your cash in hand."
+      );
       setProofFile(null);
+      setCollectMethod("cash");
       setSelected(null);
       setTab("collected");
       await refresh();
@@ -523,7 +606,7 @@ function EmployeeDesk({ userId }: { userId: number }) {
     <div className="space-y-8">
       <PageHeader
         title="Collections"
-        description="Cases appear when Bitrix is cash. Customer must fill the email link and accept Terms before you can claim or collect."
+        description="Cases appear when Bitrix is cash. At the desk choose Cash (adds to on hand) or POS machine (proof only, no on hand)."
       />
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -596,10 +679,13 @@ function EmployeeDesk({ userId }: { userId: number }) {
           proofFile={proofFile}
           proofPreviewUrl={proofPreviewUrl}
           proofLoading={proofLoading}
+          collectMethod={collectMethod}
+          onCollectMethodChange={setCollectMethod}
           onProofChange={setProofFile}
           onClose={() => {
             setSelected(null);
             setProofFile(null);
+            setCollectMethod("cash");
           }}
           onClaim={() => claim(selected.id)}
           onCollect={() => collect(selected.id)}

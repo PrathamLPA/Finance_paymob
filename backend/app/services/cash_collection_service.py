@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 import mimetypes
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -19,6 +19,8 @@ from app.models.cash_collection import (
     STATUS_CLAIMED,
     STATUS_COLLECTED,
     STATUS_OPEN,
+    COLLECT_METHOD_CASH,
+    COLLECT_METHOD_POS,
     CashCollection,
 )
 from app.models.cash_deposit import CashDeposit
@@ -382,10 +384,12 @@ class CashCollectionService:
         return False
 
     def employee_balances(self, employee_id: int) -> dict[str, Decimal]:
+        # Only physical cash adds to on-hand. POS desk payments are excluded.
         collected = self.db.scalar(
             select(func.coalesce(func.sum(CashCollection.collected_amount), 0)).where(
                 CashCollection.collected_by_id == employee_id,
                 CashCollection.status == STATUS_COLLECTED,
+                CashCollection.collect_method == COLLECT_METHOD_CASH,
             )
         ) or Decimal("0.00")
         deposited = self.db.scalar(
@@ -436,17 +440,6 @@ class CashCollectionService:
         self.db.commit()
         self.db.refresh(row)
         return row
-
-    def list_deposits(self, *, employee_id: int | None = None, limit: int = 100) -> list[CashDeposit]:
-        stmt = (
-            select(CashDeposit)
-            .options(joinedload(CashDeposit.employee), joinedload(CashDeposit.recorded_by))
-            .order_by(CashDeposit.deposited_at.desc())
-            .limit(limit)
-        )
-        if employee_id is not None:
-            stmt = stmt.where(CashDeposit.employee_id == employee_id)
-        return list(self.db.scalars(stmt).unique().all())
 
     def create_employee(self, *, email: str, name: str, password: str) -> StaffUser:
         email = email.strip().lower()
@@ -550,6 +543,7 @@ class CashCollectionService:
             "proof_url": (
                 f"/api/staff/cash/{row.id}/proof" if row.proof_path else None
             ),
+            "collect_method": row.collect_method or COLLECT_METHOD_CASH,
         }
 
     def dashboard(self) -> dict[str, Any]:
@@ -571,14 +565,21 @@ class CashCollectionService:
 
         cash_collected = self.db.scalar(
             select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
-                PaymentTransaction.source_type == "cash"
+                PaymentTransaction.source_type == COLLECT_METHOD_CASH
+            )
+        ) or Decimal("0.00")
+        pos_collected = self.db.scalar(
+            select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                PaymentTransaction.source_type == COLLECT_METHOD_POS
             )
         ) or Decimal("0.00")
         online_collected = self.db.scalar(
             select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
                 or_(
                     PaymentTransaction.source_type.is_(None),
-                    PaymentTransaction.source_type != "cash",
+                    ~PaymentTransaction.source_type.in_(
+                        [COLLECT_METHOD_CASH, COLLECT_METHOD_POS]
+                    ),
                 )
             )
         ) or Decimal("0.00")
@@ -588,6 +589,7 @@ class CashCollectionService:
             "total_deposited": str(Decimal(total_deposited).quantize(Decimal("0.01"))),
             "pending_collections": int(pending),
             "cash_collected": str(Decimal(cash_collected).quantize(Decimal("0.01"))),
+            "pos_collected": str(Decimal(pos_collected).quantize(Decimal("0.01"))),
             "online_collected": str(Decimal(online_collected).quantize(Decimal("0.01"))),
             "employee_count": len(employees),
         }
@@ -598,29 +600,54 @@ class CashCollectionService:
         channel: str = "all",
         employee_id: int | None = None,
         q: str | None = None,
-        limit: int = 200,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        sort_by: Literal[
+            "paid_at", "amount", "customer_name", "channel", "course_title"
+        ] = "paid_at",
+        sort_dir: Literal["asc", "desc"] = "desc",
+        limit: int = 2000,
     ) -> list[dict[str, Any]]:
         stmt = (
             select(PaymentTransaction)
             .options(joinedload(PaymentTransaction.workflow))
-            .order_by(PaymentTransaction.paid_at.desc())
-            .limit(limit)
         )
         if channel == "cash":
-            stmt = stmt.where(PaymentTransaction.source_type == "cash")
+            stmt = stmt.where(PaymentTransaction.source_type == COLLECT_METHOD_CASH)
+        elif channel == "pos":
+            stmt = stmt.where(PaymentTransaction.source_type == COLLECT_METHOD_POS)
         elif channel == "online":
             stmt = stmt.where(
                 or_(
                     PaymentTransaction.source_type.is_(None),
-                    PaymentTransaction.source_type != "cash",
+                    ~PaymentTransaction.source_type.in_(
+                        [COLLECT_METHOD_CASH, COLLECT_METHOD_POS]
+                    ),
                 )
             )
+        if date_from is not None:
+            start = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+            stmt = stmt.where(PaymentTransaction.paid_at >= start)
+        if date_to is not None:
+            end = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
+            stmt = stmt.where(PaymentTransaction.paid_at <= end)
+
+        # Prefer SQL order for paid_at/amount; other sorts applied after enrichment.
+        if sort_by == "amount":
+            order_col = PaymentTransaction.amount
+        else:
+            order_col = PaymentTransaction.paid_at
+        stmt = stmt.order_by(order_col.asc() if sort_dir == "asc" else order_col.desc())
+        stmt = stmt.limit(max(1, min(limit, 5000)))
         rows = list(self.db.scalars(stmt).unique().all())
 
-        # Map cash txn → collector via transaction_id prefix CASH-{id}-
+        # Map desk txn → collector via CASH-{id}- or POS-{id}-
         collection_ids: list[int] = []
         for txn in rows:
-            if txn.source_type == "cash" and txn.transaction_id.startswith("CASH-"):
+            prefix_ok = txn.transaction_id.startswith("CASH-") or txn.transaction_id.startswith(
+                "POS-"
+            )
+            if txn.source_type in {COLLECT_METHOD_CASH, COLLECT_METHOD_POS} and prefix_ok:
                 parts = txn.transaction_id.split("-")
                 if len(parts) >= 2 and parts[1].isdigit():
                     collection_ids.append(int(parts[1]))
@@ -637,12 +664,20 @@ class CashCollectionService:
         needle = (q or "").strip().lower()
         for txn in rows:
             wf = txn.workflow
-            channel_label = "cash" if txn.source_type == "cash" else "online"
+            if txn.source_type == COLLECT_METHOD_CASH:
+                channel_label = "cash"
+            elif txn.source_type == COLLECT_METHOD_POS:
+                channel_label = "pos"
+            else:
+                channel_label = "online"
             employee_name = None
             employee_email = None
             emp_id = None
             collection_id = None
-            if txn.source_type == "cash" and txn.transaction_id.startswith("CASH-"):
+            prefix_ok = txn.transaction_id.startswith("CASH-") or txn.transaction_id.startswith(
+                "POS-"
+            )
+            if txn.source_type in {COLLECT_METHOD_CASH, COLLECT_METHOD_POS} and prefix_ok:
                 parts = txn.transaction_id.split("-")
                 if len(parts) >= 2 and parts[1].isdigit():
                     collection_id = int(parts[1])
@@ -691,8 +726,71 @@ class CashCollectionService:
                     "invoice_synced": bool(wf and wf.zoho_invoice_id),
                 }
             )
+
+        reverse = sort_dir == "desc"
+
+        def sort_key(item: dict[str, Any]) -> Any:
+            if sort_by == "amount":
+                try:
+                    return Decimal(str(item.get("amount") or "0"))
+                except Exception:
+                    return Decimal("0")
+            if sort_by == "customer_name":
+                return (item.get("customer_name") or "").lower()
+            if sort_by == "channel":
+                return item.get("channel") or ""
+            if sort_by == "course_title":
+                return (item.get("course_title") or "").lower()
+            return item.get("paid_at") or ""
+
+        if sort_by in {"customer_name", "channel", "course_title"} or (
+            sort_by in {"paid_at", "amount"} and needle
+        ):
+            out.sort(key=sort_key, reverse=reverse)
         return out
+
+    def list_deposits(
+        self,
+        *,
+        employee_id: int | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        sort_by: Literal["deposited_at", "amount", "employee_name"] = "deposited_at",
+        sort_dir: Literal["asc", "desc"] = "desc",
+        limit: int = 2000,
+    ) -> list[CashDeposit]:
+        stmt = select(CashDeposit).options(
+            joinedload(CashDeposit.employee), joinedload(CashDeposit.recorded_by)
+        )
+        if employee_id is not None:
+            stmt = stmt.where(CashDeposit.employee_id == employee_id)
+        if date_from is not None:
+            start = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+            stmt = stmt.where(CashDeposit.deposited_at >= start)
+        if date_to is not None:
+            end = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
+            stmt = stmt.where(CashDeposit.deposited_at <= end)
+
+        if sort_by == "amount":
+            order_col = CashDeposit.amount
+        else:
+            order_col = CashDeposit.deposited_at
+        stmt = stmt.order_by(order_col.asc() if sort_dir == "asc" else order_col.desc())
+        stmt = stmt.limit(max(1, min(limit, 5000)))
+        rows = list(self.db.scalars(stmt).unique().all())
+
+        if sort_by == "employee_name":
+            reverse = sort_dir == "desc"
+            rows.sort(
+                key=lambda r: ((r.employee.name if r.employee else "") or "").lower(),
+                reverse=reverse,
+            )
+        return rows
 
     @staticmethod
     def new_cash_transaction_id(collection_id: int) -> str:
         return f"CASH-{collection_id}-{uuid.uuid4().hex[:12]}"
+
+    @staticmethod
+    def new_pos_transaction_id(collection_id: int) -> str:
+        return f"POS-{collection_id}-{uuid.uuid4().hex[:12]}"

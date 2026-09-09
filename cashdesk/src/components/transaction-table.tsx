@@ -130,7 +130,17 @@ function TransactionDetailModal({
         <div className="txn-modal-body">
           <section className="txn-modal-panel">
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <Badge variant={row.channel === "cash" ? "cash" : "online"}>{row.channel}</Badge>
+              <Badge
+                variant={
+                  row.channel === "cash"
+                    ? "cash"
+                    : row.channel === "pos"
+                      ? "online"
+                      : "online"
+                }
+              >
+                {row.channel === "pos" ? "POS" : row.channel}
+              </Badge>
               {row.invoice_synced ? (
                 <Badge variant="success">Invoice sent</Badge>
               ) : (
@@ -300,7 +310,17 @@ export function TransactionTable({
                   </div>
                 </TD>
                 <TD>
-                  <Badge variant={row.channel === "cash" ? "cash" : "online"}>{row.channel}</Badge>
+                  <Badge
+                variant={
+                  row.channel === "cash"
+                    ? "cash"
+                    : row.channel === "pos"
+                      ? "online"
+                      : "online"
+                }
+              >
+                {row.channel === "pos" ? "POS" : row.channel}
+              </Badge>
                 </TD>
                 <TD className="font-semibold text-stone-900">{money(row.amount, row.currency)}</TD>
                 <TD className="text-xs text-stone-600">
