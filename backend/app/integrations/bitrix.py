@@ -23,6 +23,89 @@ SCOPE_HINTS = {
 }
 
 
+def _is_blank(value: Any) -> bool:
+    return value in (None, "", [], {}, 0, "0")
+
+
+def build_complete_lead_autofill_fields(
+    settings: Settings, lead: dict[str, Any], context: dict[str, Any]
+) -> dict[str, Any]:
+    """Populate Learners Point 'Complete lead' form fields before CONVERTED conversion.
+
+    Only fills empty fields — never overwrites values already set on the lead.
+    """
+    from datetime import date
+
+    fields: dict[str, Any] = {}
+
+    def set_if_empty(code: str | None, value: Any) -> None:
+        if not code or _is_blank(value):
+            return
+        if not _is_blank(lead.get(code)):
+            return
+        fields[code] = value
+
+    paid = (
+        context.get("amount_paid")
+        or context.get("payment_amount")
+        or context.get("total_amount")
+        or lead.get("OPPORTUNITY")
+    )
+    set_if_empty(settings.bitrix_field_complete_paid_amount, str(paid) if paid not in (None, "") else None)
+
+    name = context.get("customer_name")
+    if _is_blank(name):
+        name_parts = [lead.get("NAME"), lead.get("LAST_NAME")]
+        joined = " ".join(str(p).strip() for p in name_parts if p and str(p).strip())
+        name = joined or lead.get("TITLE")
+    set_if_empty(settings.bitrix_field_complete_student_name, name)
+    set_if_empty(
+        settings.bitrix_field_complete_enrollment_date, date.today().isoformat()
+    )
+    set_if_empty(
+        settings.bitrix_field_complete_schedule_finalized,
+        settings.bitrix_complete_schedule_finalized_enum,
+    )
+    set_if_empty(
+        settings.bitrix_field_complete_trainer_shared,
+        settings.bitrix_complete_trainer_shared_enum,
+    )
+    set_if_empty(
+        settings.bitrix_field_complete_student_type,
+        settings.bitrix_complete_student_type_enum,
+    )
+    set_if_empty(
+        settings.bitrix_field_complete_batch_type,
+        settings.bitrix_complete_batch_type_enum,
+    )
+    set_if_empty(
+        settings.bitrix_field_complete_ops_notes,
+        "Auto-filled on first successful payment by Finance Paymob (Complete lead).",
+    )
+
+    # Optional Complete-lead fields — only when context has a real value.
+    set_if_empty(
+        settings.bitrix_field_complete_credit_card, context.get("credit_card_no")
+    )
+    set_if_empty(settings.bitrix_field_complete_tenure, context.get("tenure_period"))
+
+    # TEMP: 2nd payment due date is remapped to Installment 3 Due Date UF.
+    # Copy from the legacy Installment 2 Due Date field when the remapped field is empty.
+    i2_field = settings.bitrix_field_installment_2_due_date
+    legacy = settings.bitrix_field_installment_2_due_date_legacy
+    if i2_field and legacy and i2_field != legacy:
+        legacy_val = lead.get(legacy)
+        if not _is_blank(legacy_val) and _is_blank(lead.get(i2_field)):
+            fields[i2_field] = str(legacy_val)[:10]
+    elif i2_field and _is_blank(lead.get(i2_field)):
+        # Context can also supply installment-2 due when legacy is empty.
+        due = context.get("installment_2_due_date") or context.get("second_payment_due_date")
+        if not _is_blank(due):
+            fields[i2_field] = str(due)[:10]
+
+    return fields
+
+
 class BitrixApiError(RuntimeError):
     """A Bitrix REST call failed; carries the reason Bitrix put in the body."""
 
@@ -207,6 +290,7 @@ class MockBitrixClient:
         return {"ID": deal_id, "TITLE": f"Deal {deal_id}", "STAGE_ID": "NEW"}
 
     async def convert_lead_to_sales_deal(self, lead_id: int, context: dict[str, Any]) -> int:
+        await self.prepare_lead_for_complete_conversion(lead_id, context)
         deal_id = self.MOCK_SALES_DEAL_BASE + lead_id
         lead = await self.get_lead(lead_id)
         pipeline_id = str(self.settings.bitrix_sales_pipeline_id or "16")
@@ -229,6 +313,17 @@ class MockBitrixClient:
             deal_id,
         )
         return deal_id
+
+    async def prepare_lead_for_complete_conversion(
+        self, lead_id: int, context: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not self.settings.bitrix_complete_lead_autofill_enabled:
+            return {}
+        lead = await self.get_lead(lead_id)
+        fields = build_complete_lead_autofill_fields(self.settings, lead, context)
+        if fields:
+            await self.update_lead_fields(lead_id, fields)
+        return fields
 
     async def create_finance_deal(self, lead_id: int, context: dict[str, Any]) -> int:
         deal_id = self.MOCK_FINANCE_DEAL_BASE + lead_id
@@ -266,6 +361,32 @@ class MockBitrixClient:
             invoice.invoice_id,
             deal_id,
         )
+
+    async def attach_lead_payment_proof_if_empty(
+        self,
+        lead_id: int,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> bool:
+        field = self.settings.bitrix_field_complete_payment_proof
+        if not field or not content:
+            return False
+        lead = await self.get_lead(lead_id)
+        if not _is_blank(lead.get(field)):
+            logger.info(
+                "[MockBitrix] Payment Proof already set on lead %s — leaving as-is",
+                lead_id,
+            )
+            return False
+        lead[field] = [{"name": filename, "size": len(content)}]
+        self._mock_leads[lead_id] = lead
+        logger.info(
+            "[MockBitrix] Attached invoice PDF as Payment Proof on lead %s | file=%s",
+            lead_id,
+            filename,
+        )
+        return True
 
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None:
         deal = await self.get_deal(deal_id)
@@ -597,8 +718,11 @@ class RealBitrixClient:
         return await self._call("crm.deal.get", {"id": deal_id})
 
     async def convert_lead_to_sales_deal(self, lead_id: int, context: dict[str, Any]) -> int:
-        """Convert the lead into a deal on the Sales pipeline (CATEGORY_ID=16)."""
+        """Fill Complete-lead form fields (empty only), convert like the Bitrix UI, Sales deal."""
+        await self.prepare_lead_for_complete_conversion(lead_id, context)
         pipeline_id = self._sales_pipeline_id()
+
+        # Prefer native convert (creates contact/company/deal + CONVERTED like the UI).
         try:
             result = await self._call(
                 "crm.lead.convert",
@@ -610,6 +734,7 @@ class RealBitrixClient:
             deal_ids = result.get("DEAL") or []
             if deal_ids:
                 deal_id = int(deal_ids[0] if isinstance(deal_ids, list) else deal_ids)
+                await self._ensure_lead_converted(lead_id, context)
                 logger.info(
                     "Converted lead %s via crm.lead.convert to Sales deal %s pipeline=%s",
                     lead_id,
@@ -619,14 +744,146 @@ class RealBitrixClient:
                 return deal_id
         except BitrixApiError as exc:
             if not self._is_missing_method(exc):
-                raise
-            logger.warning(
-                "crm.lead.convert unavailable (%s) — creating Sales deal with crm.deal.add | lead_id=%s",
-                exc.code,
+                logger.warning(
+                    "crm.lead.convert failed for lead %s (%s: %s) — "
+                    "falling back to Complete-lead STATUS_ID + Sales deal",
+                    lead_id,
+                    exc.code,
+                    exc.description,
+                )
+            else:
+                logger.warning(
+                    "crm.lead.convert unavailable (%s) — Complete-lead STATUS_ID + Sales deal | lead_id=%s",
+                    exc.code,
+                    lead_id,
+                )
+
+        # UI-style fallback: submit Complete-lead fields + STATUS_ID=CONVERTED together,
+        # then attach/create the Sales-pipeline deal.
+        await self._ensure_lead_converted(lead_id, context)
+        existing = await self._find_sales_deal_for_lead(lead_id, pipeline_id)
+        if existing:
+            logger.info(
+                "Lead %s already has Sales deal %s after CONVERTED — reusing",
+                lead_id,
+                existing,
+            )
+            return existing
+        return await self._create_sales_deal_from_lead(lead_id, pipeline_id)
+
+    async def prepare_lead_for_complete_conversion(
+        self, lead_id: int, context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Fill empty Complete-lead form fields only (mirrors the UI convert popup)."""
+        if not self.settings.bitrix_complete_lead_autofill_enabled:
+            return {}
+        lead = await self.get_lead(lead_id)
+        fields = build_complete_lead_autofill_fields(self.settings, lead, context)
+        if not fields:
+            logger.info(
+                "Complete lead autofill skipped for lead %s — required fields already set",
+                lead_id,
+            )
+            return {}
+        await self.update_lead_fields(lead_id, fields)
+        logger.info(
+            "Prepared Complete lead fields for lead %s | filled=%s",
+            lead_id,
+            list(fields),
+        )
+        return fields
+
+    async def _ensure_lead_converted(
+        self, lead_id: int, context: dict[str, Any] | None = None
+    ) -> None:
+        """Move lead to CONVERTED with any still-empty Complete-lead fields (UI form submit)."""
+        try:
+            lead = await self.get_lead(lead_id)
+            if str(lead.get("STATUS_ID") or "").upper() == "CONVERTED":
+                return
+            fields: dict[str, Any] = {}
+            if self.settings.bitrix_complete_lead_autofill_enabled:
+                fields = build_complete_lead_autofill_fields(
+                    self.settings, lead, context or {}
+                )
+            fields["STATUS_ID"] = "CONVERTED"
+            await self._call("crm.lead.update", {"id": lead_id, "fields": fields})
+            logger.info(
+                "Lead %s moved to CONVERTED (Complete lead) | extra_fields=%s",
+                lead_id,
+                [k for k in fields if k != "STATUS_ID"],
+            )
+        except Exception:
+            logger.exception(
+                "Lead %s could not be moved to CONVERTED (Complete lead) after deal create",
                 lead_id,
             )
 
-        return await self._create_sales_deal_from_lead(lead_id, pipeline_id)
+    async def _find_sales_deal_for_lead(self, lead_id: int, pipeline_id: int) -> int | None:
+        try:
+            result = await self._call(
+                "crm.deal.list",
+                {
+                    "filter": {"LEAD_ID": lead_id},
+                    "select": ["ID", "CATEGORY_ID", "LEAD_ID"],
+                    "order": {"ID": "DESC"},
+                },
+            )
+        except Exception:
+            logger.exception("Could not list deals for lead %s", lead_id)
+            return None
+
+        raw = self._scalar(result)
+        rows: list[Any]
+        if isinstance(raw, list):
+            rows = raw
+        elif isinstance(raw, dict):
+            rows = [raw] if raw.get("ID") or raw.get("id") else list(raw.values())
+        else:
+            rows = []
+
+        sales: list[int] = []
+        others: list[int] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                deal_id = int(row.get("ID") or row.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if deal_id <= 0:
+                continue
+            try:
+                cat = int(row.get("CATEGORY_ID") or 0)
+            except (TypeError, ValueError):
+                cat = 0
+            if cat == pipeline_id:
+                sales.append(deal_id)
+            else:
+                others.append(deal_id)
+        if sales:
+            return sales[0]
+        # Bitrix auto-deal from CONVERTED may land on default pipeline — retarget to Sales.
+        if others:
+            deal_id = others[0]
+            try:
+                await self._call(
+                    "crm.deal.update",
+                    {"id": deal_id, "fields": {"CATEGORY_ID": pipeline_id}},
+                )
+                logger.info(
+                    "Moved deal %s for lead %s onto Sales pipeline %s",
+                    deal_id,
+                    lead_id,
+                    pipeline_id,
+                )
+                return deal_id
+            except Exception:
+                logger.exception(
+                    "Could not move deal %s to Sales pipeline %s", deal_id, pipeline_id
+                )
+                return deal_id
+        return None
 
     def _sales_pipeline_id(self) -> int:
         raw = str(self.settings.bitrix_sales_pipeline_id or "16").strip()
@@ -663,14 +920,7 @@ class RealBitrixClient:
             {"fields": {key: value for key, value in fields.items() if value not in (None, "")}},
         )
         deal_id = int(self._scalar(result))
-        try:
-            await self._call("crm.lead.update", {"id": lead_id, "fields": {"STATUS_ID": "CONVERTED"}})
-        except Exception:
-            logger.exception(
-                "Sales deal %s created but lead %s could not be moved to CONVERTED (Complete lead)",
-                deal_id,
-                lead_id,
-            )
+        await self._ensure_lead_converted(lead_id, {})
         logger.info(
             "Created Sales deal %s from lead %s pipeline=%s (crm.deal.add fallback)",
             deal_id,
@@ -707,6 +957,47 @@ class RealBitrixClient:
             self.settings.bitrix_field_invoice_url: invoice.pdf_url or invoice.pdf_path,
         }
         await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
+
+    async def attach_lead_payment_proof_if_empty(
+        self,
+        lead_id: int,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> bool:
+        """Set Complete-lead Payment Proof file UF to the invoice PDF when empty."""
+        import base64
+
+        field = (self.settings.bitrix_field_complete_payment_proof or "").strip()
+        if not field or not content:
+            return False
+        lead = await self.get_lead(lead_id)
+        if not _is_blank(lead.get(field)):
+            logger.info(
+                "Payment Proof already set on lead %s — not overwriting with invoice",
+                lead_id,
+            )
+            return False
+
+        # Bitrix file userfields accept [[filename, base64content], ...]
+        safe_name = (filename or "Invoice.pdf").strip() or "Invoice.pdf"
+        await self._call(
+            "crm.lead.update",
+            {
+                "id": lead_id,
+                "fields": {
+                    field: [[safe_name, base64.b64encode(content).decode("ascii")]],
+                },
+            },
+        )
+        logger.info(
+            "Attached invoice PDF as Complete-lead Payment Proof | lead=%s field=%s file=%s bytes=%s",
+            lead_id,
+            field,
+            safe_name,
+            len(content),
+        )
+        return True
 
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None:
         fields = {

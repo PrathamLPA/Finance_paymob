@@ -77,9 +77,30 @@ class Settings(BaseSettings):
     bitrix_field_installment_3: str = "UF_CRM_1684380201"
     bitrix_field_installment_4: str = "UF_CRM_1684380220"
     bitrix_field_installment_1_date: str = "UF_CRM_1684373986749"
-    bitrix_field_installment_2_due_date: str = "UF_CRM_1684374142163"
+    # TEMP: 2nd payment due date reads/writes Installment 3 Due Date until Ops remaps.
+    bitrix_field_installment_2_due_date: str = "UF_CRM_1684374296635"
     bitrix_field_installment_3_due_date: str = "UF_CRM_1684374296635"
     bitrix_field_installment_4_due_date: str = "UF_CRM_1684374497754"
+    # Previous Installment 2 Due Date — used to migrate values into the TEMP field above
+    bitrix_field_installment_2_due_date_legacy: str = "UF_CRM_1684374142163"
+    # Complete lead (CONVERTED) required-form fields — Learners Point portal
+    bitrix_field_complete_schedule_finalized: str = "UF_CRM_1771500430277"
+    bitrix_field_complete_paid_amount: str = "UF_CRM_1771500781458"
+    bitrix_field_complete_trainer_shared: str = "UF_CRM_1771501047627"
+    bitrix_field_complete_ops_notes: str = "UF_CRM_1771501226065"
+    bitrix_field_complete_student_name: str = "UF_CRM_1771503330575"
+    bitrix_field_complete_enrollment_date: str = "UF_CRM_1771503410009"
+    bitrix_field_complete_credit_card: str = "UF_CRM_1772016277089"
+    bitrix_field_complete_tenure: str = "UF_CRM_1772019664771"
+    bitrix_field_complete_student_type: str = "UF_CRM_1772454738552"
+    bitrix_field_complete_batch_type: str = "UF_CRM_1772455024093"
+    bitrix_field_complete_payment_proof: str = "UF_CRM_1775466638710"
+    # Enum defaults when auto-filling Complete lead (Yes/No / B2C / Public Batch)
+    bitrix_complete_schedule_finalized_enum: str = "12912"  # No
+    bitrix_complete_trainer_shared_enum: str = "12916"  # No
+    bitrix_complete_student_type_enum: str = "13198"  # B2C
+    bitrix_complete_batch_type_enum: str = "13200"  # Public Batch
+    bitrix_complete_lead_autofill_enabled: bool = True
     # Payment mode fields (enumeration — not amounts)
     bitrix_field_payment_1_mode: str = "UF_CRM_1684373954405"
     bitrix_field_payment_2_mode: str = "UF_CRM_1684374103659"

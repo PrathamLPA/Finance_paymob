@@ -86,6 +86,14 @@ class BitrixIntegration(Protocol):
 
     async def attach_invoice_reference(self, deal_id: int, invoice: InvoiceReference) -> None: ...
 
+    async def attach_lead_payment_proof_if_empty(
+        self,
+        lead_id: int,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> bool: ...
+
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None: ...
 
     async def set_deal_payment_link(self, deal_id: int, payment_url: str) -> None: ...

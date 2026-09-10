@@ -1521,6 +1521,8 @@ class WorkflowOrchestrator:
             "customer_email": workflow.customer_email,
             "customer_name": workflow.customer_name,
             "total_amount": str(workflow.total_amount),
+            "amount_paid": str(workflow.amount_paid),
+            "payment_amount": str(workflow.amount_paid),
             "currency": workflow.currency,
         }
 
