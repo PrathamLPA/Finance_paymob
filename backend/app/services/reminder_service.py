@@ -18,6 +18,7 @@ from app.services.installment_notices import (
     is_installment_plan,
     next_due_installment,
     today_in_dubai,
+    unpaid_installment_by_number,
 )
 from app.services.payment_session_service import PaymentSessionService
 
@@ -123,7 +124,13 @@ class ReminderService:
                 seen.add(workflow.id)
         return due
 
-    async def send_reminder(self, workflow: CustomerWorkflow) -> PaymentSession | None:
+    async def send_reminder(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        early_days: int = 0,
+        force_installment_number: int | None = None,
+    ) -> PaymentSession | None:
         from app.services.installment_plan import resolve_first_charge_for_workflow
         from app.services.workflow_orchestrator import WorkflowOrchestrator
 
@@ -149,6 +156,8 @@ class ReminderService:
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
+        if force_installment_number is not None:
+            installment_number = force_installment_number
 
         from app.services.payment_mode import (
             resolve_is_bank_transfer_payment_mode,
@@ -268,12 +277,22 @@ class ReminderService:
             workflow.customer_email = client_email
 
         slot = None
-        if self.settings.installment_due_notices_enabled and is_installment_plan(lead, self.settings):
+        if force_installment_number is not None:
+            slot = unpaid_installment_by_number(
+                lead,
+                self.settings,
+                amount_paid=workflow.amount_paid,
+                installment_number=force_installment_number,
+            )
+            if slot and str(slot.number) in self._notices_sent(workflow):
+                slot = None
+        elif self.settings.installment_due_notices_enabled and is_installment_plan(lead, self.settings):
             slot = next_due_installment(
                 lead,
                 self.settings,
                 amount_paid=workflow.amount_paid,
                 today=today_in_dubai(),
+                early_days=early_days,
             )
             if slot and str(slot.number) in self._notices_sent(workflow):
                 slot = None
@@ -340,6 +359,125 @@ class ReminderService:
             refreshing_expired,
         )
         return session
+
+    async def process_bitrix_installment_due(
+        self,
+        finance_deal_id: int,
+        *,
+        installment_number: int | None = None,
+    ) -> dict:
+        """Issue Paymob link + client email when Bitrix BP fires for an installment due date.
+
+        Independent of ``installment_due_notices_enabled`` (that flag only gates the poller).
+        Idempotent per installment number via ``installment_notices_sent``.
+        """
+        from app.services.workflow_orchestrator import WorkflowOrchestrator
+
+        orchestrator = WorkflowOrchestrator(self.db, self.settings)
+        workflow = orchestrator.get_workflow_by_finance_deal(finance_deal_id)
+        if not workflow:
+            raise ValueError(f"No workflow found for finance deal {finance_deal_id}")
+
+        if not self._has_open_balance(workflow):
+            return {
+                "status": "ignored",
+                "reason": "already_paid",
+                "workflow_id": workflow.id,
+            }
+
+        lead = self._lead_payload(workflow)
+        try:
+            fresh = await self.bitrix.get_lead(workflow.bitrix_lead_id)
+            if fresh:
+                lead = fresh
+                await orchestrator.sync_workflow_from_lead(workflow, lead=fresh)
+        except Exception:
+            logger.exception(
+                "Could not refresh Bitrix lead %s for installment-due deal %s",
+                workflow.bitrix_lead_id,
+                finance_deal_id,
+            )
+
+        if not is_installment_plan(lead, self.settings):
+            return {
+                "status": "ignored",
+                "reason": "not_installment_plan",
+                "workflow_id": workflow.id,
+            }
+
+        # Bitrix Pause wakes 1 day before due — allow early_days=1.
+        if installment_number is not None:
+            slot = unpaid_installment_by_number(
+                lead,
+                self.settings,
+                amount_paid=workflow.amount_paid,
+                installment_number=installment_number,
+            )
+            if slot is None:
+                return {
+                    "status": "ignored",
+                    "reason": "installment_already_paid_or_missing",
+                    "workflow_id": workflow.id,
+                    "installment_number": installment_number,
+                }
+        else:
+            slot = next_due_installment(
+                lead,
+                self.settings,
+                amount_paid=workflow.amount_paid,
+                today=today_in_dubai(),
+                early_days=1,
+            )
+
+        if slot is None:
+            return {
+                "status": "ignored",
+                "reason": "no_unpaid_installment_due",
+                "workflow_id": workflow.id,
+            }
+
+        if str(slot.number) in self._notices_sent(workflow):
+            return {
+                "status": "ignored",
+                "reason": "notice_already_sent",
+                "workflow_id": workflow.id,
+                "installment_number": slot.number,
+            }
+
+        # Reuse send_reminder charge/email path (poller flag does not gate this webhook).
+        session = await self.send_reminder(
+            workflow,
+            early_days=1,
+            force_installment_number=slot.number,
+        )
+
+        payment_url = None
+        if session is not None:
+            payment_url = self.session_service.build_payment_url(session.token)
+        elif workflow.finance_deal_id:
+            try:
+                deal = await self.bitrix.get_deal(workflow.finance_deal_id)
+                payment_url = (deal or {}).get(self.settings.bitrix_field_payment_link)
+            except Exception:
+                payment_url = None
+
+        # send_reminder marks notices_sent when it emailed the installment slot.
+        self.db.refresh(workflow)
+        if str(slot.number) not in self._notices_sent(workflow) and payment_url:
+            sent = self._notices_sent(workflow)
+            sent[str(slot.number)] = slot.due_date.isoformat()
+            workflow.installment_notices_sent = sent
+            flag_modified(workflow, "installment_notices_sent")
+            self.db.commit()
+
+        return {
+            "status": "processed",
+            "source": "bitrix_installment_due",
+            "workflow_id": workflow.id,
+            "installment_number": slot.number,
+            "due_date": slot.due_date.isoformat(),
+            "payment_url": payment_url,
+        }
 
     async def process_due_reminders(self) -> dict:
         open_workflows = self.db.scalars(

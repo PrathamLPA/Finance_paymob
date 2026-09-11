@@ -104,8 +104,13 @@ def next_due_installment(
     *,
     amount_paid: Decimal,
     today: date | None = None,
+    early_days: int = 0,
 ) -> InstallmentSlot | None:
-    """Earliest unpaid installment whose due date has arrived (Dubai date)."""
+    """Earliest unpaid installment whose due date has arrived (Dubai date).
+
+    ``early_days`` allows matching slightly before the due date (e.g. Bitrix BP
+    that wakes 1 day early with ``early_days=1``).
+    """
     today = today or today_in_dubai()
     paid = amount_paid or Decimal("0")
     cumulative = Decimal("0")
@@ -118,7 +123,35 @@ def next_due_installment(
             still_unpaid = True
         if not still_unpaid:
             continue
-        if today >= slot.due_date:
+        threshold = slot.due_date
+        if early_days:
+            from datetime import timedelta
+
+            threshold = slot.due_date - timedelta(days=early_days)
+        if today >= threshold:
             return slot
         return None
+    return None
+
+
+def unpaid_installment_by_number(
+    entity: dict[str, Any] | None,
+    settings: Settings,
+    *,
+    amount_paid: Decimal,
+    installment_number: int,
+) -> InstallmentSlot | None:
+    """Return the installment slot if it exists and is still unpaid."""
+    paid = amount_paid or Decimal("0")
+    cumulative = Decimal("0")
+    for slot in installment_schedule(entity, settings):
+        piece = slot.amount or Decimal("0")
+        if piece > 0:
+            cumulative += piece
+            still_unpaid = paid < cumulative
+        else:
+            still_unpaid = True
+        if slot.number != installment_number:
+            continue
+        return slot if still_unpaid else None
     return None

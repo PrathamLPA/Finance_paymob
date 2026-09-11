@@ -27,16 +27,42 @@ def _is_blank(value: Any) -> bool:
     return value in (None, "", [], {}, 0, "0")
 
 
+def _as_bitrix_date(value: Any) -> str | None:
+    if _is_blank(value):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:10]
+
+
+def _as_bitrix_money(value: Any, currency: str = "AED") -> str | None:
+    if _is_blank(value):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "|" in text:
+        return text
+    try:
+        amount = Decimal(text.replace(",", "").replace("AED", "").strip())
+    except Exception:
+        return text
+    return f"{amount.quantize(Decimal('0.01'))}|{(currency or 'AED').strip() or 'AED'}"
+
+
 def build_complete_lead_autofill_fields(
     settings: Settings, lead: dict[str, Any], context: dict[str, Any]
 ) -> dict[str, Any]:
     """Populate Learners Point 'Complete lead' form fields before CONVERTED conversion.
 
     Only fills empty fields — never overwrites values already set on the lead.
+    Prefer values already on the lead card / payment section; fall back to payment context.
     """
     from datetime import date
 
     fields: dict[str, Any] = {}
+    currency = str(context.get("currency") or lead.get("CURRENCY_ID") or "AED")
 
     def set_if_empty(code: str | None, value: Any) -> None:
         if not code or _is_blank(value):
@@ -45,14 +71,87 @@ def build_complete_lead_autofill_fields(
             return
         fields[code] = value
 
+    # --- Paid / total ---
     paid = (
         context.get("amount_paid")
         or context.get("payment_amount")
         or context.get("total_amount")
         or lead.get("OPPORTUNITY")
     )
-    set_if_empty(settings.bitrix_field_complete_paid_amount, str(paid) if paid not in (None, "") else None)
+    set_if_empty(
+        settings.bitrix_field_complete_paid_amount,
+        str(paid).split("|")[0].strip() if paid not in (None, "") else None,
+    )
+    total = (
+        context.get("total_amount")
+        or lead.get("OPPORTUNITY")
+        or context.get("product_total")
+    )
+    # Lead Payment Section "Total Amount_" (UF_CRM_1684374599490) + legacy deal total UF if empty
+    set_if_empty(
+        settings.bitrix_field_lead_total_amount, _as_bitrix_money(total, currency)
+    )
+    set_if_empty(settings.bitrix_field_total_amount, _as_bitrix_money(total, currency))
+    if _is_blank(lead.get("OPPORTUNITY")) and not _is_blank(total):
+        try:
+            fields["OPPORTUNITY"] = str(
+                Decimal(str(total).split("|")[0].replace(",", "").strip())
+            )
+        except Exception:
+            fields["OPPORTUNITY"] = str(total).split("|")[0]
 
+    # Dedicated comment UF on Complete-lead form (in addition to standard COMMENTS)
+    set_if_empty(
+        settings.bitrix_field_complete_comment_uf,
+        context.get("comment")
+        or (
+            "Auto-completed on first payment via Finance Paymob."
+            + (
+                f" Course: {context.get('course_title')}"
+                if context.get("course_title")
+                else ""
+            )
+        ),
+    )
+
+    # Training / ops fields — keep lead values; placeholder only for configured string UFs.
+    set_if_empty(
+        settings.bitrix_field_training_start_date,
+        _as_bitrix_date(context.get("training_start_date")),
+    )
+    set_if_empty(
+        settings.bitrix_field_training_mode,
+        context.get("training_mode_enum") or settings.bitrix_complete_training_mode_enum,
+    )
+    set_if_empty(
+        settings.bitrix_field_industry_domain,
+        context.get("industry_domain_enum")
+        or settings.bitrix_complete_industry_domain_enum,
+    )
+    set_if_empty(
+        settings.bitrix_field_department_training,
+        context.get("department_enum") or settings.bitrix_complete_department_enum,
+    )
+    set_if_empty(
+        settings.bitrix_field_mode_of_training,
+        context.get("mode_of_training_enum")
+        or settings.bitrix_complete_mode_of_training_enum,
+    )
+    # String ops fields — lead value wins; else context; else placeholder list below.
+    for code, value in (
+        (settings.bitrix_field_company_website, context.get("company_website")),
+        (settings.bitrix_field_designation, context.get("designation")),
+        (settings.bitrix_field_course_duration, context.get("course_duration")),
+        (settings.bitrix_field_class_timing, context.get("class_timing")),
+        (settings.bitrix_field_study_materials, context.get("study_materials")),
+        (
+            settings.bitrix_field_certificates_promised,
+            context.get("certificates_promised"),
+        ),
+    ):
+        set_if_empty(code, value)
+
+    # --- Student / enrollment / Complete-lead enums ---
     name = context.get("customer_name")
     if _is_blank(name):
         name_parts = [lead.get("NAME"), lead.get("LAST_NAME")]
@@ -82,28 +181,84 @@ def build_complete_lead_autofill_fields(
         settings.bitrix_field_complete_ops_notes,
         "Auto-filled on first successful payment by Finance Paymob (Complete lead).",
     )
-
-    # Optional Complete-lead fields — only when context has a real value.
     set_if_empty(
         settings.bitrix_field_complete_credit_card, context.get("credit_card_no")
     )
     set_if_empty(settings.bitrix_field_complete_tenure, context.get("tenure_period"))
 
-    # TEMP: 2nd payment due date is remapped to Installment 3 Due Date UF.
-    # Copy from the legacy Installment 2 Due Date field when the remapped field is empty.
+    # --- Comments (required on Complete lead at Learners Point) ---
+    if _is_blank(lead.get("COMMENTS")):
+        course = context.get("course_title") or context.get("product_names") or ""
+        comment = context.get("comment") or (
+            f"Auto-completed on first payment via Finance Paymob."
+            + (f" Course: {course}" if course else "")
+        )
+        fields["COMMENTS"] = comment
+
+    # --- Payment section: keep lead-card values; fill empties from context ---
+    set_if_empty(
+        settings.bitrix_field_installment_1,
+        _as_bitrix_money(
+            context.get("installment_1_amount") or context.get("amount_paid") or paid,
+            currency,
+        ),
+    )
+    set_if_empty(
+        settings.bitrix_field_installment_2,
+        _as_bitrix_money(context.get("installment_2_amount"), currency),
+    )
+    set_if_empty(
+        settings.bitrix_field_installment_3,
+        _as_bitrix_money(context.get("installment_3_amount"), currency),
+    )
+    set_if_empty(
+        settings.bitrix_field_installment_4,
+        _as_bitrix_money(context.get("installment_4_amount"), currency),
+    )
+    set_if_empty(
+        settings.bitrix_field_installment_1_date,
+        _as_bitrix_date(context.get("installment_1_date")) or date.today().isoformat(),
+    )
+    set_if_empty(
+        settings.bitrix_field_payment_1_mode,
+        context.get("payment_1_mode_enum") or context.get("payment_mode_enum"),
+    )
+
+    # Number of installments — keep lead value; else from context enum id.
+    set_if_empty(
+        settings.bitrix_field_installment_count,
+        context.get("installment_count_enum"),
+    )
+
+    # TEMP: 2nd payment due date remapped to Installment 3 Due Date UF.
     i2_field = settings.bitrix_field_installment_2_due_date
     legacy = settings.bitrix_field_installment_2_due_date_legacy
     if i2_field and legacy and i2_field != legacy:
         legacy_val = lead.get(legacy)
         if not _is_blank(legacy_val) and _is_blank(lead.get(i2_field)):
-            fields[i2_field] = str(legacy_val)[:10]
-    elif i2_field and _is_blank(lead.get(i2_field)):
-        # Context can also supply installment-2 due when legacy is empty.
+            fields[i2_field] = _as_bitrix_date(legacy_val)
+    if i2_field and _is_blank(lead.get(i2_field)) and i2_field not in fields:
         due = context.get("installment_2_due_date") or context.get("second_payment_due_date")
-        if not _is_blank(due):
-            fields[i2_field] = str(due)[:10]
+        set_if_empty(i2_field, _as_bitrix_date(due))
 
-    return fields
+    set_if_empty(
+        settings.bitrix_field_installment_3_due_date,
+        _as_bitrix_date(context.get("installment_3_due_date")),
+    )
+    set_if_empty(
+        settings.bitrix_field_installment_4_due_date,
+        _as_bitrix_date(context.get("installment_4_due_date")),
+    )
+
+    # Extra required Complete-lead string UFs (Designation, Course Duration, etc.)
+    # when empty: use lead value under same code (already checked) or placeholder.
+    placeholder = (settings.bitrix_complete_required_placeholder or "").strip()
+    extra = (settings.bitrix_complete_required_string_fields or "").strip()
+    if placeholder and extra:
+        for code in [c.strip() for c in extra.split(",") if c.strip()]:
+            set_if_empty(code, placeholder)
+
+    return {k: v for k, v in fields.items() if v is not None}
 
 
 class BitrixApiError(RuntimeError):
@@ -306,6 +461,7 @@ class MockBitrixClient:
         }
         lead["STATUS_ID"] = "CONVERTED"
         self._mock_leads[lead_id] = lead
+        await self.copy_lead_products_to_deal(lead_id, deal_id)
         logger.info(
             "[MockBitrix] Converted lead %s to Sales pipeline %s deal %s",
             lead_id,
@@ -538,6 +694,19 @@ class MockBitrixClient:
             "[MockBitrix] Set lead %s product rows=%s", lead_id, len(product_rows)
         )
 
+    async def copy_lead_products_to_deal(self, lead_id: int, deal_id: int) -> int:
+        rows = list(self._mock_product_rows.get(("L", lead_id), []))
+        if not rows:
+            return 0
+        self._mock_product_rows[("D", deal_id)] = [dict(row) for row in rows]
+        logger.info(
+            "[MockBitrix] Copied %s product rows from lead %s to deal %s",
+            len(rows),
+            lead_id,
+            deal_id,
+        )
+        return len(rows)
+
     async def get_user(self, user_id: int) -> dict[str, Any] | None:
         return self._mock_users.get(user_id)
 
@@ -735,6 +904,7 @@ class RealBitrixClient:
             if deal_ids:
                 deal_id = int(deal_ids[0] if isinstance(deal_ids, list) else deal_ids)
                 await self._ensure_lead_converted(lead_id, context)
+                await self.copy_lead_products_to_deal(lead_id, deal_id)
                 logger.info(
                     "Converted lead %s via crm.lead.convert to Sales deal %s pipeline=%s",
                     lead_id,
@@ -763,22 +933,64 @@ class RealBitrixClient:
         await self._ensure_lead_converted(lead_id, context)
         existing = await self._find_sales_deal_for_lead(lead_id, pipeline_id)
         if existing:
+            await self.copy_lead_products_to_deal(lead_id, existing)
             logger.info(
                 "Lead %s already has Sales deal %s after CONVERTED — reusing",
                 lead_id,
                 existing,
             )
             return existing
-        return await self._create_sales_deal_from_lead(lead_id, pipeline_id)
+        deal_id = await self._create_sales_deal_from_lead(lead_id, pipeline_id)
+        await self.copy_lead_products_to_deal(lead_id, deal_id)
+        return deal_id
 
     async def prepare_lead_for_complete_conversion(
         self, lead_id: int, context: dict[str, Any]
     ) -> dict[str, Any]:
-        """Fill empty Complete-lead form fields only (mirrors the UI convert popup)."""
+        """Fill empty Complete-lead form fields from lead card + payment context."""
         if not self.settings.bitrix_complete_lead_autofill_enabled:
             return {}
         lead = await self.get_lead(lead_id)
-        fields = build_complete_lead_autofill_fields(self.settings, lead, context)
+        enriched = dict(context or {})
+
+        # Pull product rows from the lead card so totals/names can fill empties.
+        try:
+            rows = await self.list_product_rows(owner_type="L", owner_id=lead_id)
+        except Exception:
+            logger.exception("Could not list lead %s products for Complete-lead autofill", lead_id)
+            rows = []
+        if rows:
+            names: list[str] = []
+            total = Decimal("0.00")
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                name = (
+                    row.get("productName")
+                    or row.get("PRODUCT_NAME")
+                    or row.get("name")
+                    or ""
+                )
+                if name:
+                    names.append(str(name))
+                raw_price = row.get("price") if "price" in row else row.get("PRICE")
+                raw_qty = row.get("quantity") if "quantity" in row else row.get("QUANTITY") or 1
+                try:
+                    price = Decimal(str(raw_price or "0").replace(",", "").split("|")[0])
+                    qty = Decimal(str(raw_qty or "1").replace(",", ""))
+                    total += price * qty
+                except Exception:
+                    continue
+            if names and not enriched.get("product_names"):
+                enriched["product_names"] = ", ".join(names[:5])
+            if names and not enriched.get("course_title"):
+                enriched["course_title"] = names[0]
+            if total > 0 and not enriched.get("product_total"):
+                enriched["product_total"] = str(total.quantize(Decimal("0.01")))
+            if total > 0 and not enriched.get("total_amount"):
+                enriched["total_amount"] = str(total.quantize(Decimal("0.01")))
+
+        fields = build_complete_lead_autofill_fields(self.settings, lead, enriched)
         if not fields:
             logger.info(
                 "Complete lead autofill skipped for lead %s — required fields already set",
@@ -1293,6 +1505,88 @@ class RealBitrixClient:
             {"id": lead_id, "rows": cleaned_rows},
         )
         logger.info("Set Bitrix lead %s product rows=%s", lead_id, len(cleaned_rows))
+
+    async def copy_lead_products_to_deal(self, lead_id: int, deal_id: int) -> int:
+        """Copy lead product rows onto the Sales deal (Complete-lead convert must keep products)."""
+        if not self.settings.bitrix_complete_copy_products_to_deal:
+            return 0
+        try:
+            rows = await self.list_product_rows(owner_type="L", owner_id=lead_id)
+        except Exception:
+            logger.exception("Could not list products on lead %s for deal copy", lead_id)
+            return 0
+        if not rows:
+            logger.info("No product rows on lead %s to copy to deal %s", lead_id, deal_id)
+            return 0
+
+        modern_rows: list[dict[str, Any]] = []
+        legacy_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            product_id = row.get("productId") or row.get("PRODUCT_ID")
+            price = row.get("price") if "price" in row else row.get("PRICE")
+            quantity = row.get("quantity") if "quantity" in row else row.get("QUANTITY") or 1
+            tax_rate = row.get("taxRate") if "taxRate" in row else row.get("TAX_RATE")
+            tax_included = (
+                row.get("taxIncluded") if "taxIncluded" in row else row.get("TAX_INCLUDED")
+            )
+            product_name = (
+                row.get("productName") or row.get("PRODUCT_NAME") or row.get("name")
+            )
+            modern = {
+                k: v
+                for k, v in {
+                    "productId": product_id,
+                    "price": price,
+                    "quantity": quantity,
+                    "taxRate": tax_rate,
+                    "taxIncluded": tax_included,
+                    "productName": product_name,
+                }.items()
+                if v is not None
+            }
+            legacy = {
+                k: v
+                for k, v in {
+                    "PRODUCT_ID": product_id,
+                    "PRICE": price,
+                    "QUANTITY": quantity,
+                    "TAX_RATE": tax_rate,
+                    "TAX_INCLUDED": tax_included,
+                    "PRODUCT_NAME": product_name,
+                }.items()
+                if v is not None
+            }
+            if modern:
+                modern_rows.append(modern)
+            if legacy:
+                legacy_rows.append(legacy)
+
+        if not modern_rows and not legacy_rows:
+            return 0
+
+        try:
+            await self._call(
+                "crm.item.productrow.set",
+                {
+                    "ownerType": "D",
+                    "ownerId": deal_id,
+                    "productRows": modern_rows or legacy_rows,
+                },
+            )
+        except BitrixApiError:
+            await self._call(
+                "crm.deal.productrows.set",
+                {"id": deal_id, "rows": legacy_rows or modern_rows},
+            )
+        logger.info(
+            "Copied %s product row(s) from lead %s to deal %s",
+            len(modern_rows or legacy_rows),
+            lead_id,
+            deal_id,
+        )
+        return len(modern_rows or legacy_rows)
 
     async def get_user(self, user_id: int) -> dict[str, Any] | None:
         try:

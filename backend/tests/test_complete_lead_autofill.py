@@ -47,19 +47,44 @@ def test_complete_lead_autofill_fills_empty_only_and_copies_i2_due():
     assert "UF_NOTES" in fields
 
 
-def test_complete_lead_autofill_skips_blank_optional_fields():
+def test_complete_lead_autofill_fills_payment_section_and_comments():
     settings = Settings(
         bitrix_field_complete_paid_amount="UF_PAID",
-        bitrix_field_complete_credit_card="UF_CC",
-        bitrix_field_complete_tenure="UF_TENURE",
-        bitrix_field_installment_2_due_date="UF_I2",
-        bitrix_field_installment_2_due_date_legacy="UF_I2_LEGACY",
+        bitrix_field_complete_student_name="UF_NAME",
+        bitrix_field_total_amount="UF_TOTAL",
+        bitrix_field_installment_1="UF_I1",
+        bitrix_field_installment_1_date="UF_I1_DATE",
+        bitrix_field_installment_2_due_date="UF_CRM_1684374296635",
+        bitrix_field_installment_2_due_date_legacy="UF_CRM_1684374142163",
+        bitrix_complete_required_string_fields="UF_DESIGNATION,UF_DURATION",
+        bitrix_complete_required_placeholder="To be confirmed by Ops",
     )
-    lead = {"OPPORTUNITY": "100"}
-    fields = build_complete_lead_autofill_fields(settings, lead, {"total_amount": "100"})
-    assert fields.get("UF_PAID") == "100"
-    assert "UF_CC" not in fields
-    assert "UF_TENURE" not in fields
+    lead = {
+        "TITLE": "Sabith",
+        "OPPORTUNITY": "",
+        "COMMENTS": "",
+        "UF_CRM_1684374142163": "2026-09-30T03:00:00+03:00",
+        "UF_DESIGNATION": "",
+    }
+    fields = build_complete_lead_autofill_fields(
+        settings,
+        lead,
+        {
+            "customer_name": "Abinand",
+            "amount_paid": "1.00",
+            "total_amount": "2.10",
+            "currency": "AED",
+            "course_title": "CMA",
+        },
+    )
+    assert fields["UF_PAID"] == "1.00"
+    assert fields["UF_TOTAL"] == "2.10|AED"
+    assert fields["UF_I1"] == "1.00|AED"
+    assert fields["UF_CRM_1684374296635"] == "2026-09-30"
+    assert "CMA" in fields["COMMENTS"]
+    assert fields["UF_DESIGNATION"] == "To be confirmed by Ops"
+    assert fields["UF_DURATION"] == "To be confirmed by Ops"
+    assert fields["OPPORTUNITY"] == "2.10"
 
 
 def test_mock_attach_lead_payment_proof_if_empty_only_once():

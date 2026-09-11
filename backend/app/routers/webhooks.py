@@ -149,7 +149,11 @@ async def _read_payload(request: Request) -> dict[str, Any]:
 
 
 def _authorize(request: Request, payload: dict[str, Any]) -> None:
-    """Accept either the Bitrix application token or the legacy header secret."""
+    """Accept Bitrix application token, header secret, or query token.
+
+    Business Process Outbound webhook often cannot set custom headers, so the
+    Handler URL may include ``?token=<BITRIX_WEBHOOK_SECRET>``.
+    """
     settings = get_settings()
     expected = settings.bitrix_webhook_secret
     if not expected:
@@ -158,8 +162,9 @@ def _authorize(request: Request, payload: dict[str, Any]) -> None:
     auth = payload.get("auth") or {}
     application_token = auth.get("application_token") or payload.get("application_token")
     header_secret = request.headers.get("X-Webhook-Secret")
+    query_token = request.query_params.get("token") or request.query_params.get("secret")
 
-    if application_token == expected or header_secret == expected:
+    if application_token == expected or header_secret == expected or query_token == expected:
         return
 
     logger.warning(
@@ -168,6 +173,21 @@ def _authorize(request: Request, payload: dict[str, Any]) -> None:
     )
     raise HTTPException(status_code=401, detail="Invalid webhook token")
 
+
+def _extract_installment_number(request: Request, payload: dict[str, Any]) -> int | None:
+    raw = (
+        request.query_params.get("installment")
+        or request.query_params.get("installment_number")
+        or payload.get("installment")
+        or payload.get("installment_number")
+    )
+    if raw in (None, ""):
+        return None
+    try:
+        number = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 1 else None
 
 def _fields(payload: dict[str, Any]) -> dict[str, Any]:
     data = payload.get("data") or {}
@@ -264,6 +284,77 @@ async def _fetch_lead(orchestrator: WorkflowOrchestrator, lead_id: int) -> dict[
         raise HTTPException(status_code=502, detail="Could not fetch lead from Bitrix") from exc
     _log_bitrix_entity("lead", lead_id, lead)
     return lead
+
+
+@router.post("/bitrix24/installment-due")
+async def bitrix24_installment_due(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Bitrix BP Outbound webhook: wake on installment due (−1 day), issue Paymob link + email.
+
+    Handler URL example (paste into Bitrix Outbound webhook activity)::
+
+        {PUBLIC_BASE_URL}/webhooks/bitrix24/installment-due?deal_id={=Document:ID}&installment=2&token={BITRIX_WEBHOOK_SECRET}
+
+    ``document_id`` from Bitrix BP/robot payloads is also accepted when ``deal_id`` is omitted.
+    """
+    from app.services.reminder_service import ReminderService
+
+    request_id = uuid4().hex[:12]
+    payload = await _read_payload(request)
+    _authorize(request, payload)
+
+    deal_id = None
+    raw_deal = request.query_params.get("deal_id") or payload.get("deal_id")
+    if raw_deal not in (None, ""):
+        try:
+            deal_id = int(raw_deal)
+        except (TypeError, ValueError):
+            deal_id = None
+    if not deal_id:
+        deal_id = _extract_deal_id(payload)
+
+    installment_number = _extract_installment_number(request, payload)
+    logger.info(
+        "Bitrix installment-due webhook | request_id=%s deal_id=%s installment=%s",
+        request_id,
+        deal_id or "-",
+        installment_number or "auto",
+    )
+    if not deal_id:
+        return {"status": "ignored", "reason": "missing_deal_id", "request_id": request_id}
+
+    try:
+        db.commit()
+        result = await ReminderService(db).process_bitrix_installment_due(
+            deal_id,
+            installment_number=installment_number,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Bitrix installment-due failed | request_id=%s deal_id=%s reason=%s",
+            request_id,
+            deal_id,
+            exc,
+        )
+        return {
+            "status": "error",
+            "reason": str(exc),
+            "deal_id": deal_id,
+            "request_id": request_id,
+        }
+    except Exception:
+        logger.exception(
+            "Bitrix installment-due crashed | request_id=%s deal_id=%s",
+            request_id,
+            deal_id,
+        )
+        raise HTTPException(status_code=500, detail="Installment due processing failed")
+
+    result["request_id"] = request_id
+    result["deal_id"] = deal_id
+    return result
 
 
 @router.post("/bitrix24")

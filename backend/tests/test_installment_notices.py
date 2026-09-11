@@ -54,7 +54,9 @@ def test_parse_bitrix_date_formats():
     assert parse_bitrix_date("2026-08-24T00:00:00+04:00") == date(2026, 8, 24)
 
 
-def test_installment_due_date_emails_client_from_uf_field(client, seed_lead, db_session):
+def test_installment_due_date_emails_client_from_uf_field(client, seed_lead, db_session, monkeypatch):
+    monkeypatch.setenv("INSTALLMENT_DUE_NOTICES_ENABLED", "true")
+    get_settings.cache_clear()
     settings = get_settings()
     seed_lead(306, email="crm-email@test.com", amount=Decimal("1500"))
     bitrix = get_bitrix_client()
@@ -118,6 +120,7 @@ def test_installment_due_date_emails_client_from_uf_field(client, seed_lead, db_
 
     db_session.refresh(workflow)
     assert workflow.installment_notices_sent.get("2")
+    get_settings.cache_clear()
 
     again = client.post("/api/dev/process-reminders")
     assert again.json()["sent"] == 0

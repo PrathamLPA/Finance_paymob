@@ -53,7 +53,10 @@ class Settings(BaseSettings):
     bitrix_field_invoice_url: str = "UF_CRM_INVOICE_URL"
     bitrix_field_amount_paid: str = "UF_CRM_AMOUNT_PAID"
     bitrix_field_remaining_balance: str = "UF_CRM_REMAINING_BALANCE"
+    # Deal payment-summary total (may differ from lead Payment Section total)
     bitrix_field_total_amount: str = "UF_CRM_TOTAL_AMOUNT"
+    # Lead Payment Section / Complete-lead "Total Amount_" money field
+    bitrix_field_lead_total_amount: str = "UF_CRM_1684374599490"
     bitrix_field_payment_link: str = "UF_CRM_PAYMENT_LINK"
     bitrix_field_customer_email: str = "UF_CRM_CUSTOMER_EMAIL"
     # Client email on the lead (Bitrix name="UF_CRM_1740610735352")
@@ -95,12 +98,42 @@ class Settings(BaseSettings):
     bitrix_field_complete_student_type: str = "UF_CRM_1772454738552"
     bitrix_field_complete_batch_type: str = "UF_CRM_1772455024093"
     bitrix_field_complete_payment_proof: str = "UF_CRM_1775466638710"
+    # Complete-lead / lead-card ops & training fields (from Learners Point form data-cid)
+    bitrix_field_complete_comment_uf: str = "UF_CRM_1684372587728"
+    bitrix_field_training_mode: str = "UF_CRM_1684372786609"
+    bitrix_field_company_website: str = "UF_CRM_1684388099787"
+    bitrix_field_designation: str = "UF_CRM_1716456659309"
+    bitrix_field_industry_domain: str = "UF_CRM_1749464475095"
+    bitrix_field_department_training: str = "UF_CRM_1749464873149"
+    bitrix_field_course_duration: str = "UF_CRM_1771238558828"
+    bitrix_field_training_start_date: str = "UF_CRM_1771238612202"
+    bitrix_field_class_timing: str = "UF_CRM_1771238691110"
+    bitrix_field_study_materials: str = "UF_CRM_1771240157159"
+    bitrix_field_certificates_promised: str = "UF_CRM_1771240323579"
+    bitrix_field_mode_of_training: str = "UF_CRM_1771499914629"
+    # Extra Complete-lead required string UFs filled with placeholder when empty.
+    bitrix_complete_required_string_fields: str = (
+        "UF_CRM_1684372587728,UF_CRM_1684388099787,UF_CRM_1716456659309,"
+        "UF_CRM_1771238558828,UF_CRM_1771238691110,UF_CRM_1771240157159,"
+        "UF_CRM_1771240323579"
+    )
+    bitrix_complete_required_placeholder: str = "To be confirmed by Ops"
+    # Extra Complete-lead required select UFs — only filled when empty and a default enum is set.
+    bitrix_complete_required_select_fields: str = (
+        "UF_CRM_1684372786609,UF_CRM_1749464475095,UF_CRM_1749464873149,UF_CRM_1771499914629"
+    )
+    # Optional default enum IDs for those selects (leave empty to skip inventing values)
+    bitrix_complete_training_mode_enum: str = ""
+    bitrix_complete_industry_domain_enum: str = ""
+    bitrix_complete_department_enum: str = ""
+    bitrix_complete_mode_of_training_enum: str = ""
     # Enum defaults when auto-filling Complete lead (Yes/No / B2C / Public Batch)
     bitrix_complete_schedule_finalized_enum: str = "12912"  # No
     bitrix_complete_trainer_shared_enum: str = "12916"  # No
     bitrix_complete_student_type_enum: str = "13198"  # B2C
     bitrix_complete_batch_type_enum: str = "13200"  # Public Batch
     bitrix_complete_lead_autofill_enabled: bool = True
+    bitrix_complete_copy_products_to_deal: bool = True
     # Payment mode fields (enumeration — not amounts)
     bitrix_field_payment_1_mode: str = "UF_CRM_1684373954405"
     bitrix_field_payment_2_mode: str = "UF_CRM_1684374103659"
@@ -208,8 +241,9 @@ class Settings(BaseSettings):
     reminder_interval_hours: int = 24
     reminder_scheduler_enabled: bool = True
     reminder_scheduler_poll_seconds: int = 300
-    # When the plan is installments, also email the client on each due date
-    installment_due_notices_enabled: bool = True
+    # Poller-based installment due emails. Prefer Bitrix BP Outbound webhook
+    # → POST /webhooks/bitrix24/installment-due instead of scanning every N minutes.
+    installment_due_notices_enabled: bool = False
 
     @field_validator("database_url")
     @classmethod
