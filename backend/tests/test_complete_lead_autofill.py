@@ -110,3 +110,34 @@ def test_mock_attach_lead_payment_proof_if_empty_only_once():
     assert first is True
     assert second is False
     assert client._mock_leads[42]["UF_PROOF"][0]["name"] == "Invoice_1.pdf"
+
+
+def test_build_deal_payment_fields_copies_lead_and_fills_context_gaps():
+    from app.integrations.bitrix import build_deal_payment_fields_from_lead
+
+    settings = Settings(
+        bitrix_field_lead_total_amount="UF_TOTAL_",
+        bitrix_field_total_amount="UF_TOTAL",
+        bitrix_field_amount_paid="UF_PAID",
+        bitrix_field_installment_1="UF_I1",
+        bitrix_field_installment_2="UF_I2",
+        bitrix_field_installment_2_due_date="UF_I2_DUE",
+    )
+    lead = {
+        "OPPORTUNITY": "2.10",
+        "CURRENCY_ID": "AED",
+        "UF_I1": "1.00|AED",
+        "UF_I2": "1.10|AED",
+        "UF_I2_DUE": "2026-10-01",
+    }
+    fields = build_deal_payment_fields_from_lead(
+        settings,
+        lead,
+        {"amount_paid": "1.00", "total_amount": "2.10", "remaining_balance": "1.10"},
+    )
+    assert fields["UF_I1"] == "1.00|AED"
+    assert fields["UF_I2"] == "1.10|AED"
+    assert fields["UF_I2_DUE"] == "2026-10-01"
+    assert fields["UF_PAID"] == "1.00"
+    assert fields["UF_TOTAL_"] == "2.10|AED" or fields["UF_TOTAL"] == "2.10|AED"
+    assert fields["OPPORTUNITY"] == "2.10"

@@ -154,6 +154,13 @@ class BitrixIntegration(Protocol):
 
     async def copy_lead_products_to_deal(self, lead_id: int, deal_id: int) -> int: ...
 
+    async def copy_lead_payment_fields_to_deal(
+        self,
+        lead_id: int,
+        deal_id: int,
+        context: dict[str, Any] | None = None,
+    ) -> int: ...
+
     async def get_user(self, user_id: int) -> dict[str, Any] | None: ...
 
     async def resolve_manager_for_user(self, user_id: int) -> dict[str, Any] | None: ...

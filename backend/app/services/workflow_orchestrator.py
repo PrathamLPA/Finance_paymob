@@ -1526,18 +1526,50 @@ class WorkflowOrchestrator:
             "currency": workflow.currency,
         }
 
-        sales_deal_id = await self.bitrix.convert_lead_to_sales_deal(workflow.bitrix_lead_id, context)
-        finance_deal_id = await self.bitrix.create_finance_deal(workflow.bitrix_lead_id, context)
-        b2c_deal_id = await self.bitrix.create_b2c_deal(workflow.bitrix_lead_id, context)
+        sales_deal_id: int | None = None
+        finance_deal_id: int | None = None
+        b2c_deal_id: int | None = None
 
-        workflow.sales_deal_id = sales_deal_id
-        workflow.finance_deal_id = finance_deal_id
-        workflow.b2c_deal_id = b2c_deal_id
+        try:
+            sales_deal_id = await self.bitrix.convert_lead_to_sales_deal(
+                workflow.bitrix_lead_id, context
+            )
+        except Exception:
+            logger.exception(
+                "Sales convert failed for lead %s — will still create Finance/B2C deals",
+                workflow.bitrix_lead_id,
+            )
+
+        try:
+            finance_deal_id = await self.bitrix.create_finance_deal(
+                workflow.bitrix_lead_id, context
+            )
+        except Exception:
+            logger.exception("Finance deal create failed for lead %s", workflow.bitrix_lead_id)
+
+        try:
+            b2c_deal_id = await self.bitrix.create_b2c_deal(workflow.bitrix_lead_id, context)
+        except Exception:
+            logger.exception("B2C deal create failed for lead %s", workflow.bitrix_lead_id)
+
+        if not sales_deal_id and not finance_deal_id and not b2c_deal_id:
+            raise RuntimeError(
+                f"No Bitrix deals created after first payment for lead {workflow.bitrix_lead_id}"
+            )
+
+        if sales_deal_id:
+            workflow.sales_deal_id = sales_deal_id
+        if finance_deal_id:
+            workflow.finance_deal_id = finance_deal_id
+        if b2c_deal_id:
+            workflow.b2c_deal_id = b2c_deal_id
         workflow.first_payment_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(workflow)
 
         for deal_id in (sales_deal_id, finance_deal_id, b2c_deal_id):
+            if not deal_id:
+                continue
             try:
                 await self.bitrix.sync_deal_customer_details(
                     deal_id,
@@ -1547,6 +1579,21 @@ class WorkflowOrchestrator:
                 )
             except Exception:
                 logger.exception("Failed to sync customer details to deal %s", deal_id)
+            try:
+                await self.bitrix.copy_lead_payment_fields_to_deal(
+                    workflow.bitrix_lead_id,
+                    deal_id,
+                    context={
+                        **context,
+                        "remaining_balance": str(workflow.remaining_balance),
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to copy payment fields from lead %s to deal %s",
+                    workflow.bitrix_lead_id,
+                    deal_id,
+                )
 
         logger.info(
             "First payment - created deals for lead %s: sales=%s finance=%s b2c=%s",
