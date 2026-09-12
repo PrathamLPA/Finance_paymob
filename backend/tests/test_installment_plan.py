@@ -262,3 +262,20 @@ def test_ordered_dates_required():
     result = validate_installment_plan(lead, settings, payable_total=Decimal("2000"))
     assert result.ok is False
     assert any("before installment" in err.lower() for err in result.errors)
+
+
+def test_installment_1_due_date_not_required_upfront():
+    """I1 date is stamped on payment; only amount + later installments' dates are required."""
+    settings = _settings()
+    lead = {
+        "UF_COUNT": "2",
+        "UF_I1": "1000",
+        # UF_D1 intentionally omitted
+        "UF_I2": "1000",
+        "UF_D2": "2026-02-01",
+    }
+    result = validate_installment_plan(lead, settings, payable_total=Decimal("2000"))
+    assert result.ok is True
+    assert result.errors == []
+    assert len(result.slots) == 2
+

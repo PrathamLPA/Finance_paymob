@@ -642,23 +642,31 @@ class WorkflowOrchestrator:
             payable_total=Decimal(workflow.total_amount or 0),
         )
         if validation.indicated and not validation.ok:
-            message = (
-                "Installment plan is incomplete or invalid. Fix Bitrix installment "
-                "amounts and due dates before generating a payment link.\n"
-                + "\n".join(f"- {err}" for err in validation.errors)
-            )
-            try:
-                await self.bitrix.add_timeline_comment(
-                    entity_type="LEAD",
-                    entity_id=workflow.bitrix_lead_id,
-                    comment=message,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to post installment validation comment on lead %s",
+            # Already frozen unpaid plan: keep charging from it even if Bitrix was edited badly.
+            if workflow.installments and Decimal(workflow.amount_paid or 0) <= 0:
+                logger.warning(
+                    "Bitrix installment plan invalid after freeze | lead_id=%s errors=%s",
                     workflow.bitrix_lead_id,
+                    validation.errors,
                 )
-            raise ValueError(message)
+            else:
+                message = (
+                    "Installment plan is incomplete or invalid. Fix Bitrix installment "
+                    "amounts and due dates before generating a payment link.\n"
+                    + "\n".join(f"- {err}" for err in validation.errors)
+                )
+                try:
+                    await self.bitrix.add_timeline_comment(
+                        entity_type="LEAD",
+                        entity_id=workflow.bitrix_lead_id,
+                        comment=message,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to post installment validation comment on lead %s",
+                        workflow.bitrix_lead_id,
+                    )
+                raise ValueError(message)
 
         sync_result = sync_installment_plan_from_lead(
             self.db,

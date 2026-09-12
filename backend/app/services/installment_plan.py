@@ -164,14 +164,19 @@ def validate_installment_plan(
             continue
         if slot.amount is None or slot.amount <= 0:
             errors.append(f"Installment {number} needs a positive amount.")
-        if slot.due_date is None:
+        # Installment 1 payment date is stamped on successful pay — do not require it upfront.
+        if number > 1 and slot.due_date is None:
             errors.append(f"Installment {number} needs a due date.")
         slots.append(slot)
 
-    complete = [
-        s for s in slots if s.amount is not None and s.amount > 0 and s.due_date is not None
-    ]
-    for prev, nxt in zip(complete, complete[1:]):
+    complete: list[ParsedInstallment] = []
+    for s in slots:
+        if s.amount is None or s.amount <= 0:
+            continue
+        if s.number == 1 or s.due_date is not None:
+            complete.append(s)
+    dated = [s for s in complete if s.due_date is not None]
+    for prev, nxt in zip(dated, dated[1:]):
         if prev.due_date and nxt.due_date and nxt.due_date < prev.due_date:
             errors.append(
                 f"Installment {nxt.number} due date is before installment {prev.number}."
@@ -211,14 +216,22 @@ def persist_installment_plan(
             db.delete(row)
         db.flush()
     for slot in slots:
-        if slot.amount is None or slot.due_date is None:
+        if slot.amount is None or slot.amount <= 0:
             continue
+        due = slot.due_date
+        if due is None:
+            # Installment 1 date is stamped on payment; use today as a provisional freeze.
+            if slot.number != 1:
+                continue
+            from datetime import date as date_cls
+
+            due = date_cls.today()
         db.add(
             WorkflowInstallment(
                 workflow_id=workflow.id,
                 installment_number=slot.number,
                 amount=slot.amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-                due_date=slot.due_date,
+                due_date=due,
             )
         )
     db.commit()
@@ -248,7 +261,9 @@ def _persisted_matches_slots(
     valid = [
         s
         for s in slots
-        if s.amount is not None and s.amount > 0 and s.due_date is not None
+        if s.amount is not None
+        and s.amount > 0
+        and (s.number == 1 or s.due_date is not None)
     ]
     if len(persisted) != len(valid):
         return False
@@ -259,6 +274,8 @@ def _persisted_matches_slots(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         ):
             return False
+        if slot.due_date is None:
+            continue
         row_date = row.due_date.date() if hasattr(row.due_date, "date") else row.due_date
         slot_date = slot.due_date.date() if hasattr(slot.due_date, "date") else slot.due_date
         if row_date != slot_date:
