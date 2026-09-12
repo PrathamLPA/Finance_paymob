@@ -219,6 +219,10 @@ def build_complete_lead_autofill_fields(
         settings.bitrix_field_installment_1_date,
         _as_bitrix_date(context.get("installment_1_date")) or date.today().isoformat(),
     )
+    # When payment stamped a paid date into context, always write it (overwrite planned date).
+    paid_i1 = _as_bitrix_date(context.get("installment_1_date"))
+    if paid_i1 and settings.bitrix_field_installment_1_date:
+        fields[settings.bitrix_field_installment_1_date] = paid_i1
     set_if_empty(
         settings.bitrix_field_payment_1_mode,
         context.get("payment_1_mode_enum") or context.get("payment_mode_enum"),
@@ -342,10 +346,10 @@ def build_deal_payment_fields_from_lead(
             currency,
         ),
     )
-    fill(
-        settings.bitrix_field_installment_1_date,
-        _as_bitrix_date(context.get("installment_1_date")) or None,
-    )
+    # Paid date from first payment must win over any planned date already on the lead.
+    paid_i1_date = _as_bitrix_date(context.get("installment_1_date"))
+    if settings.bitrix_field_installment_1_date and paid_i1_date:
+        fields[settings.bitrix_field_installment_1_date] = paid_i1_date
 
     opportunity = lead.get("OPPORTUNITY") or total
     if not _is_blank(opportunity):

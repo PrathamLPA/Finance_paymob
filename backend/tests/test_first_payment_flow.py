@@ -78,8 +78,14 @@ def test_first_payment_converts_sales_deal_and_invoice(client, seed_lead, db_ses
     assert workflow.b2c_deal_id is None
 
     from app.integrations.factory import get_bitrix_client
+    from app.config import get_settings
 
     bitrix = get_bitrix_client()
+    lead = bitrix._mock_leads[202]
+    i1_date_field = get_settings().bitrix_field_installment_1_date
+    assert lead.get(i1_date_field)
+    assert str(lead.get(i1_date_field))[:10] == workflow.first_payment_at.date().isoformat()
+
     lead_comments = bitrix._mock_comments.get(("LEAD", 202), [])
     assert any("Zoho invoice" in item["COMMENT"] for item in lead_comments)
     if workflow.sales_deal_id:

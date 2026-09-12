@@ -1614,7 +1614,42 @@ class WorkflowOrchestrator:
             workflow.sales_deal_id,
         )
 
-    async def _create_deals_on_first_payment(self, workflow: CustomerWorkflow) -> None:
+    async def _stamp_installment_1_paid_date(
+        self,
+        workflow: CustomerWorkflow,
+        transaction: PaymentTransaction,
+    ) -> str | None:
+        """Set Payment Installment 1 Date on the lead to the day the first payment cleared."""
+        field = (self.settings.bitrix_field_installment_1_date or "").strip()
+        if not field:
+            return None
+        paid_at = transaction.paid_at or datetime.now(timezone.utc)
+        if paid_at.tzinfo is None:
+            paid_at = paid_at.replace(tzinfo=timezone.utc)
+        date_str = paid_at.astimezone(timezone.utc).date().isoformat()
+        try:
+            await self.bitrix.update_lead_fields(
+                workflow.bitrix_lead_id, {field: date_str}
+            )
+            logger.info(
+                "Set Payment Installment 1 Date on lead %s to %s (paid)",
+                workflow.bitrix_lead_id,
+                date_str,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to set Installment 1 Date on lead %s",
+                workflow.bitrix_lead_id,
+            )
+            return None
+        return date_str
+
+    async def _create_deals_on_first_payment(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        installment_1_date: str | None = None,
+    ) -> None:
         context = {
             "customer_email": workflow.customer_email,
             "customer_name": workflow.customer_name,
@@ -1624,6 +1659,8 @@ class WorkflowOrchestrator:
             "remaining_balance": str(workflow.remaining_balance),
             "currency": workflow.currency,
         }
+        if installment_1_date:
+            context["installment_1_date"] = installment_1_date
 
         sales_deal_id: int | None = None
         try:
@@ -1714,12 +1751,21 @@ class WorkflowOrchestrator:
         self.threshold_service.refresh_status(workflow)
         self.db.commit()
 
+        installment_1_paid_date: str | None = None
+        if first_payment and not dev_simulate:
+            installment_1_paid_date = await self._stamp_installment_1_paid_date(
+                workflow, transaction
+            )
+
         if first_payment and not skip_deals:
             try:
                 if dev_simulate:
                     await self._create_dev_simulated_deals(workflow)
                 else:
-                    await self._create_deals_on_first_payment(workflow)
+                    await self._create_deals_on_first_payment(
+                        workflow,
+                        installment_1_date=installment_1_paid_date,
+                    )
             except Exception:
                 logger.exception(
                     "Failed to create Bitrix deals after payment for lead %s",
@@ -1790,6 +1836,13 @@ class WorkflowOrchestrator:
             "remaining_balance": str(workflow.remaining_balance),
             "currency": workflow.currency,
         }
+        i1_date_field = (self.settings.bitrix_field_installment_1_date or "").strip()
+        if i1_date_field:
+            stamped = lead.get(i1_date_field)
+            if stamped:
+                context["installment_1_date"] = stamped
+            elif workflow.first_payment_at:
+                context["installment_1_date"] = workflow.first_payment_at.date().isoformat()
         await self.bitrix.prepare_lead_for_complete_conversion(
             workflow.bitrix_lead_id, context
         )
