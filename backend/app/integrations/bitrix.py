@@ -576,6 +576,19 @@ class MockBitrixClient:
             await self.update_lead_fields(lead_id, fields)
         return fields
 
+    async def ensure_lead_converted(
+        self, lead_id: int, context: dict[str, Any] | None = None
+    ) -> bool:
+        lead = await self.get_lead(lead_id)
+        if str(lead.get("STATUS_ID") or "").upper() == "CONVERTED":
+            return True
+        if self.settings.bitrix_complete_lead_autofill_enabled:
+            await self.prepare_lead_for_complete_conversion(lead_id, context or {})
+        lead = await self.get_lead(lead_id)
+        lead["STATUS_ID"] = "CONVERTED"
+        self._mock_leads[lead_id] = lead
+        return True
+
     async def create_finance_deal(self, lead_id: int, context: dict[str, Any]) -> int:
         deal_id = self.MOCK_FINANCE_DEAL_BASE + lead_id
         lead = await self.get_lead(lead_id)
@@ -1182,6 +1195,11 @@ class RealBitrixClient:
             [k for k in fields if k != "STATUS_ID"],
         )
         return True
+
+    async def ensure_lead_converted(
+        self, lead_id: int, context: dict[str, Any] | None = None
+    ) -> bool:
+        return await self._ensure_lead_converted(lead_id, context)
 
     async def _find_sales_deal_for_lead(self, lead_id: int, pipeline_id: int) -> int | None:
         try:

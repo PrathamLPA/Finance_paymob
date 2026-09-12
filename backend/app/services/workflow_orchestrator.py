@@ -1654,6 +1654,17 @@ class WorkflowOrchestrator:
                     workflow.bitrix_lead_id,
                 )
 
+        # Complete-lead often requires Payment Proof. That file is the invoice PDF,
+        # which only exists after Zoho sync — so retry CONVERTED after proof attach.
+        if first_payment and not skip_deals and not dev_simulate:
+            try:
+                await self._retry_complete_lead_after_invoice(workflow)
+            except Exception:
+                logger.exception(
+                    "Complete-lead retry after invoice failed for lead %s",
+                    workflow.bitrix_lead_id,
+                )
+
         try:
             await self.threshold_service.apply_after_payment(
                 workflow,
@@ -1668,6 +1679,57 @@ class WorkflowOrchestrator:
         self.db.commit()
         self.db.refresh(workflow)
         return workflow
+
+    async def _retry_complete_lead_after_invoice(self, workflow: CustomerWorkflow) -> None:
+        """Move lead to CONVERTED once Payment Proof (invoice PDF) is on the lead."""
+        lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
+        status = str(lead.get("STATUS_ID") or "").upper()
+        if status == "CONVERTED":
+            return
+
+        context = {
+            "customer_email": workflow.customer_email,
+            "customer_name": workflow.customer_name,
+            "total_amount": str(workflow.total_amount),
+            "amount_paid": str(workflow.amount_paid),
+            "payment_amount": str(workflow.amount_paid),
+            "remaining_balance": str(workflow.remaining_balance),
+            "currency": workflow.currency,
+        }
+        await self.bitrix.prepare_lead_for_complete_conversion(
+            workflow.bitrix_lead_id, context
+        )
+        converted = await self.bitrix.ensure_lead_converted(
+            workflow.bitrix_lead_id, context
+        )
+        if not converted:
+            logger.warning(
+                "Lead %s still not CONVERTED after invoice Payment Proof — check required Complete-lead fields",
+                workflow.bitrix_lead_id,
+            )
+            return
+
+        for deal_id in (
+            workflow.sales_deal_id,
+            workflow.finance_deal_id,
+            workflow.b2c_deal_id,
+        ):
+            if not deal_id:
+                continue
+            try:
+                await self.bitrix.copy_lead_payment_fields_to_deal(
+                    workflow.bitrix_lead_id, deal_id, context=context
+                )
+            except Exception:
+                logger.exception(
+                    "Payment field re-copy failed lead %s → deal %s",
+                    workflow.bitrix_lead_id,
+                    deal_id,
+                )
+        logger.info(
+            "Lead %s moved to CONVERTED after invoice Payment Proof attach",
+            workflow.bitrix_lead_id,
+        )
 
     async def collect_cash(
         self,
