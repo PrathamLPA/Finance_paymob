@@ -53,6 +53,85 @@ def test_acceptance_returns_checkout_url(client, seed_lead):
     assert "paymob.com" in accept.json()["checkout_url"]
 
 
+def test_terms_email_goes_to_payment_link_recipient_not_registrant(db_session, monkeypatch):
+    """Terms confirmation must match Payment Request inbox, not a different form email."""
+    import asyncio
+    from decimal import Decimal
+
+    from datetime import datetime, timedelta, timezone
+
+    from app.integrations.factory import get_email_client
+    from app.models.customer_workflow import CustomerWorkflow
+    from app.models.payment_session import (
+        CHANNEL_ONLINE,
+        SESSION_TERMS_ACCEPTED,
+        SOURCE_LEAD,
+        PaymentSession,
+    )
+    from app.services.terms_service import TermsService
+
+    workflow = CustomerWorkflow(
+        bitrix_lead_id=113,
+        customer_email="agent-filled@test.com",
+        customer_name="Agent Filled",
+        total_amount=Decimal("5000.00"),
+        amount_paid=Decimal("0.00"),
+        currency="AED",
+    )
+    db_session.add(workflow)
+    db_session.commit()
+    db_session.refresh(workflow)
+
+    session = PaymentSession(
+        workflow_id=workflow.id,
+        token="terms-email-test-token",
+        source_type=SOURCE_LEAD,
+        source_id=113,
+        charge_amount=Decimal("5000.00"),
+        charge_source="full",
+        amount_locked=True,
+        currency="AED",
+        channel=CHANNEL_ONLINE,
+        status=SESSION_TERMS_ACCEPTED,
+        merchant_reference="WF-terms-email",
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+    db_session.refresh(session)
+
+    monkeypatch.setattr("app.db.session.SessionLocal", lambda: db_session)
+    # run_acceptance_side_effects closes the session in finally — keep test session open.
+    original_close = db_session.close
+    monkeypatch.setattr(db_session, "close", lambda: None)
+
+    email_client = get_email_client()
+    before = len(email_client.sent_emails)
+
+    asyncio.run(
+        TermsService.run_acceptance_side_effects(
+            session_id=session.id,
+            workflow_id=workflow.id,
+            course_for="self",
+            registrant_name="Agent Filled",
+            registrant_email="agent-filled@test.com",
+            registrant_phone="+971500000113",
+            participants=None,
+            terms_to_email="link-recipient@test.com",
+        )
+    )
+
+    monkeypatch.setattr(db_session, "close", original_close)
+
+    terms_mails = [
+        m
+        for m in email_client.sent_emails[before:]
+        if m.get("subject") == "Terms and Conditions Acceptance"
+    ]
+    assert terms_mails, "expected Terms acceptance email"
+    assert terms_mails[-1]["to"] == "link-recipient@test.com"
+
+
 def test_accept_requires_payment_mode(client, seed_lead):
     seed_lead(110)
     response = client.post(

@@ -219,9 +219,11 @@ class TermsService:
         registrant_email: str,
         registrant_phone: str,
         participants: list[dict[str, Any]] | None,
+        terms_to_email: str | None = None,
     ) -> None:
         """PDF + Bitrix sync + email after the customer already got their next URL."""
         from app.db.session import SessionLocal
+        from app.services.email_validation import is_valid_email
 
         db = SessionLocal()
         try:
@@ -256,13 +258,28 @@ class TermsService:
                 return
 
             await service._sync_registrant_to_bitrix(workflow)
-            if workflow.customer_email:
+            # Prefer the payment-link recipient (same inbox as Payment Request),
+            # not the registrant form email which may be a staff/agent address.
+            to_email = (terms_to_email or "").strip() or (workflow.customer_email or "").strip()
+            if to_email and is_valid_email(to_email):
                 await asyncio.to_thread(
                     service.email.send_terms_acceptance,
-                    to_email=workflow.customer_email,
+                    to_email=to_email,
                     customer_name=workflow.customer_name,
                     pdf_path=pdf_path,
                     terms_version=service.settings.terms_version,
+                )
+                logger.info(
+                    "Terms acceptance emailed | session_id=%s to=%s registrant=%s",
+                    session_id,
+                    to_email,
+                    registrant_email,
+                )
+            elif to_email:
+                logger.warning(
+                    "Terms acceptance email skipped — invalid address | session_id=%s to=%s",
+                    session_id,
+                    to_email,
                 )
         except Exception:
             logger.exception(
@@ -347,8 +364,12 @@ class TermsService:
         is_bank_transfer = chosen_channel == CHANNEL_BANK_TRANSFER
         is_cash = chosen_channel == CHANNEL_CASH
 
-        # Always use the form details for Paymob / Bitrix, even on re-submit.
         workflow = session.workflow
+        # Keep the Payment Request recipient for the Terms email. Accept form may use
+        # a different registrant_email (e.g. agent filling on behalf of the student).
+        payment_link_email = (workflow.customer_email or "").strip()
+
+        # Always use the form details for Paymob / Bitrix, even on re-submit.
         workflow.customer_name = registrant_name.strip()
         workflow.customer_email = registrant_email.strip()
         workflow.customer_phone = registrant_phone.strip()
@@ -423,6 +444,7 @@ class TermsService:
                     "registrant_email": registrant_email.strip(),
                     "registrant_phone": registrant_phone.strip(),
                     "participants": cleaned_participants,
+                    "terms_to_email": payment_link_email or registrant_email.strip(),
                 }
                 if background_tasks is not None:
                     background_tasks.add_task(

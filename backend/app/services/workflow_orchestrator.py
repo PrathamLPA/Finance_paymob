@@ -1671,12 +1671,13 @@ class WorkflowOrchestrator:
             return None
         return date_str
 
-    async def _create_deals_on_first_payment(
+    async def _on_first_payment_without_convert(
         self,
         workflow: CustomerWorkflow,
         *,
         installment_1_date: str | None = None,
     ) -> None:
+        """First payment: autofill Complete-lead fields only — Bitrix automation converts."""
         context = {
             "customer_email": workflow.customer_email,
             "customer_name": workflow.customer_name,
@@ -1689,76 +1690,26 @@ class WorkflowOrchestrator:
         if installment_1_date:
             context["installment_1_date"] = installment_1_date
 
-        sales_deal_id: int | None = None
         try:
-            sales_deal_id = await self.bitrix.convert_lead_to_sales_deal(
+            await self.bitrix.prepare_lead_for_complete_conversion(
                 workflow.bitrix_lead_id, context
             )
         except Exception:
             logger.exception(
-                "Sales convert failed for lead %s",
-                workflow.bitrix_lead_id,
-            )
-            raise
-
-        workflow.sales_deal_id = sales_deal_id
-        # Finance/B2C cards are created by Bitrix tunnel/copy — do not add them here.
-        if self.settings.bitrix_create_extra_deals_on_payment:
-            try:
-                workflow.finance_deal_id = await self.bitrix.create_finance_deal(
-                    workflow.bitrix_lead_id, context
-                )
-            except Exception:
-                logger.exception("Finance deal create failed for lead %s", workflow.bitrix_lead_id)
-            try:
-                workflow.b2c_deal_id = await self.bitrix.create_b2c_deal(
-                    workflow.bitrix_lead_id, context
-                )
-            except Exception:
-                logger.exception("B2C deal create failed for lead %s", workflow.bitrix_lead_id)
-        else:
-            workflow.finance_deal_id = None
-            workflow.b2c_deal_id = None
-            logger.info(
-                "Skipping Finance/B2C deal create for lead %s — Bitrix tunnel/copy owns those cards",
+                "Complete-lead autofill failed for lead %s (convert left to Bitrix automation)",
                 workflow.bitrix_lead_id,
             )
 
+        # Deals are created by Bitrix automation / tunnel — do not convert here.
+        workflow.sales_deal_id = None
+        workflow.finance_deal_id = None
+        workflow.b2c_deal_id = None
         workflow.first_payment_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(workflow)
-
-        for deal_id in (workflow.sales_deal_id, workflow.finance_deal_id, workflow.b2c_deal_id):
-            if not deal_id:
-                continue
-            try:
-                await self.bitrix.sync_deal_customer_details(
-                    deal_id,
-                    name=workflow.customer_name,
-                    email=workflow.customer_email,
-                    phone=workflow.customer_phone,
-                )
-            except Exception:
-                logger.exception("Failed to sync customer details to deal %s", deal_id)
-            try:
-                await self.bitrix.copy_lead_payment_fields_to_deal(
-                    workflow.bitrix_lead_id,
-                    deal_id,
-                    context=context,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to copy payment fields from lead %s to deal %s",
-                    workflow.bitrix_lead_id,
-                    deal_id,
-                )
-
         logger.info(
-            "First payment - Sales convert for lead %s: sales=%s finance=%s b2c=%s",
+            "First payment recorded for lead %s — Sales convert left to Bitrix automation",
             workflow.bitrix_lead_id,
-            workflow.sales_deal_id,
-            workflow.finance_deal_id,
-            workflow.b2c_deal_id,
         )
 
     async def apply_recorded_payment(
@@ -1789,13 +1740,13 @@ class WorkflowOrchestrator:
                 if dev_simulate:
                     await self._create_dev_simulated_deals(workflow)
                 else:
-                    await self._create_deals_on_first_payment(
+                    await self._on_first_payment_without_convert(
                         workflow,
                         installment_1_date=installment_1_paid_date,
                     )
             except Exception:
                 logger.exception(
-                    "Failed to create Bitrix deals after payment for lead %s",
+                    "Failed first-payment Bitrix lead update for lead %s",
                     workflow.bitrix_lead_id,
                 )
 
@@ -1821,14 +1772,14 @@ class WorkflowOrchestrator:
                     workflow.bitrix_lead_id,
                 )
 
-        # Complete-lead often requires Payment Proof. That file is the invoice PDF,
-        # which only exists after Zoho sync — so retry CONVERTED after proof attach.
+        # After invoice PDF attach, refill empty Complete-lead fields for Bitrix automation.
+        # Do not convert the lead here — Create using source / Deal Won is owned by Bitrix.
         if first_payment and not skip_deals and not dev_simulate:
             try:
-                await self._retry_complete_lead_after_invoice(workflow)
+                await self._autofill_complete_lead_after_invoice(workflow)
             except Exception:
                 logger.exception(
-                    "Complete-lead retry after invoice failed for lead %s",
+                    "Complete-lead autofill after invoice failed for lead %s",
                     workflow.bitrix_lead_id,
                 )
 
@@ -1847,8 +1798,8 @@ class WorkflowOrchestrator:
         self.db.refresh(workflow)
         return workflow
 
-    async def _retry_complete_lead_after_invoice(self, workflow: CustomerWorkflow) -> None:
-        """Move lead to CONVERTED once Payment Proof (invoice PDF) is on the lead."""
+    async def _autofill_complete_lead_after_invoice(self, workflow: CustomerWorkflow) -> None:
+        """Fill empty Complete-lead fields once Payment Proof exists; do not convert."""
         lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
         status = str(lead.get("STATUS_ID") or "").upper()
         if status == "CONVERTED":
@@ -1873,35 +1824,8 @@ class WorkflowOrchestrator:
         await self.bitrix.prepare_lead_for_complete_conversion(
             workflow.bitrix_lead_id, context
         )
-        converted = await self.bitrix.ensure_lead_converted(
-            workflow.bitrix_lead_id, context
-        )
-        if not converted:
-            logger.warning(
-                "Lead %s still not CONVERTED after invoice Payment Proof — check required Complete-lead fields",
-                workflow.bitrix_lead_id,
-            )
-            return
-
-        for deal_id in (
-            workflow.sales_deal_id,
-            workflow.finance_deal_id,
-            workflow.b2c_deal_id,
-        ):
-            if not deal_id:
-                continue
-            try:
-                await self.bitrix.copy_lead_payment_fields_to_deal(
-                    workflow.bitrix_lead_id, deal_id, context=context
-                )
-            except Exception:
-                logger.exception(
-                    "Payment field re-copy failed lead %s → deal %s",
-                    workflow.bitrix_lead_id,
-                    deal_id,
-                )
         logger.info(
-            "Lead %s moved to CONVERTED after invoice Payment Proof attach",
+            "Complete-lead autofill after invoice for lead %s — convert left to Bitrix automation",
             workflow.bitrix_lead_id,
         )
 

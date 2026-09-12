@@ -11,7 +11,7 @@ from tests.conftest import SAMPLE_REGISTRANT
 
 
 def _finance_deal(client, seed_lead, db_session, lead_id: int) -> int:
-    """First payment → Sales deal; simulate Bitrix tunnel copy as a Finance deal linked by LEAD_ID."""
+    """First payment (no API convert); simulate Bitrix automation Sales + Finance tunnel."""
     seed_lead(lead_id, email="bitrix@test.com", amount=Decimal("10000"))
     link = client.post(
         "/api/dev/send-payment-link",
@@ -30,30 +30,38 @@ def _finance_deal(client, seed_lead, db_session, lead_id: int) -> int:
         "/api/dev/simulate-paymob-webhook",
         json={"merchant_reference": merchant_reference, "amount": "1000"},
     ).json()
+    assert payment["status"] == "ok"
     settings = get_settings()
     bitrix = get_bitrix_client()
-    sales_id = payment.get("sales_deal_id")
     workflow = db_session.scalar(
         select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == lead_id)
     )
     assert workflow is not None
-    if not sales_id:
-        sales_id = workflow.sales_deal_id
-    assert sales_id
+    assert workflow.sales_deal_id is None
 
-    # Tunneled Finance card (new id) still points at the same lead.
+    # Bitrix automation created Sales deal, then tunnel copied Finance.
+    sales_id = 700000 + lead_id
+    bitrix._mock_deals[sales_id] = {
+        "ID": sales_id,
+        "LEAD_ID": lead_id,
+        "TITLE": f"Sales - lead {lead_id}",
+        "CATEGORY_ID": settings.bitrix_sales_pipeline_id or "16",
+        "OPPORTUNITY": "10000",
+        "CURRENCY_ID": "AED",
+    }
+    workflow.sales_deal_id = sales_id
+
     finance_id = 800000 + lead_id
-    source = dict(bitrix._mock_deals.get(sales_id) or {})
-    source.update(
-        {
-            "ID": finance_id,
-            "LEAD_ID": lead_id,
-            "TITLE": f"Finance tunnel - lead {lead_id}",
-            "STAGE_ID": settings.bitrix_finance_generate_link_stage_id,
-        }
-    )
-    source.pop(settings.bitrix_field_payment_link, None)
-    bitrix._mock_deals[finance_id] = source
+    bitrix._mock_deals[finance_id] = {
+        "ID": finance_id,
+        "LEAD_ID": lead_id,
+        "TITLE": f"Finance tunnel - lead {lead_id}",
+        "STAGE_ID": settings.bitrix_finance_generate_link_stage_id,
+        "OPPORTUNITY": "10000",
+        "CURRENCY_ID": "AED",
+    }
+    workflow.finance_deal_id = finance_id
+    db_session.commit()
     return finance_id
 
 

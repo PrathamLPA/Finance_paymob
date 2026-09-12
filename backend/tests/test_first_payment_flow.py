@@ -29,7 +29,7 @@ def test_lead_trigger_email_uses_middleware_url_not_paymob(client, seed_lead):
     assert "mock.paymob" not in body
 
 
-def test_first_payment_converts_sales_deal_and_invoice(client, seed_lead, db_session):
+def test_first_payment_invoices_without_backend_convert(client, seed_lead, db_session):
     seed_lead(202, email="first@test.com", amount=Decimal("10000"))
     link = client.post(
         "/api/dev/send-payment-link",
@@ -62,8 +62,8 @@ def test_first_payment_converts_sales_deal_and_invoice(client, seed_lead, db_ses
     assert payment.status_code == 200
     data = payment.json()
     assert data["status"] == "ok"
-    assert data["sales_deal_id"] is not None
-    # Finance/B2C come from Bitrix tunnel — not created by the API.
+    # Convert is owned by Bitrix automation — API must not create Sales/Finance/B2C deals.
+    assert data["sales_deal_id"] is None
     assert data["finance_deal_id"] is None
     assert data["b2c_deal_id"] is None
     assert data["zoho_invoice_id"] == "MOCK-INV-1"
@@ -74,6 +74,7 @@ def test_first_payment_converts_sales_deal_and_invoice(client, seed_lead, db_ses
     assert workflow is not None
     assert workflow.first_payment_at is not None
     assert len(workflow.transactions) == 1
+    assert workflow.sales_deal_id is None
     assert workflow.finance_deal_id is None
     assert workflow.b2c_deal_id is None
 
@@ -85,12 +86,11 @@ def test_first_payment_converts_sales_deal_and_invoice(client, seed_lead, db_ses
     i1_date_field = get_settings().bitrix_field_installment_1_date
     assert lead.get(i1_date_field)
     assert str(lead.get(i1_date_field))[:10] == workflow.first_payment_at.date().isoformat()
+    # Still on lead stage — Bitrix automation performs Complete / convert.
+    assert str(lead.get("STATUS_ID") or "").upper() != "CONVERTED"
 
     lead_comments = bitrix._mock_comments.get(("LEAD", 202), [])
     assert any("Zoho invoice" in item["COMMENT"] for item in lead_comments)
-    if workflow.sales_deal_id:
-        deal_comments = bitrix._mock_comments.get(("DEAL", workflow.sales_deal_id), [])
-        assert any("Zoho invoice" in item["COMMENT"] for item in deal_comments)
     if workflow.bitrix_estimate_id:
         estimate_comments = bitrix._mock_comments.get(("QUOTE", workflow.bitrix_estimate_id), [])
         assert any("Zoho invoice" in item["COMMENT"] for item in estimate_comments)
@@ -116,7 +116,7 @@ def test_duplicate_transaction_is_ignored(client, seed_lead):
     assert second.json()["status"] == "duplicate"
 
 
-def test_first_payment_uses_sales_pipeline_and_notifies_agent(client, seed_lead, db_session):
+def test_first_payment_notifies_agent_without_backend_convert(client, seed_lead, db_session):
     seed_lead(204, email="sales@test.com", amount=Decimal("10000"))
     link = client.post(
         "/api/dev/send-payment-link",
@@ -143,13 +143,11 @@ def test_first_payment_uses_sales_pipeline_and_notifies_agent(client, seed_lead,
     bitrix = get_bitrix_client()
     workflow = db_session.scalar(select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 204))
     assert workflow is not None
-    deal = bitrix._mock_deals[workflow.sales_deal_id]
-    assert str(deal["CATEGORY_ID"]) == "16"
-    lead = bitrix._mock_leads[204]
-    assert lead["STATUS_ID"] == "CONVERTED"
-    # Finance/B2C are Bitrix tunnel copies — not created by the API.
+    assert workflow.sales_deal_id is None
     assert workflow.finance_deal_id is None
     assert workflow.b2c_deal_id is None
+    lead = bitrix._mock_leads[204]
+    assert str(lead.get("STATUS_ID") or "").upper() != "CONVERTED"
 
     comments = bitrix._mock_comments[("LEAD", 204)]
     assert any("Payment successful" in item["COMMENT"] for item in comments)

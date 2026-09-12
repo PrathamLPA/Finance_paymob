@@ -31,6 +31,37 @@ def _complete_first_payment(client, seed_lead, db_session, lead_id: int = 301) -
         "/api/dev/simulate-paymob-webhook",
         json={"merchant_reference": merchant_reference, "amount": "4000"},
     ).json()
+    assert payment["status"] == "ok"
+
+    # Simulate Bitrix automation convert + Finance tunnel after first payment.
+    from app.config import get_settings
+    from app.integrations.factory import get_bitrix_client
+
+    settings = get_settings()
+    bitrix = get_bitrix_client()
+    workflow = db_session.scalar(
+        select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == lead_id)
+    )
+    assert workflow is not None
+    sales_id = 700000 + lead_id
+    finance_id = 800000 + lead_id
+    bitrix._mock_deals[sales_id] = {
+        "ID": sales_id,
+        "LEAD_ID": lead_id,
+        "TITLE": f"Sales - lead {lead_id}",
+        "CATEGORY_ID": settings.bitrix_sales_pipeline_id or "16",
+    }
+    bitrix._mock_deals[finance_id] = {
+        "ID": finance_id,
+        "LEAD_ID": lead_id,
+        "TITLE": f"Finance - lead {lead_id}",
+        "STAGE_ID": settings.bitrix_finance_generate_link_stage_id,
+    }
+    workflow.sales_deal_id = sales_id
+    workflow.finance_deal_id = finance_id
+    db_session.commit()
+    payment["sales_deal_id"] = sales_id
+    payment["finance_deal_id"] = finance_id
     return payment
 
 
