@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     bitrix_field_complete_student_type: str = "UF_CRM_1772454738552"
     bitrix_field_complete_batch_type: str = "UF_CRM_1772455024093"
     bitrix_field_complete_payment_proof: str = "UF_CRM_1775466638710"
+    # Lead card "Invoice" multi-file UF (tile uploader under Payment Section)
+    bitrix_field_lead_invoice_file: str = "UF_CRM_1789204266156"
     # Complete-lead / lead-card ops & training fields (from Learners Point form data-cid)
     bitrix_field_complete_comment_uf: str = "UF_CRM_1684372587728"
     bitrix_field_training_mode: str = "UF_CRM_1684372786609"

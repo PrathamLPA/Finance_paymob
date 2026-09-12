@@ -282,25 +282,36 @@ class InvoiceService:
         comment = "\n".join(lines)
         files = self._invoice_pdf_files(invoice)
 
-        # Complete-lead Payment Proof file UF — invoice PDF when the field is still empty.
-        # Convert runs before Zoho invoice exists, so this is attached after invoice sync.
+        # Complete-lead Payment Proof + lead card Invoice (tile) — PDF when empty.
+        # Convert can run before Zoho invoice exists, so these attach after invoice sync.
         if files:
             try:
                 filename, content = files[0]
-                attached = await self.bitrix.attach_lead_payment_proof_if_empty(
+                attached_proof = await self.bitrix.attach_lead_payment_proof_if_empty(
                     workflow.bitrix_lead_id,
                     filename=filename,
                     content=content,
                 )
-                if attached:
+                if attached_proof:
                     logger.info(
                         "Invoice PDF set as Bitrix Payment Proof on lead %s | invoice=%s",
                         workflow.bitrix_lead_id,
                         invoice.invoice_number,
                     )
+                attached_invoice = await self.bitrix.attach_lead_invoice_file_if_empty(
+                    workflow.bitrix_lead_id,
+                    filename=filename,
+                    content=content,
+                )
+                if attached_invoice:
+                    logger.info(
+                        "Invoice PDF set on Bitrix Invoice field on lead %s | invoice=%s",
+                        workflow.bitrix_lead_id,
+                        invoice.invoice_number,
+                    )
             except Exception:
                 logger.exception(
-                    "Failed to attach invoice as Payment Proof on lead %s",
+                    "Failed to attach invoice PDF on lead %s",
                     workflow.bitrix_lead_id,
                 )
 

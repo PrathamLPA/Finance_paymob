@@ -656,6 +656,32 @@ class MockBitrixClient:
         )
         return True
 
+    async def attach_lead_invoice_file_if_empty(
+        self,
+        lead_id: int,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> bool:
+        field = self.settings.bitrix_field_lead_invoice_file
+        if not field or not content:
+            return False
+        lead = await self.get_lead(lead_id)
+        if not _is_blank(lead.get(field)):
+            logger.info(
+                "[MockBitrix] Invoice file already set on lead %s — leaving as-is",
+                lead_id,
+            )
+            return False
+        lead[field] = [{"name": filename, "size": len(content)}]
+        self._mock_leads[lead_id] = lead
+        logger.info(
+            "[MockBitrix] Attached invoice PDF to Invoice field on lead %s | file=%s",
+            lead_id,
+            filename,
+        )
+        return True
+
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None:
         deal = await self.get_deal(deal_id)
         deal[self.settings.bitrix_field_total_amount] = str(summary.total_amount)
@@ -1362,6 +1388,50 @@ class RealBitrixClient:
         }
         await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
 
+    async def _attach_lead_file_uf_if_empty(
+        self,
+        lead_id: int,
+        field: str,
+        *,
+        filename: str,
+        content: bytes,
+        label: str,
+    ) -> bool:
+        """Set a lead file UF to [[name, base64]] when empty (works for single + multiple)."""
+        import base64
+
+        code = (field or "").strip()
+        if not code or not content:
+            return False
+        lead = await self.get_lead(lead_id)
+        if not _is_blank(lead.get(code)):
+            logger.info(
+                "%s already set on lead %s — not overwriting with invoice",
+                label,
+                lead_id,
+            )
+            return False
+
+        safe_name = (filename or "Invoice.pdf").strip() or "Invoice.pdf"
+        await self._call(
+            "crm.lead.update",
+            {
+                "id": lead_id,
+                "fields": {
+                    code: [[safe_name, base64.b64encode(content).decode("ascii")]],
+                },
+            },
+        )
+        logger.info(
+            "Attached invoice PDF as %s | lead=%s field=%s file=%s bytes=%s",
+            label,
+            lead_id,
+            code,
+            safe_name,
+            len(content),
+        )
+        return True
+
     async def attach_lead_payment_proof_if_empty(
         self,
         lead_id: int,
@@ -1370,38 +1440,29 @@ class RealBitrixClient:
         content: bytes,
     ) -> bool:
         """Set Complete-lead Payment Proof file UF to the invoice PDF when empty."""
-        import base64
-
-        field = (self.settings.bitrix_field_complete_payment_proof or "").strip()
-        if not field or not content:
-            return False
-        lead = await self.get_lead(lead_id)
-        if not _is_blank(lead.get(field)):
-            logger.info(
-                "Payment Proof already set on lead %s — not overwriting with invoice",
-                lead_id,
-            )
-            return False
-
-        # Bitrix file userfields accept [[filename, base64content], ...]
-        safe_name = (filename or "Invoice.pdf").strip() or "Invoice.pdf"
-        await self._call(
-            "crm.lead.update",
-            {
-                "id": lead_id,
-                "fields": {
-                    field: [[safe_name, base64.b64encode(content).decode("ascii")]],
-                },
-            },
-        )
-        logger.info(
-            "Attached invoice PDF as Complete-lead Payment Proof | lead=%s field=%s file=%s bytes=%s",
+        return await self._attach_lead_file_uf_if_empty(
             lead_id,
-            field,
-            safe_name,
-            len(content),
+            self.settings.bitrix_field_complete_payment_proof,
+            filename=filename,
+            content=content,
+            label="Complete-lead Payment Proof",
         )
-        return True
+
+    async def attach_lead_invoice_file_if_empty(
+        self,
+        lead_id: int,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> bool:
+        """Set lead card Invoice (tile multi-file UF) to the Zoho invoice PDF when empty."""
+        return await self._attach_lead_file_uf_if_empty(
+            lead_id,
+            self.settings.bitrix_field_lead_invoice_file,
+            filename=filename,
+            content=content,
+            label="Invoice file",
+        )
 
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None:
         fields = {

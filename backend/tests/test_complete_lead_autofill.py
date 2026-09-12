@@ -112,6 +112,31 @@ def test_mock_attach_lead_payment_proof_if_empty_only_once():
     assert client._mock_leads[42]["UF_PROOF"][0]["name"] == "Invoice_1.pdf"
 
 
+def test_mock_attach_lead_invoice_file_if_empty():
+    from app.integrations.bitrix import MockBitrixClient
+
+    client = MockBitrixClient(
+        Settings(bitrix_field_lead_invoice_file="UF_INVOICE")
+    )
+    client._mock_leads[43] = {"ID": 43, "UF_INVOICE": []}
+
+    async def _run():
+        first = await client.attach_lead_invoice_file_if_empty(
+            43, filename="Invoice_INV.pdf", content=b"%PDF-1.4"
+        )
+        second = await client.attach_lead_invoice_file_if_empty(
+            43, filename="Other.pdf", content=b"%PDF-other"
+        )
+        return first, second
+
+    import asyncio
+
+    first, second = asyncio.run(_run())
+    assert first is True
+    assert second is False
+    assert client._mock_leads[43]["UF_INVOICE"][0]["name"] == "Invoice_INV.pdf"
+
+
 def test_build_deal_payment_fields_copies_lead_and_fills_context_gaps():
     from app.integrations.bitrix import build_deal_payment_fields_from_lead
 
