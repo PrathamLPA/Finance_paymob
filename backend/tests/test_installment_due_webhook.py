@@ -87,6 +87,45 @@ def test_installment_due_webhook_creates_link_and_emails(client, seed_lead, db_s
     assert second["reason"] == "notice_already_sent"
 
 
+def test_installment_due_still_sends_when_threshold_percent_met(client, seed_lead, db_session):
+    """50% threshold met must not block Installment 2+ due links."""
+    settings = get_settings()
+    deal_id = _finance_deal(client, seed_lead, db_session, 503)
+    bitrix = get_bitrix_client()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+
+    workflow = db_session.scalar(
+        select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 503)
+    )
+    assert workflow is not None
+    lead_id = workflow.bitrix_lead_id
+    bitrix._mock_leads[lead_id].update(
+        {
+            settings.bitrix_field_client_email: "threshold@test.com",
+            settings.bitrix_field_installment_count: 2,
+            settings.bitrix_field_installment_1: "5000",
+            settings.bitrix_field_installment_1_date: "2026-01-01",
+            settings.bitrix_field_installment_2: "5000",
+            settings.bitrix_field_installment_2_due_date: tomorrow,
+        }
+    )
+    workflow.bitrix_lead_payload = dict(bitrix._mock_leads[lead_id])
+    workflow.total_amount = Decimal("10000")
+    workflow.amount_paid = Decimal("5000")  # exactly 50% threshold
+    workflow.installment_notices_sent = None
+    db_session.commit()
+
+    email_client = get_email_client()
+    before = len(email_client.sent_emails)
+    body = client.post(
+        f"/webhooks/bitrix24/installment-due?deal_id={deal_id}&installment=2"
+    ).json()
+    assert body["status"] == "processed"
+    assert body["installment_number"] == 2
+    assert body.get("payment_url")
+    assert len(email_client.sent_emails) > before
+
+
 def test_installment_due_webhook_query_token_auth(client, seed_lead, db_session, monkeypatch):
     deal_id = _finance_deal(client, seed_lead, db_session, 502)
     monkeypatch.setenv("BITRIX_WEBHOOK_SECRET", "bp-secret")

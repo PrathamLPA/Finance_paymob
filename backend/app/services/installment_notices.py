@@ -68,11 +68,18 @@ def installment_schedule(entity: dict[str, Any] | None, settings: Settings) -> l
         (3, settings.bitrix_field_installment_3, settings.bitrix_field_installment_3_due_date),
         (4, settings.bitrix_field_installment_4, settings.bitrix_field_installment_4_due_date),
     ]
-    count_raw = _field(entity, settings.bitrix_field_installment_count)
-    try:
-        count = int(str(count_raw).strip()) if count_raw not in (None, "") else None
-    except (TypeError, ValueError):
-        count = None
+    # Prefer enum-aware count (5828 → 2); fall back to raw int for plain values.
+    from app.services.installment_plan import _installment_count
+
+    count = _installment_count(entity, settings)
+    if count is None:
+        count_raw = _field(entity, settings.bitrix_field_installment_count)
+        try:
+            count = int(str(count_raw).strip()) if count_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            count = None
+        if count is not None and not (1 <= count <= 4):
+            count = None
 
     schedule: list[InstallmentSlot] = []
     for number, amount_field, date_field in slots:
@@ -90,11 +97,9 @@ def is_installment_plan(entity: dict[str, Any] | None, settings: Settings) -> bo
     schedule = installment_schedule(entity, settings)
     if len(schedule) >= 2:
         return True
-    count_raw = _field(entity or {}, settings.bitrix_field_installment_count)
-    try:
-        count = int(str(count_raw).strip()) if count_raw not in (None, "") else 0
-    except (TypeError, ValueError):
-        count = 0
+    from app.services.installment_plan import _installment_count
+
+    count = _installment_count(entity or {}, settings) or 0
     return count >= 2 and bool(schedule)
 
 

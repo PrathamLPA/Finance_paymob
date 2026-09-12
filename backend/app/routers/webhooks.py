@@ -354,6 +354,16 @@ async def bitrix24_installment_due(
 
     result["request_id"] = request_id
     result["deal_id"] = deal_id
+    logger.info(
+        "Bitrix installment-due result | request_id=%s deal_id=%s status=%s reason=%s "
+        "installment=%s payment_url=%s",
+        request_id,
+        deal_id,
+        result.get("status"),
+        result.get("reason") or "-",
+        result.get("installment_number") or installment_number or "-",
+        (result.get("payment_url") or "-")[:80],
+    )
     return result
 
 

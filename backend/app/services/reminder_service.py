@@ -40,6 +40,37 @@ class ReminderService:
     def _lead_payload(self, workflow: CustomerWorkflow) -> dict:
         return workflow.bitrix_lead_payload if isinstance(workflow.bitrix_lead_payload, dict) else {}
 
+    def _merge_deal_installment_fields(self, lead: dict, deal: dict) -> dict:
+        """Fill blank lead installment UFs from the Finance deal (tunnel copy)."""
+        if not deal:
+            return lead
+        merged = dict(lead or {})
+        codes = [
+            self.settings.bitrix_field_installment_count,
+            self.settings.bitrix_field_installment_1,
+            self.settings.bitrix_field_installment_1_date,
+            self.settings.bitrix_field_installment_2,
+            self.settings.bitrix_field_installment_2_due_date,
+            self.settings.bitrix_field_installment_3,
+            self.settings.bitrix_field_installment_3_due_date,
+            self.settings.bitrix_field_installment_4,
+            self.settings.bitrix_field_installment_4_due_date,
+            self.settings.bitrix_field_payment_1_mode,
+            self.settings.bitrix_field_payment_2_mode,
+            self.settings.bitrix_field_payment_3_mode,
+            self.settings.bitrix_field_payment_4_mode,
+        ]
+        for code in codes:
+            if not code:
+                continue
+            current = merged.get(code)
+            if current not in (None, "", [], {}, 0, "0"):
+                continue
+            value = deal.get(code)
+            if value not in (None, "", [], {}, 0, "0"):
+                merged[code] = value
+        return merged
+
     async def _client_email(self, workflow: CustomerWorkflow, lead: dict) -> str | None:
         email, _ = await self.bitrix.resolve_customer_details(lead)
         return email or workflow.customer_email
@@ -131,21 +162,26 @@ class ReminderService:
         *,
         early_days: int = 0,
         force_installment_number: int | None = None,
+        lead_override: dict | None = None,
     ) -> PaymentSession | None:
+        from app.services.installment_charge import ChargePlan
         from app.services.installment_plan import resolve_first_charge_for_workflow
         from app.services.workflow_orchestrator import WorkflowOrchestrator
 
         refreshing_expired = self._needs_expired_link_refresh(workflow)
 
-        lead = self._lead_payload(workflow)
+        lead = dict(lead_override) if isinstance(lead_override, dict) else self._lead_payload(workflow)
         orchestrator = WorkflowOrchestrator(self.db, self.settings)
-        try:
-            fresh = await self.bitrix.get_lead(workflow.bitrix_lead_id)
-            if fresh:
-                lead = fresh
-                await orchestrator.sync_workflow_from_lead(workflow, lead=fresh)
-        except Exception:
-            logger.exception("Could not refresh Bitrix lead %s for reminder", workflow.bitrix_lead_id)
+        if lead_override is None:
+            try:
+                fresh = await self.bitrix.get_lead(workflow.bitrix_lead_id)
+                if fresh:
+                    lead = fresh
+                    await orchestrator.sync_workflow_from_lead(workflow, lead=fresh)
+            except Exception:
+                logger.exception(
+                    "Could not refresh Bitrix lead %s for reminder", workflow.bitrix_lead_id
+                )
 
         # Always charge Installment 1 (or remaining) — never silently fall back to full total
         # just because charge_amount was omitted.
@@ -159,6 +195,23 @@ class ReminderService:
             installment_number = 1
         if force_installment_number is not None:
             installment_number = force_installment_number
+            forced = unpaid_installment_by_number(
+                lead,
+                self.settings,
+                amount_paid=workflow.amount_paid,
+                installment_number=force_installment_number,
+            )
+            if forced and forced.amount and forced.amount > 0:
+                remaining = workflow.remaining_balance
+                charge = forced.amount
+                if remaining > 0 and charge > remaining:
+                    charge = remaining
+                plan = ChargePlan(
+                    amount=charge,
+                    source=f"installment_{force_installment_number}",
+                    label=f"Installment {force_installment_number}",
+                    locked=True,
+                )
 
         from app.services.payment_mode import (
             resolve_is_bank_transfer_payment_mode,
@@ -388,13 +441,14 @@ class ReminderService:
 
         orchestrator = WorkflowOrchestrator(self.db, self.settings)
         try:
-            workflow, _deal = await orchestrator.resolve_workflow_for_bitrix_deal(
+            workflow, deal = await orchestrator.resolve_workflow_for_bitrix_deal(
                 finance_deal_id
             )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
 
-        if not self._has_open_balance(workflow):
+        # Threshold % (e.g. 50%) can already be met while Installment 2+ is still unpaid.
+        if (workflow.total_amount or 0) <= 0 or workflow.remaining_balance <= 0:
             return {
                 "status": "ignored",
                 "reason": "already_paid",
@@ -413,6 +467,9 @@ class ReminderService:
                 workflow.bitrix_lead_id,
                 finance_deal_id,
             )
+
+        # Finance tunnel often holds installment UFs while the converted lead does not.
+        lead = self._merge_deal_installment_fields(lead, deal if isinstance(deal, dict) else {})
 
         if not is_installment_plan(lead, self.settings):
             return {
@@ -465,6 +522,7 @@ class ReminderService:
             workflow,
             early_days=1,
             force_installment_number=slot.number,
+            lead_override=lead,
         )
 
         payment_url = None
