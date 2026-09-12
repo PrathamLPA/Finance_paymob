@@ -129,6 +129,7 @@ def is_cash_payment_mode(
     installment_number: int,
     settings: Settings,
     bitrix_enum_labels: dict[str, str] | None = None,
+    allow_cross_installment_fallback: bool = True,
 ) -> bool:
     field = payment_mode_field_for_installment(settings, installment_number)
     raw = lead.get(field) if lead and field else None
@@ -139,8 +140,9 @@ def is_cash_payment_mode(
     cash_ids = cash_mode_enum_ids(settings)
     configured_map = _parse_mode_enum_map(settings)
 
-    # If the charge installment mode is blank, fall back to any Cash mode on 1-4.
-    if not enum_id and lead:
+    # If the charge installment mode is blank, optionally fall back to Cash on 1-4.
+    # Installment-due links disable this so I1 cash does not force I2+ into Cash Desk.
+    if not enum_id and lead and allow_cross_installment_fallback:
         for n in (1, 2, 3, 4):
             if n == installment_number:
                 continue
@@ -232,6 +234,7 @@ def is_bank_transfer_payment_mode(
     installment_number: int,
     settings: Settings,
     bitrix_enum_labels: dict[str, str] | None = None,
+    allow_cross_installment_fallback: bool = True,
 ) -> bool:
     """True when mode is bank transfer. Cash takes precedence if both would match."""
     if is_cash_payment_mode(
@@ -239,6 +242,7 @@ def is_bank_transfer_payment_mode(
         installment_number=installment_number,
         settings=settings,
         bitrix_enum_labels=bitrix_enum_labels,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
     ):
         return False
 
@@ -250,7 +254,7 @@ def is_bank_transfer_payment_mode(
     checked_installment = installment_number
     bt_ids = bank_transfer_mode_enum_ids(settings)
 
-    if not enum_id and lead:
+    if not enum_id and lead and allow_cross_installment_fallback:
         for n in (1, 2, 3, 4):
             if n == installment_number:
                 continue
@@ -471,6 +475,7 @@ async def resolve_is_cash_payment_mode(
     installment_number: int,
     settings: Settings,
     bitrix: Any,
+    allow_cross_installment_fallback: bool = True,
 ) -> bool:
     """Cash check with live Bitrix enumeration labels for the payment-mode field."""
     bitrix_labels = await _load_payment_mode_bitrix_labels(
@@ -483,6 +488,7 @@ async def resolve_is_cash_payment_mode(
         installment_number=installment_number,
         settings=settings,
         bitrix_enum_labels=bitrix_labels or None,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
     )
 
 
@@ -492,6 +498,7 @@ async def resolve_is_bank_transfer_payment_mode(
     installment_number: int,
     settings: Settings,
     bitrix: Any,
+    allow_cross_installment_fallback: bool = True,
 ) -> bool:
     """Bank transfer check with live Bitrix enumeration labels."""
     bitrix_labels = await _load_payment_mode_bitrix_labels(
@@ -504,6 +511,7 @@ async def resolve_is_bank_transfer_payment_mode(
         installment_number=installment_number,
         settings=settings,
         bitrix_enum_labels=bitrix_labels or None,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
     )
 
 

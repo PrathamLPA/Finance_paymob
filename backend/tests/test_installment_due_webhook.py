@@ -52,6 +52,8 @@ def test_installment_due_webhook_creates_link_and_emails(client, seed_lead, db_s
             settings.bitrix_field_installment_2_due_date: tomorrow,
             settings.bitrix_field_installment_3: "8000",
             settings.bitrix_field_installment_3_due_date: "2026-12-01",
+            # I1 was cash; I2 mode blank — installment-due must still issue Paymob link.
+            settings.bitrix_field_payment_1_mode: "5774",
         }
     )
     workflow.bitrix_lead_payload = dict(bitrix._mock_leads[lead_id])

@@ -221,11 +221,15 @@ class ReminderService:
         from app.services.bank_transfer_service import BankTransferService
 
         number_for_mode = installment_number or 1
+        # Later installments: blank mode → online Paymob link (customer can choose).
+        # Only honor cash/bank if that installment's own Payment Mode UF is set.
+        mode_fallback = force_installment_number is None
         if await resolve_is_cash_payment_mode(
             lead,
             installment_number=number_for_mode,
             settings=self.settings,
             bitrix=self.bitrix,
+            allow_cross_installment_fallback=mode_fallback,
         ):
             try:
                 await orchestrator.queue_cash_with_intake_link(
@@ -256,6 +260,7 @@ class ReminderService:
             installment_number=number_for_mode,
             settings=self.settings,
             bitrix=self.bitrix,
+            allow_cross_installment_fallback=mode_fallback,
         ):
             channel = CHANNEL_BANK_TRANSFER
 
