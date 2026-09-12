@@ -30,6 +30,55 @@ def test_parse_lead_prefers_client_email_field():
     assert name == "Aisha Khan"
 
 
+def test_resolve_customer_details_prefers_contact_over_email_domains():
+    import asyncio
+
+    from app.integrations.bitrix import MockBitrixClient
+    from app.config import Settings
+
+    settings = Settings(bitrix_field_client_email="UF_EMAIL_DOMAINS")
+    client = MockBitrixClient(settings)
+    client._mock_contacts[55] = {
+        "ID": 55,
+        "NAME": "Sabith",
+        "LAST_NAME": "",
+        "EMAIL": [{"VALUE": "sabith.learnerspoint@gmail.com", "VALUE_TYPE": "WORK"}],
+    }
+    lead = {
+        "ID": 1,
+        "NAME": "",
+        "LAST_NAME": "",
+        "EMAIL": None,
+        "CONTACT_ID": 55,
+        "UF_EMAIL_DOMAINS": "",  # Email domains empty — Contact should win
+    }
+
+    email, name = asyncio.run(client.resolve_customer_details(lead))
+    assert email == "sabith.learnerspoint@gmail.com"
+    assert name == "Sabith"
+
+
+def test_resolve_customer_details_contact_overrides_email_domains():
+    import asyncio
+
+    from app.integrations.bitrix import MockBitrixClient
+    from app.config import Settings
+
+    settings = Settings(bitrix_field_client_email="UF_EMAIL_DOMAINS")
+    client = MockBitrixClient(settings)
+    client._mock_contacts[56] = {
+        "ID": 56,
+        "EMAIL": [{"VALUE": "from-contact@test.com", "VALUE_TYPE": "WORK"}],
+    }
+    lead = {
+        "CONTACT_ID": 56,
+        "UF_EMAIL_DOMAINS": "from-domains@test.com",
+    }
+
+    email, _ = asyncio.run(client.resolve_customer_details(lead))
+    assert email == "from-contact@test.com"
+
+
 def test_next_due_installment_skips_paid_slot():
     settings = get_settings()
     today = date(2026, 8, 24)
@@ -54,16 +103,22 @@ def test_parse_bitrix_date_formats():
     assert parse_bitrix_date("2026-08-24T00:00:00+04:00") == date(2026, 8, 24)
 
 
-def test_installment_due_date_emails_client_from_uf_field(client, seed_lead, db_session, monkeypatch):
+def test_installment_due_date_emails_client_from_contact_card(client, seed_lead, db_session, monkeypatch):
     monkeypatch.setenv("INSTALLMENT_DUE_NOTICES_ENABLED", "true")
     get_settings.cache_clear()
     settings = get_settings()
     seed_lead(306, email="crm-email@test.com", amount=Decimal("1500"))
     bitrix = get_bitrix_client()
     today = date.today().isoformat()
+    contact_id = bitrix._mock_leads[306].get("CONTACT_ID")
+    assert contact_id
+    bitrix._mock_contacts[int(contact_id)]["EMAIL"] = [
+        {"VALUE": "installment-client@test.com", "VALUE_TYPE": "WORK"}
+    ]
     bitrix._mock_leads[306].update(
         {
-            settings.bitrix_field_client_email: "installment-client@test.com",
+            # Email domains UF empty / wrong — Contact card must win
+            settings.bitrix_field_client_email: "",
             settings.bitrix_field_installment_count: 3,
             settings.bitrix_field_installment_1: "500",
             settings.bitrix_field_installment_1_date: "2026-01-01",
@@ -92,9 +147,12 @@ def test_installment_due_date_emails_client_from_uf_field(client, seed_lead, db_
     )
     assert paid.status_code == 200
 
+    bitrix._mock_contacts[int(contact_id)]["EMAIL"] = [
+        {"VALUE": "installment-client@test.com", "VALUE_TYPE": "WORK"}
+    ]
     bitrix._mock_leads[306].update(
         {
-            settings.bitrix_field_client_email: "installment-client@test.com",
+            settings.bitrix_field_client_email: "",
             settings.bitrix_field_installment_count: 3,
             settings.bitrix_field_installment_1: "500",
             settings.bitrix_field_installment_1_date: "2026-01-01",

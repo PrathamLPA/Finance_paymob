@@ -18,6 +18,7 @@ from app.integrations.factory import get_bitrix_client, get_email_client, get_pa
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import SOURCE_FINANCE_DEAL, SOURCE_LEAD, PaymentSession
 from app.models.payment_transaction import PaymentTransaction
+from app.services.email_validation import invalid_email_comment, is_valid_email
 from app.services.estimate_price_gate import (
     PriceGateResult,
     ProductLine,
@@ -401,10 +402,15 @@ class WorkflowOrchestrator:
     ) -> CustomerWorkflow:
         lead = lead or await self.bitrix.get_lead(workflow.bitrix_lead_id)
         workflow.total_amount = self.bitrix.extract_lead_amount(lead)
-        email, name = self.bitrix.extract_customer_details(lead)
+        email, name = await self.bitrix.resolve_customer_details(lead)
         previous_email = (workflow.customer_email or "").strip().lower()
+        invalid_email_noted = False
+        if email and not is_valid_email(email):
+            await self._comment_invalid_customer_email(workflow, email)
+            email = None
+            invalid_email_noted = True
         new_email = (email or "").strip().lower()
-        if new_email != previous_email:
+        if new_email != previous_email and not invalid_email_noted:
             had_paymob_block = bool(workflow.last_paymob_failure_hash)
             workflow.last_paymob_failure_hash = None
             # Email changed after a Paymob block - retry on the next reminder scan.
@@ -420,6 +426,27 @@ class WorkflowOrchestrator:
             workflow.customer_phone = phones[0].get("VALUE")
         elif isinstance(phones, str):
             workflow.customer_phone = phones
+        # Prefer phone from linked Contact when lead PHONE is empty.
+        if not workflow.customer_phone:
+            contact_id = lead.get("CONTACT_ID") or lead.get("contactId")
+            try:
+                cid = int(contact_id) if contact_id not in (None, "", "0") else None
+            except (TypeError, ValueError):
+                cid = None
+            if cid:
+                try:
+                    contact = await self.bitrix.get_contact(cid)
+                    cphones = (contact or {}).get("PHONE") or []
+                    if isinstance(cphones, list) and cphones:
+                        workflow.customer_phone = cphones[0].get("VALUE")
+                    elif isinstance(cphones, str):
+                        workflow.customer_phone = cphones
+                except Exception:
+                    logger.exception(
+                        "Could not load contact phone for lead %s contact %s",
+                        workflow.bitrix_lead_id,
+                        cid,
+                    )
         workflow.currency = lead.get("CURRENCY_ID") or self.settings.default_currency
         workflow.bitrix_lead_stage_id = lead.get("STATUS_ID")
         workflow.bitrix_lead_payload = lead
@@ -2154,13 +2181,8 @@ class WorkflowOrchestrator:
             return
 
         summary = self._paymob_failure_summary(reason)
-        if "valid email" in reason.lower():
-            comment = (
-                f"Payment link blocked - invalid customer email\n"
-                f"Paymob rejected the billing email: {email_on_file}\n"
-                f"Trigger: {trigger}\n"
-                f"Please correct the email on the lead and generate a new payment link."
-            )
+        if self._is_invalid_email_paymob_reason(reason):
+            comment = invalid_email_comment(email_on_file)
         else:
             comment = (
                 f"Payment link could not be created\n"
@@ -2183,6 +2205,25 @@ class WorkflowOrchestrator:
             subject=f"Payment link failed - Lead {workflow.bitrix_lead_id}",
             body=comment,
         )
+        workflow.last_paymob_failure_hash = digest
+        self.db.commit()
+
+    async def _comment_invalid_customer_email(
+        self,
+        workflow: CustomerWorkflow,
+        email: str | None,
+    ) -> None:
+        """Post once on Bitrix when Contact/lead email fails format checks."""
+        comment = invalid_email_comment(email)
+        digest = self.invalid_email_failure_digest(email or "")
+        if workflow.last_paymob_failure_hash == digest:
+            return
+        logger.warning(
+            "Invalid customer email on lead %s | email=%s",
+            workflow.bitrix_lead_id,
+            (email or "").strip() or "(empty)",
+        )
+        await self._comment_on_workflow_entities(workflow, comment)
         workflow.last_paymob_failure_hash = digest
         self.db.commit()
 

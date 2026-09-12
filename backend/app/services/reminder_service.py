@@ -21,6 +21,7 @@ from app.services.installment_notices import (
     unpaid_installment_by_number,
 )
 from app.services.payment_session_service import PaymentSessionService
+from app.services.email_validation import is_valid_email
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,8 @@ class ReminderService:
     def _lead_payload(self, workflow: CustomerWorkflow) -> dict:
         return workflow.bitrix_lead_payload if isinstance(workflow.bitrix_lead_payload, dict) else {}
 
-    def _client_email(self, workflow: CustomerWorkflow, lead: dict) -> str | None:
-        email, _ = self.bitrix.extract_customer_details(lead)
+    async def _client_email(self, workflow: CustomerWorkflow, lead: dict) -> str | None:
+        email, _ = await self.bitrix.resolve_customer_details(lead)
         return email or workflow.customer_email
 
     def _notices_sent(self, workflow: CustomerWorkflow) -> dict:
@@ -205,26 +206,35 @@ class ReminderService:
         ):
             channel = CHANNEL_BANK_TRANSFER
 
-        if channel == CHANNEL_ONLINE and orchestrator.is_known_invalid_paymob_email(workflow):
-            logger.info(
-                "Reminder skipped quietly — known invalid Paymob email | "
-                "workflow_id=%s lead_id=%s email=%s",
-                workflow.id,
-                workflow.bitrix_lead_id,
-                (workflow.customer_email or "").strip() or "(missing)",
-            )
-            # Keep Bitrix timeline visible for agents (deduped inside notify).
-            await orchestrator.notify_paymob_link_failure(
-                workflow,
-                reason=(
-                    'Paymob intention failed (400): '
-                    '{"billing_data":{"email":["Enter a valid email address."]}}'
-                ),
-                trigger="reminder (deferred)",
-            )
-            workflow.last_reminder_at = self._utcnow()
-            self.db.commit()
-            return None
+        if channel == CHANNEL_ONLINE:
+            billing_email = (workflow.customer_email or "").strip()
+            if billing_email and not is_valid_email(billing_email):
+                await orchestrator._comment_invalid_customer_email(
+                    workflow, billing_email
+                )
+                workflow.last_reminder_at = self._utcnow()
+                self.db.commit()
+                return None
+            if orchestrator.is_known_invalid_paymob_email(workflow):
+                logger.info(
+                    "Reminder skipped quietly — known invalid Paymob email | "
+                    "workflow_id=%s lead_id=%s email=%s",
+                    workflow.id,
+                    workflow.bitrix_lead_id,
+                    (workflow.customer_email or "").strip() or "(missing)",
+                )
+                # Keep Bitrix timeline visible for agents (deduped inside notify).
+                await orchestrator.notify_paymob_link_failure(
+                    workflow,
+                    reason=(
+                        'Paymob intention failed (400): '
+                        '{"billing_data":{"email":["Enter a valid email address."]}}'
+                    ),
+                    trigger="reminder (deferred)",
+                )
+                workflow.last_reminder_at = self._utcnow()
+                self.db.commit()
+                return None
 
         try:
             session = await self.session_service.get_or_create_reusable_session(
@@ -272,8 +282,11 @@ class ReminderService:
             session.token[:8],
         )
 
-        client_email = self._client_email(workflow, lead)
-        if client_email:
+        client_email = await self._client_email(workflow, lead)
+        if client_email and not is_valid_email(client_email):
+            await orchestrator._comment_invalid_customer_email(workflow, client_email)
+            client_email = None
+        elif client_email:
             workflow.customer_email = client_email
 
         slot = None

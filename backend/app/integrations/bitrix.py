@@ -445,6 +445,23 @@ def parse_lead_customer_details(
     return (email, name)
 
 
+def _contact_id_from_lead(lead: dict[str, Any]) -> int | None:
+    raw = lead.get("CONTACT_ID") or lead.get("contactId")
+    if raw in (None, "", "0", 0):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_contact_customer_details(contact: dict[str, Any]) -> tuple[str | None, str | None]:
+    name_parts = [contact.get("NAME"), contact.get("LAST_NAME")]
+    name = " ".join(str(p).strip() for p in name_parts if p and str(p).strip()) or None
+    email = coerce_email(contact.get("EMAIL"))
+    return email, name
+
+
 class MockBitrixClient:
     """Placeholder Bitrix client for prototype — logs actions and returns fake IDs."""
 
@@ -457,6 +474,7 @@ class MockBitrixClient:
         self.settings = settings or get_settings()
         self._mock_leads: dict[int, dict[str, Any]] = {}
         self._mock_deals: dict[int, dict[str, Any]] = {}
+        self._mock_contacts: dict[int, dict[str, Any]] = {}
         self._mock_comments: dict[tuple[str, int], list[dict[str, Any]]] = {}
         self._mock_product_rows: dict[tuple[str, int], list[dict[str, Any]]] = {}
         self._mock_catalog_prices: dict[int, Decimal] = {}
@@ -469,6 +487,13 @@ class MockBitrixClient:
         self.seed_user(101, email="agent@test.com", name="Sales Agent")
 
     def seed_lead(self, lead_id: int, *, email: str, name: str, amount: Decimal) -> None:
+        contact_id = 800000 + int(lead_id)
+        self._mock_contacts[contact_id] = {
+            "ID": contact_id,
+            "NAME": name.split()[0] if name else "Customer",
+            "LAST_NAME": " ".join(name.split()[1:]) if name and " " in name else "",
+            "EMAIL": [{"VALUE": email, "VALUE_TYPE": "WORK"}],
+        }
         self._mock_leads[lead_id] = {
             "ID": lead_id,
             "TITLE": f"Lead {lead_id}",
@@ -478,7 +503,7 @@ class MockBitrixClient:
             "OPPORTUNITY": str(amount),
             "CURRENCY_ID": self.settings.default_currency,
             "STATUS_ID": self.settings.bitrix_lead_payment_stage_id,
-            "CONTACT_ID": None,
+            "CONTACT_ID": contact_id,
             "ASSIGNED_BY_ID": 101,
         }
 
@@ -522,6 +547,9 @@ class MockBitrixClient:
             "CURRENCY_ID": self.settings.default_currency,
             "STATUS_ID": self.settings.bitrix_lead_payment_stage_id,
         }
+
+    async def get_contact(self, contact_id: int) -> dict[str, Any] | None:
+        return self._mock_contacts.get(int(contact_id))
 
     async def get_lead_userfield_enum_map(self, field_name: str) -> dict[str, str]:
         """Mock Payment Mode enums including the live Cash ID 5774."""
@@ -923,6 +951,25 @@ class MockBitrixClient:
             fallback_email_field=self.settings.bitrix_field_customer_email,
         )
 
+    async def resolve_customer_details(
+        self, lead: dict[str, Any]
+    ) -> tuple[str | None, str | None]:
+        """Prefer Contact card email over lead 'Email domains' UF."""
+        email, name = self.extract_customer_details(lead)
+        contact_id = _contact_id_from_lead(lead)
+        if not contact_id:
+            return email, name
+        contact = await self.get_contact(contact_id)
+        if not contact:
+            return email, name
+        contact_email, contact_name = parse_contact_customer_details(contact)
+        # Contact card wins for email when present (Email domains is often empty).
+        if contact_email:
+            email = contact_email
+        if not name and contact_name:
+            name = contact_name
+        return email, name
+
 
 class RealBitrixClient:
     """Real Bitrix24 REST client — replace mock when credentials are configured."""
@@ -1005,6 +1052,14 @@ class RealBitrixClient:
 
     async def get_lead(self, lead_id: int) -> dict[str, Any]:
         return await self._call("crm.lead.get", {"id": lead_id})
+
+    async def get_contact(self, contact_id: int) -> dict[str, Any] | None:
+        try:
+            result = await self._call("crm.contact.get", {"id": contact_id})
+        except Exception:
+            logger.exception("crm.contact.get failed for contact %s", contact_id)
+            return None
+        return result if isinstance(result, dict) and result.get("ID") else None
 
     async def get_lead_userfield_enum_map(self, field_name: str) -> dict[str, str]:
         """Return {enum_id: label_lower} for a lead UF enumeration field (cached)."""
@@ -2108,6 +2163,24 @@ class RealBitrixClient:
             client_email_field=self.settings.bitrix_field_client_email,
             fallback_email_field=self.settings.bitrix_field_customer_email,
         )
+
+    async def resolve_customer_details(
+        self, lead: dict[str, Any]
+    ) -> tuple[str | None, str | None]:
+        """Prefer Contact card email over lead 'Email domains' UF."""
+        email, name = self.extract_customer_details(lead)
+        contact_id = _contact_id_from_lead(lead)
+        if not contact_id:
+            return email, name
+        contact = await self.get_contact(contact_id)
+        if not contact:
+            return email, name
+        contact_email, contact_name = parse_contact_customer_details(contact)
+        if contact_email:
+            email = contact_email
+        if not name and contact_name:
+            name = contact_name
+        return email, name
 
 
 def _mail_fix_hint(exc: BitrixApiError) -> str:

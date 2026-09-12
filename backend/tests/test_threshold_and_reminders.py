@@ -173,12 +173,13 @@ def test_reminder_paymob_invalid_email_notifies_bitrix(client, seed_lead, db_ses
 
     from app.models.payment_session import SESSION_EXPIRED, PaymentSession
 
-    seed_lead(320, email="not-a-valid-email", amount=Decimal("1000"))
+    # Format-valid address that Paymob still rejects (billing_data.email).
+    seed_lead(320, email="reject@paymob.test", amount=Decimal("1000"))
     link = client.post(
         "/api/dev/send-payment-link",
         json={
             "lead_id": 320,
-            "customer_email": "not-a-valid-email",
+            "customer_email": "reject@paymob.test",
             "customer_name": "Bad Email User",
             "total_amount": "1000",
         },
@@ -218,10 +219,13 @@ def test_reminder_paymob_invalid_email_notifies_bitrix(client, seed_lead, db_ses
 
     comments = bitrix._mock_comments.get(("LEAD", 320), [])
     assert len(comments) > comments_before
-    assert any("invalid customer email" in c["COMMENT"].lower() for c in comments)
+    assert any(
+        c["COMMENT"] == "reject@paymob.test is not a valid mail" for c in comments
+    )
     assert len(bitrix._mock_notifications) > notifications_before
     assert any(
-        "invalid customer email" in n["message"].lower() for n in bitrix._mock_notifications
+        "reject@paymob.test is not a valid mail" in n["message"]
+        for n in bitrix._mock_notifications
     )
 
     db_session.refresh(workflow)

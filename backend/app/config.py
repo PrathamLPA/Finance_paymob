@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     bitrix_field_lead_total_amount: str = "UF_CRM_1684374599490"
     bitrix_field_payment_link: str = "UF_CRM_PAYMENT_LINK"
     bitrix_field_customer_email: str = "UF_CRM_CUSTOMER_EMAIL"
-    # Client email on the lead (Bitrix name="UF_CRM_1740610735352")
+    # Client "Email domains" UF — used only when Contact card has no email
     bitrix_field_client_email: str = "UF_CRM_1740610735352"
     bitrix_field_payment_percentage: str = "UF_CRM_PAYMENT_PERCENTAGE"
     bitrix_field_payment_status: str = "UF_CRM_PAYMENT_STATUS"
