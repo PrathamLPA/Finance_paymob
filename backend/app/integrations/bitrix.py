@@ -23,6 +23,10 @@ SCOPE_HINTS = {
 }
 
 
+def _is_blank(value: Any) -> bool:
+    return value in (None, "", [], {}, 0, "0")
+
+
 def _parse_positive_int(raw: Any) -> int:
     if raw in (None, "", [], {}, 0, "0"):
         return 0
