@@ -310,9 +310,15 @@ class WorkflowOrchestrator:
     ) -> tuple[CustomerWorkflow, dict]:
         """Find workflow for a Bitrix deal without requiring a pre-stored finance_deal_id.
 
-        Order: DB finance/sales/b2c id → deal.LEAD_ID → live lead sync.
-        Remembers ``finance_deal_id`` when this deal is first seen (tunneled Finance card).
+        Order: DB finance/sales/b2c id → deal.LEAD_ID → Original Deal ID (Sales) →
+        sibling/contact → live sync.
+        Remembers ``finance_deal_id`` / ``sales_deal_id`` when discovered.
         """
+        from app.integrations.bitrix import (
+            lead_id_from_deal_fields,
+            original_deal_id_from_deal_fields,
+        )
+
         deal = await self.bitrix.get_deal(deal_id)
         if not isinstance(deal, dict):
             deal = {}
@@ -325,24 +331,51 @@ class WorkflowOrchestrator:
             )
         )
 
+        lead_id = lead_id_from_deal_fields(deal)
+        if not workflow and lead_id:
+            workflow = self.get_workflow_by_lead(lead_id)
+
+        original_sales_id = original_deal_id_from_deal_fields(
+            deal, self.settings.bitrix_field_original_deal_id
+        )
+        if not workflow and original_sales_id:
+            workflow = self.get_workflow_by_sales_deal(original_sales_id)
+            if not workflow:
+                lead_id = await self._lead_id_from_sales_deal(original_sales_id)
+                if lead_id:
+                    workflow = self.get_workflow_by_lead(lead_id)
+
         if not workflow:
-            raw_lead = deal.get("LEAD_ID") or deal.get("leadId") or deal.get("PARENT_ID_1")
-            try:
-                lead_id = int(raw_lead) if raw_lead not in (None, "", 0, "0") else 0
-            except (TypeError, ValueError):
-                lead_id = 0
-            if lead_id > 0:
+            lead_id = await self._resolve_lead_id_for_orphaned_deal(deal)
+            if lead_id:
                 workflow = self.get_workflow_by_lead(lead_id)
 
         if not workflow:
             raise ValueError(
                 f"No workflow found for Bitrix deal {deal_id} "
-                "(no matching finance/sales id and no LEAD_ID link)"
+                "(no matching finance/sales id, LEAD_ID, Original Deal ID, or Contact→lead link)"
             )
 
-        # Tunneled Finance card: remember id so later stages/reminders stay fast.
-        if workflow.finance_deal_id != deal_id:
+        dirty = False
+        if original_sales_id and workflow.sales_deal_id != original_sales_id:
+            workflow.sales_deal_id = original_sales_id
+            dirty = True
+        # Stamp finance only when this deal is not already known as sales/b2c.
+        if (
+            workflow.finance_deal_id != deal_id
+            and workflow.sales_deal_id != deal_id
+            and workflow.b2c_deal_id != deal_id
+        ):
             workflow.finance_deal_id = deal_id
+            dirty = True
+        elif (
+            original_sales_id
+            and workflow.finance_deal_id != deal_id
+            and deal_id != original_sales_id
+        ):
+            workflow.finance_deal_id = deal_id
+            dirty = True
+        if dirty:
             self.db.commit()
             self.db.refresh(workflow)
 
@@ -359,6 +392,113 @@ class WorkflowOrchestrator:
             )
 
         return workflow, deal
+
+    async def _lead_id_from_sales_deal(self, sales_deal_id: int) -> int:
+        from app.integrations.bitrix import lead_id_from_deal_fields
+
+        try:
+            sales = await self.bitrix.get_deal(sales_deal_id)
+        except Exception:
+            logger.exception(
+                "Could not load Sales deal %s for Original Deal ID bridge",
+                sales_deal_id,
+            )
+            return 0
+        if not isinstance(sales, dict):
+            return 0
+        lead_id = lead_id_from_deal_fields(sales)
+        if lead_id:
+            logger.info(
+                "Resolved Finance→Sales %s → lead %s via Original Deal ID",
+                sales_deal_id,
+                lead_id,
+            )
+        return lead_id
+
+    async def _link_sales_deal_if_present(self, workflow: CustomerWorkflow) -> None:
+        """Best-effort: crm.deal.list by LEAD_ID (no convert). Sales may not exist yet."""
+        if workflow.sales_deal_id:
+            return
+        try:
+            sales_id = await self.bitrix.find_sales_deal_id_for_lead(
+                workflow.bitrix_lead_id
+            )
+        except Exception:
+            logger.exception(
+                "Sales deal lookup failed for lead %s",
+                workflow.bitrix_lead_id,
+            )
+            return
+        if not sales_id:
+            return
+        workflow.sales_deal_id = sales_id
+        self.db.commit()
+        self.db.refresh(workflow)
+        logger.info(
+            "Linked Sales deal %s to workflow for lead %s (lookup only)",
+            sales_id,
+            workflow.bitrix_lead_id,
+        )
+
+    async def _resolve_lead_id_for_orphaned_deal(self, deal: dict) -> int:
+        """Bitrix tunnels often drop LEAD_ID — recover via Contact sibling Sales deal / leads."""
+        from app.integrations.bitrix import lead_id_from_deal_fields
+
+        contact_raw = deal.get("CONTACT_ID") or deal.get("contactId")
+        try:
+            contact_id = int(contact_raw) if contact_raw not in (None, "", "0", 0) else 0
+        except (TypeError, ValueError):
+            contact_id = 0
+        if contact_id <= 0:
+            return 0
+
+        try:
+            siblings = await self.bitrix.list_deals_by_contact(contact_id)
+        except Exception:
+            logger.exception(
+                "Could not list deals for contact %s while resolving orphan deal",
+                contact_id,
+            )
+            siblings = []
+        for sibling in siblings:
+            lead_id = lead_id_from_deal_fields(sibling)
+            if lead_id and self.get_workflow_by_lead(lead_id):
+                logger.info(
+                    "Resolved orphan Bitrix deal via sibling deal %s → lead %s",
+                    sibling.get("ID"),
+                    lead_id,
+                )
+                return lead_id
+
+        try:
+            leads = await self.bitrix.list_leads_by_contact(contact_id)
+        except Exception:
+            logger.exception(
+                "Could not list leads for contact %s while resolving orphan deal",
+                contact_id,
+            )
+            leads = []
+        # Prefer converted / most recent lead that already has a workflow.
+        ranked = sorted(
+            leads,
+            key=lambda row: (
+                0 if str(row.get("STATUS_ID") or "").upper() == "CONVERTED" else 1,
+                -int(row.get("ID") or 0),
+            ),
+        )
+        for lead in ranked:
+            try:
+                lead_id = int(lead.get("ID") or 0)
+            except (TypeError, ValueError):
+                lead_id = 0
+            if lead_id and self.get_workflow_by_lead(lead_id):
+                logger.info(
+                    "Resolved orphan Bitrix deal via contact %s → lead %s",
+                    contact_id,
+                    lead_id,
+                )
+                return lead_id
+        return 0
 
     def _apply_deal_payment_overlay(
         self, workflow: CustomerWorkflow, deal: dict
@@ -1709,15 +1849,18 @@ class WorkflowOrchestrator:
             )
 
         # Deals are created by Bitrix automation / tunnel — do not convert here.
-        workflow.sales_deal_id = None
+        # If Sales already exists (LEAD_ID filter), store it for fast Finance mapping later.
         workflow.finance_deal_id = None
         workflow.b2c_deal_id = None
         workflow.first_payment_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(workflow)
+        await self._link_sales_deal_if_present(workflow)
         logger.info(
-            "First payment recorded for lead %s — Sales convert left to Bitrix automation",
+            "First payment recorded for lead %s — Sales convert left to Bitrix automation "
+            "(sales_deal_id=%s)",
             workflow.bitrix_lead_id,
+            workflow.sales_deal_id or "-",
         )
 
     async def apply_recorded_payment(

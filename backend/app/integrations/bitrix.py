@@ -23,8 +23,50 @@ SCOPE_HINTS = {
 }
 
 
-def _is_blank(value: Any) -> bool:
-    return value in (None, "", [], {}, 0, "0")
+def _parse_positive_int(raw: Any) -> int:
+    if raw in (None, "", [], {}, 0, "0"):
+        return 0
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def lead_id_from_deal_fields(deal: dict[str, Any]) -> int:
+    """Extract origin lead id from a Bitrix deal (native + common custom fields)."""
+    for key in (
+        "LEAD_ID",
+        "leadId",
+        "PARENT_ID_1",
+        "UF_CRM_LEAD_ID",
+        "UF_CRM_LEAD",
+    ):
+        lead_id = _parse_positive_int(deal.get(key))
+        if lead_id:
+            return lead_id
+    return 0
+
+
+def original_deal_id_from_deal_fields(
+    deal: dict[str, Any], field_name: str | None = None
+) -> int:
+    """Finance copy → Sales deal id (UF Original Deal ID), plus common aliases."""
+    keys: list[str] = []
+    if field_name and str(field_name).strip():
+        keys.append(str(field_name).strip())
+    keys.extend(
+        (
+            "UF_CRM_64461C4D5CF41",
+            "ORIGINAL_DEAL_ID",
+            "UF_CRM_ORIGINAL_DEAL_ID",
+        )
+    )
+    for key in keys:
+        deal_id = _parse_positive_int(deal.get(key))
+        if deal_id:
+            return deal_id
+    return 0
 
 
 def _as_bitrix_date(value: Any) -> str | None:
@@ -570,6 +612,48 @@ class MockBitrixClient:
             return self._mock_deals[deal_id]
         return {"ID": deal_id, "TITLE": f"Deal {deal_id}", "STAGE_ID": "NEW"}
 
+    async def list_deals_by_contact(self, contact_id: int) -> list[dict[str, Any]]:
+        cid = str(contact_id)
+        rows = [
+            dict(deal)
+            for deal in self._mock_deals.values()
+            if str(deal.get("CONTACT_ID") or "") == cid
+        ]
+        rows.sort(key=lambda d: int(d.get("ID") or 0), reverse=True)
+        return rows
+
+    async def list_leads_by_contact(self, contact_id: int) -> list[dict[str, Any]]:
+        cid = str(contact_id)
+        rows = [
+            dict(lead)
+            for lead in self._mock_leads.values()
+            if str(lead.get("CONTACT_ID") or "") == cid
+        ]
+        rows.sort(key=lambda d: int(d.get("ID") or 0), reverse=True)
+        return rows
+
+    async def find_sales_deal_id_for_lead(self, lead_id: int) -> int | None:
+        """Lookup only — does not convert. Prefers Sales pipeline deals with LEAD_ID."""
+        sales_pipe = str(self.settings.bitrix_sales_pipeline_id or "16")
+        sales: list[int] = []
+        others: list[int] = []
+        for deal in self._mock_deals.values():
+            if lead_id_from_deal_fields(deal) != lead_id:
+                continue
+            try:
+                deal_id = int(deal.get("ID") or 0)
+            except (TypeError, ValueError):
+                continue
+            if deal_id <= 0:
+                continue
+            if str(deal.get("CATEGORY_ID") or "") == sales_pipe:
+                sales.append(deal_id)
+            else:
+                others.append(deal_id)
+        if sales:
+            return max(sales)
+        return max(others) if others else None
+
     async def convert_lead_to_sales_deal(self, lead_id: int, context: dict[str, Any]) -> int:
         await self.prepare_lead_for_complete_conversion(lead_id, context)
         deal_id = self.MOCK_SALES_DEAL_BASE + lead_id
@@ -1103,6 +1187,40 @@ class RealBitrixClient:
 
     async def get_deal(self, deal_id: int) -> dict[str, Any]:
         return await self._call("crm.deal.get", {"id": deal_id})
+
+    async def list_deals_by_contact(self, contact_id: int) -> list[dict[str, Any]]:
+        result = await self._call(
+            "crm.deal.list",
+            {
+                "filter": {"CONTACT_ID": contact_id},
+                "select": ["ID", "TITLE", "LEAD_ID", "CONTACT_ID", "CATEGORY_ID", "STAGE_ID"],
+                "order": {"ID": "DESC"},
+                "start": 0,
+            },
+        )
+        raw = self._scalar(result)
+        if not isinstance(raw, list):
+            return []
+        return [row for row in raw if isinstance(row, dict)]
+
+    async def list_leads_by_contact(self, contact_id: int) -> list[dict[str, Any]]:
+        result = await self._call(
+            "crm.lead.list",
+            {
+                "filter": {"CONTACT_ID": contact_id},
+                "select": ["ID", "TITLE", "STATUS_ID", "CONTACT_ID", "DATE_CREATE"],
+                "order": {"ID": "DESC"},
+                "start": 0,
+            },
+        )
+        raw = self._scalar(result)
+        if not isinstance(raw, list):
+            return []
+        return [row for row in raw if isinstance(row, dict)]
+
+    async def find_sales_deal_id_for_lead(self, lead_id: int) -> int | None:
+        """Lookup only — does not convert. Lists deals with LEAD_ID and prefers Sales pipeline."""
+        return await self._find_sales_deal_for_lead(lead_id, self._sales_pipeline_id())
 
     async def convert_lead_to_sales_deal(self, lead_id: int, context: dict[str, Any]) -> int:
         """Fill Complete-lead form fields (empty only), convert like the Bitrix UI, Sales deal."""

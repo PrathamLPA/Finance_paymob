@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     # Lead Payment Section / Complete-lead "Total Amount_" money field
     bitrix_field_lead_total_amount: str = "UF_CRM_1684374599490"
     bitrix_field_payment_link: str = "UF_CRM_PAYMENT_LINK"
+    # Finance deal UF "Original Deal ID" → Sales deal id (Copy deal bridge)
+    bitrix_field_original_deal_id: str = "UF_CRM_64461C4D5CF41"
     bitrix_field_customer_email: str = "UF_CRM_CUSTOMER_EMAIL"
     # Client "Email domains" UF — used only when Contact card has no email
     bitrix_field_client_email: str = "UF_CRM_1740610735352"
