@@ -137,6 +137,51 @@ def test_mock_attach_lead_invoice_file_if_empty():
     assert client._mock_leads[43]["UF_INVOICE"][0]["name"] == "Invoice_INV.pdf"
 
 
+def test_real_bitrix_file_uf_uses_filedata_payload():
+    """Regression: [[name, b64]] is accepted by Bitrix but stores nothing."""
+    import asyncio
+    import base64
+
+    from app.integrations.bitrix import RealBitrixClient
+
+    captured: dict = {}
+
+    class Stub(RealBitrixClient):
+        async def get_lead(self, lead_id: int) -> dict:
+            if captured.get("updated"):
+                # Simulate successful store after update.
+                return {
+                    "ID": lead_id,
+                    "UF_PROOF": {
+                        "id": 1,
+                        "showUrl": "/x",
+                        "downloadUrl": "/y",
+                    },
+                }
+            return {"ID": lead_id, "UF_PROOF": None}
+
+        async def _call(self, method: str, params: dict | None = None) -> dict:
+            captured["method"] = method
+            captured["params"] = params
+            captured["updated"] = True
+            return {"result": True}
+
+    client = Stub(Settings(bitrix_field_complete_payment_proof="UF_PROOF"))
+    ok = asyncio.run(
+        client.attach_lead_payment_proof_if_empty(
+            99, filename="Invoice_X.pdf", content=b"%PDF-1.4"
+        )
+    )
+    assert ok is True
+    assert captured["method"] == "crm.lead.update"
+    value = captured["params"]["fields"]["UF_PROOF"]
+    assert isinstance(value, dict)
+    assert "fileData" in value
+    name, b64 = value["fileData"]
+    assert name == "Invoice_X.pdf"
+    assert base64.b64decode(b64) == b"%PDF-1.4"
+
+
 def test_build_deal_payment_fields_copies_lead_and_fills_context_gaps():
     from app.integrations.bitrix import build_deal_payment_fields_from_lead
 

@@ -1455,8 +1455,13 @@ class RealBitrixClient:
         filename: str,
         content: bytes,
         label: str,
+        multiple: bool = False,
     ) -> bool:
-        """Set a lead file UF to [[name, base64]] when empty (works for single + multiple)."""
+        """Attach a PDF to a lead file UF when empty.
+
+        Bitrix file userfields require ``{\"fileData\": [name, base64]}`` (or a list of
+        those for multiple fields). Plain ``[[name, base64]]`` returns success but stores nothing.
+        """
         import base64
 
         code = (field or "").strip()
@@ -1472,15 +1477,27 @@ class RealBitrixClient:
             return False
 
         safe_name = (filename or "Invoice.pdf").strip() or "Invoice.pdf"
+        file_value: dict[str, list[str]] = {
+            "fileData": [safe_name, base64.b64encode(content).decode("ascii")],
+        }
+        field_value: Any = [file_value] if multiple else file_value
         await self._call(
             "crm.lead.update",
             {
                 "id": lead_id,
-                "fields": {
-                    code: [[safe_name, base64.b64encode(content).decode("ascii")]],
-                },
+                "fields": {code: field_value},
             },
         )
+        # Confirm Bitrix actually stored the file (API can return true and still drop bad payloads).
+        refreshed = await self.get_lead(lead_id)
+        if _is_blank(refreshed.get(code)):
+            logger.error(
+                "Bitrix accepted %s update but field stayed empty | lead=%s field=%s",
+                label,
+                lead_id,
+                code,
+            )
+            return False
         logger.info(
             "Attached invoice PDF as %s | lead=%s field=%s file=%s bytes=%s",
             label,
@@ -1505,6 +1522,7 @@ class RealBitrixClient:
             filename=filename,
             content=content,
             label="Complete-lead Payment Proof",
+            multiple=False,
         )
 
     async def attach_lead_invoice_file_if_empty(
@@ -1521,6 +1539,7 @@ class RealBitrixClient:
             filename=filename,
             content=content,
             label="Invoice file",
+            multiple=True,
         )
 
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None:
