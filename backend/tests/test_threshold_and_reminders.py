@@ -62,7 +62,10 @@ def test_threshold_payment_unlocks_finance_stage_and_stops_reminders(client, see
     assert workflow.threshold_met_at is not None
 
     bitrix = get_bitrix_client()
-    deal = bitrix._mock_deals[workflow.finance_deal_id]
+    # Threshold stage moves the Finance card; until tunnel exists, Sales deal is updated.
+    deal_id = workflow.finance_deal_id or workflow.sales_deal_id
+    assert deal_id is not None
+    deal = bitrix._mock_deals[deal_id]
     assert deal["STAGE_ID"] == "FINANCE_THRESHOLD_MET"
     assert deal.get("UF_CRM_PAYMENT_PERCENTAGE") == "50.00"
     assert deal.get("UF_CRM_PAYMENT_STATUS") == STATUS_THRESHOLD_MET

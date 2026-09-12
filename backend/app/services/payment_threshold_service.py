@@ -62,20 +62,23 @@ class PaymentThresholdService:
                 logger.exception("Failed to update payment summary on deal %s", deal_id)
 
         if status in (STATUS_THRESHOLD_MET, STATUS_PAID) and self.settings.bitrix_finance_threshold_met_stage_id:
-            if workflow.finance_deal_id:
+            target_deal = workflow.finance_deal_id or workflow.sales_deal_id
+            if target_deal:
                 try:
                     await self.bitrix.set_deal_stage(
-                        workflow.finance_deal_id,
+                        target_deal,
                         self.settings.bitrix_finance_threshold_met_stage_id,
                     )
                     logger.info(
-                        "Finance deal %s moved to stage %s (paid %s%%)",
-                        workflow.finance_deal_id,
+                        "Deal %s moved to stage %s (paid %s%%) finance=%s sales=%s",
+                        target_deal,
                         self.settings.bitrix_finance_threshold_met_stage_id,
                         percentage,
+                        workflow.finance_deal_id,
+                        workflow.sales_deal_id,
                     )
                 except Exception:
-                    logger.exception("Failed to unlock finance deal %s", workflow.finance_deal_id)
+                    logger.exception("Failed to unlock deal %s", target_deal)
 
         self.db.commit()
         self.db.refresh(workflow)

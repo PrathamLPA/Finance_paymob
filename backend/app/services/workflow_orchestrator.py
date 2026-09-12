@@ -294,6 +294,106 @@ class WorkflowOrchestrator:
             select(CustomerWorkflow).where(CustomerWorkflow.finance_deal_id == finance_deal_id)
         )
 
+    def get_workflow_by_sales_deal(self, sales_deal_id: int) -> CustomerWorkflow | None:
+        return self.db.scalar(
+            select(CustomerWorkflow).where(CustomerWorkflow.sales_deal_id == sales_deal_id)
+        )
+
+    def get_workflow_by_lead(self, lead_id: int) -> CustomerWorkflow | None:
+        return self.db.scalar(
+            select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == lead_id)
+        )
+
+    async def resolve_workflow_for_bitrix_deal(
+        self, deal_id: int
+    ) -> tuple[CustomerWorkflow, dict]:
+        """Find workflow for a Bitrix deal without requiring a pre-stored finance_deal_id.
+
+        Order: DB finance/sales/b2c id → deal.LEAD_ID → live lead sync.
+        Remembers ``finance_deal_id`` when this deal is first seen (tunneled Finance card).
+        """
+        deal = await self.bitrix.get_deal(deal_id)
+        if not isinstance(deal, dict):
+            deal = {}
+
+        workflow = (
+            self.get_workflow_by_finance_deal(deal_id)
+            or self.get_workflow_by_sales_deal(deal_id)
+            or self.db.scalar(
+                select(CustomerWorkflow).where(CustomerWorkflow.b2c_deal_id == deal_id)
+            )
+        )
+
+        if not workflow:
+            raw_lead = deal.get("LEAD_ID") or deal.get("leadId") or deal.get("PARENT_ID_1")
+            try:
+                lead_id = int(raw_lead) if raw_lead not in (None, "", 0, "0") else 0
+            except (TypeError, ValueError):
+                lead_id = 0
+            if lead_id > 0:
+                workflow = self.get_workflow_by_lead(lead_id)
+
+        if not workflow:
+            raise ValueError(
+                f"No workflow found for Bitrix deal {deal_id} "
+                "(no matching finance/sales id and no LEAD_ID link)"
+            )
+
+        # Tunneled Finance card: remember id so later stages/reminders stay fast.
+        if workflow.finance_deal_id != deal_id:
+            workflow.finance_deal_id = deal_id
+            self.db.commit()
+            self.db.refresh(workflow)
+
+        try:
+            lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
+            await self.sync_workflow_from_lead(workflow, lead)
+            # Prefer deal PAYMENT INFO when the Finance card has been filled/copied.
+            self._apply_deal_payment_overlay(workflow, deal)
+        except Exception:
+            logger.exception(
+                "Live Bitrix sync failed for deal %s / lead %s — using stored workflow",
+                deal_id,
+                workflow.bitrix_lead_id,
+            )
+
+        return workflow, deal
+
+    def _apply_deal_payment_overlay(
+        self, workflow: CustomerWorkflow, deal: dict
+    ) -> None:
+        """Refresh totals from the live Finance deal card when those UFs are set."""
+        from app.integrations.bitrix import extract_amount
+
+        total = extract_amount(
+            deal,
+            fallback_field=self.settings.bitrix_field_lead_total_amount
+            or self.settings.bitrix_field_total_amount,
+        )
+        if total > 0:
+            workflow.total_amount = total
+
+        paid_raw = deal.get(self.settings.bitrix_field_amount_paid) or deal.get(
+            self.settings.bitrix_field_complete_paid_amount
+        )
+        if paid_raw not in (None, "", [], {}):
+            try:
+                from decimal import Decimal
+
+                paid = Decimal(str(paid_raw).replace(",", "").split("|")[0].strip())
+                if paid >= 0:
+                    workflow.amount_paid = paid
+            except Exception:
+                pass
+
+        email, name = self.bitrix.extract_customer_details(deal)
+        if email:
+            workflow.customer_email = email
+        if name:
+            workflow.customer_name = name
+        self.db.commit()
+        self.db.refresh(workflow)
+
     async def sync_workflow_from_lead(
         self,
         workflow: CustomerWorkflow,
@@ -1460,9 +1560,7 @@ class WorkflowOrchestrator:
         await self._notify_lead_owner(workflow, approval, subject=subject, body=body)
 
     async def initiate_payment_from_finance_deal(self, finance_deal_id: int) -> PaymentSession:
-        workflow = self.get_workflow_by_finance_deal(finance_deal_id)
-        if not workflow:
-            raise ValueError(f"No workflow found for finance deal {finance_deal_id}")
+        workflow, _deal = await self.resolve_workflow_for_bitrix_deal(finance_deal_id)
 
         if workflow.remaining_balance <= 0 and workflow.amount_paid >= workflow.total_amount:
             raise ValueError(f"Finance deal {finance_deal_id} has no remaining balance")
@@ -1495,9 +1593,10 @@ class WorkflowOrchestrator:
         self.db.commit()
 
         logger.info(
-            "Payment link created for finance deal %s - token %s...",
+            "Payment link created for finance deal %s - token %s... lead=%s",
             finance_deal_id,
             session.token[:8],
+            workflow.bitrix_lead_id,
         )
         return session
 
@@ -1505,15 +1604,14 @@ class WorkflowOrchestrator:
         """Assign mock Bitrix deal IDs for local dev webhook simulation."""
         lead_id = workflow.bitrix_lead_id
         workflow.sales_deal_id = 900001 + lead_id
-        workflow.finance_deal_id = 900002 + lead_id
-        workflow.b2c_deal_id = 900003 + lead_id
+        # Finance is tunneled from Sales in production; for mock, reuse sales id.
+        workflow.finance_deal_id = workflow.sales_deal_id
+        workflow.b2c_deal_id = None
         workflow.first_payment_at = datetime.now(timezone.utc)
         logger.info(
-            "Dev simulate - mock deals for lead %s: sales=%s finance=%s b2c=%s",
+            "Dev simulate - mock Sales deal for lead %s: sales=%s (finance via tunnel later)",
             lead_id,
             workflow.sales_deal_id,
-            workflow.finance_deal_id,
-            workflow.b2c_deal_id,
         )
 
     async def _create_deals_on_first_payment(self, workflow: CustomerWorkflow) -> None:
@@ -1523,51 +1621,50 @@ class WorkflowOrchestrator:
             "total_amount": str(workflow.total_amount),
             "amount_paid": str(workflow.amount_paid),
             "payment_amount": str(workflow.amount_paid),
+            "remaining_balance": str(workflow.remaining_balance),
             "currency": workflow.currency,
         }
 
         sales_deal_id: int | None = None
-        finance_deal_id: int | None = None
-        b2c_deal_id: int | None = None
-
         try:
             sales_deal_id = await self.bitrix.convert_lead_to_sales_deal(
                 workflow.bitrix_lead_id, context
             )
         except Exception:
             logger.exception(
-                "Sales convert failed for lead %s — will still create Finance/B2C deals",
+                "Sales convert failed for lead %s",
+                workflow.bitrix_lead_id,
+            )
+            raise
+
+        workflow.sales_deal_id = sales_deal_id
+        # Finance/B2C cards are created by Bitrix tunnel/copy — do not add them here.
+        if self.settings.bitrix_create_extra_deals_on_payment:
+            try:
+                workflow.finance_deal_id = await self.bitrix.create_finance_deal(
+                    workflow.bitrix_lead_id, context
+                )
+            except Exception:
+                logger.exception("Finance deal create failed for lead %s", workflow.bitrix_lead_id)
+            try:
+                workflow.b2c_deal_id = await self.bitrix.create_b2c_deal(
+                    workflow.bitrix_lead_id, context
+                )
+            except Exception:
+                logger.exception("B2C deal create failed for lead %s", workflow.bitrix_lead_id)
+        else:
+            workflow.finance_deal_id = None
+            workflow.b2c_deal_id = None
+            logger.info(
+                "Skipping Finance/B2C deal create for lead %s — Bitrix tunnel/copy owns those cards",
                 workflow.bitrix_lead_id,
             )
 
-        try:
-            finance_deal_id = await self.bitrix.create_finance_deal(
-                workflow.bitrix_lead_id, context
-            )
-        except Exception:
-            logger.exception("Finance deal create failed for lead %s", workflow.bitrix_lead_id)
-
-        try:
-            b2c_deal_id = await self.bitrix.create_b2c_deal(workflow.bitrix_lead_id, context)
-        except Exception:
-            logger.exception("B2C deal create failed for lead %s", workflow.bitrix_lead_id)
-
-        if not sales_deal_id and not finance_deal_id and not b2c_deal_id:
-            raise RuntimeError(
-                f"No Bitrix deals created after first payment for lead {workflow.bitrix_lead_id}"
-            )
-
-        if sales_deal_id:
-            workflow.sales_deal_id = sales_deal_id
-        if finance_deal_id:
-            workflow.finance_deal_id = finance_deal_id
-        if b2c_deal_id:
-            workflow.b2c_deal_id = b2c_deal_id
         workflow.first_payment_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(workflow)
 
-        for deal_id in (sales_deal_id, finance_deal_id, b2c_deal_id):
+        for deal_id in (workflow.sales_deal_id, workflow.finance_deal_id, workflow.b2c_deal_id):
             if not deal_id:
                 continue
             try:
@@ -1583,10 +1680,7 @@ class WorkflowOrchestrator:
                 await self.bitrix.copy_lead_payment_fields_to_deal(
                     workflow.bitrix_lead_id,
                     deal_id,
-                    context={
-                        **context,
-                        "remaining_balance": str(workflow.remaining_balance),
-                    },
+                    context=context,
                 )
             except Exception:
                 logger.exception(
@@ -1596,11 +1690,11 @@ class WorkflowOrchestrator:
                 )
 
         logger.info(
-            "First payment - created deals for lead %s: sales=%s finance=%s b2c=%s",
+            "First payment - Sales convert for lead %s: sales=%s finance=%s b2c=%s",
             workflow.bitrix_lead_id,
-            sales_deal_id,
-            finance_deal_id,
-            b2c_deal_id,
+            workflow.sales_deal_id,
+            workflow.finance_deal_id,
+            workflow.b2c_deal_id,
         )
 
     async def apply_recorded_payment(

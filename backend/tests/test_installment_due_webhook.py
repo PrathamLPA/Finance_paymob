@@ -38,7 +38,7 @@ def test_installment_due_webhook_creates_link_and_emails(client, seed_lead, db_s
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
 
     workflow = db_session.scalar(
-        select(CustomerWorkflow).where(CustomerWorkflow.finance_deal_id == deal_id)
+        select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 501)
     )
     assert workflow is not None
     lead_id = workflow.bitrix_lead_id

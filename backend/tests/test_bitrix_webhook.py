@@ -11,6 +11,7 @@ from tests.conftest import SAMPLE_REGISTRANT
 
 
 def _finance_deal(client, seed_lead, db_session, lead_id: int) -> int:
+    """First payment → Sales deal; simulate Bitrix tunnel copy as a Finance deal linked by LEAD_ID."""
     seed_lead(lead_id, email="bitrix@test.com", amount=Decimal("10000"))
     link = client.post(
         "/api/dev/send-payment-link",
@@ -29,7 +30,31 @@ def _finance_deal(client, seed_lead, db_session, lead_id: int) -> int:
         "/api/dev/simulate-paymob-webhook",
         json={"merchant_reference": merchant_reference, "amount": "1000"},
     ).json()
-    return payment["finance_deal_id"]
+    settings = get_settings()
+    bitrix = get_bitrix_client()
+    sales_id = payment.get("sales_deal_id")
+    workflow = db_session.scalar(
+        select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == lead_id)
+    )
+    assert workflow is not None
+    if not sales_id:
+        sales_id = workflow.sales_deal_id
+    assert sales_id
+
+    # Tunneled Finance card (new id) still points at the same lead.
+    finance_id = 800000 + lead_id
+    source = dict(bitrix._mock_deals.get(sales_id) or {})
+    source.update(
+        {
+            "ID": finance_id,
+            "LEAD_ID": lead_id,
+            "TITLE": f"Finance tunnel - lead {lead_id}",
+            "STAGE_ID": settings.bitrix_finance_generate_link_stage_id,
+        }
+    )
+    source.pop(settings.bitrix_field_payment_link, None)
+    bitrix._mock_deals[finance_id] = source
+    return finance_id
 
 
 def test_form_encoded_deal_update_generates_link(client, seed_lead, db_session):

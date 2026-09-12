@@ -634,9 +634,14 @@ async def bitrix24_webhook(
         # ONCRMDEALUPDATE also fires for our own payment-link write; don't loop.
         existing_link = deal.get(settings.bitrix_field_payment_link)
         if existing_link:
-            workflow = orchestrator.get_workflow_by_finance_deal(deal_id)
+            try:
+                workflow, _ = await orchestrator.resolve_workflow_for_bitrix_deal(deal_id)
+            except ValueError:
+                workflow = None
             active_session = (
-                orchestrator.session_service.get_active_session_for_workflow(workflow) if workflow else None
+                orchestrator.session_service.get_active_session_for_workflow(workflow)
+                if workflow
+                else None
             )
             if active_session:
                 commented = await orchestrator.announce_payment_link(

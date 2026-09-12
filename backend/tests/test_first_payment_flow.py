@@ -29,7 +29,7 @@ def test_lead_trigger_email_uses_middleware_url_not_paymob(client, seed_lead):
     assert "mock.paymob" not in body
 
 
-def test_first_payment_creates_three_deals_and_invoice(client, seed_lead, db_session):
+def test_first_payment_converts_sales_deal_and_invoice(client, seed_lead, db_session):
     seed_lead(202, email="first@test.com", amount=Decimal("10000"))
     link = client.post(
         "/api/dev/send-payment-link",
@@ -63,8 +63,9 @@ def test_first_payment_creates_three_deals_and_invoice(client, seed_lead, db_ses
     data = payment.json()
     assert data["status"] == "ok"
     assert data["sales_deal_id"] is not None
-    assert data["finance_deal_id"] is not None
-    assert data["b2c_deal_id"] is not None
+    # Finance/B2C come from Bitrix tunnel — not created by the API.
+    assert data["finance_deal_id"] is None
+    assert data["b2c_deal_id"] is None
     assert data["zoho_invoice_id"] == "MOCK-INV-1"
     assert data["amount_paid"] == "3000.00"
     assert data["remaining_balance"] == "7000.00"
@@ -73,14 +74,16 @@ def test_first_payment_creates_three_deals_and_invoice(client, seed_lead, db_ses
     assert workflow is not None
     assert workflow.first_payment_at is not None
     assert len(workflow.transactions) == 1
+    assert workflow.finance_deal_id is None
+    assert workflow.b2c_deal_id is None
 
     from app.integrations.factory import get_bitrix_client
 
     bitrix = get_bitrix_client()
     lead_comments = bitrix._mock_comments.get(("LEAD", 202), [])
     assert any("Zoho invoice" in item["COMMENT"] for item in lead_comments)
-    if workflow.finance_deal_id:
-        deal_comments = bitrix._mock_comments.get(("DEAL", workflow.finance_deal_id), [])
+    if workflow.sales_deal_id:
+        deal_comments = bitrix._mock_comments.get(("DEAL", workflow.sales_deal_id), [])
         assert any("Zoho invoice" in item["COMMENT"] for item in deal_comments)
     if workflow.bitrix_estimate_id:
         estimate_comments = bitrix._mock_comments.get(("QUOTE", workflow.bitrix_estimate_id), [])
@@ -138,6 +141,9 @@ def test_first_payment_uses_sales_pipeline_and_notifies_agent(client, seed_lead,
     assert str(deal["CATEGORY_ID"]) == "16"
     lead = bitrix._mock_leads[204]
     assert lead["STATUS_ID"] == "CONVERTED"
+    # Finance/B2C are Bitrix tunnel copies — not created by the API.
+    assert workflow.finance_deal_id is None
+    assert workflow.b2c_deal_id is None
 
     comments = bitrix._mock_comments[("LEAD", 204)]
     assert any("Payment successful" in item["COMMENT"] for item in comments)

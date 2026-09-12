@@ -374,9 +374,12 @@ class ReminderService:
         from app.services.workflow_orchestrator import WorkflowOrchestrator
 
         orchestrator = WorkflowOrchestrator(self.db, self.settings)
-        workflow = orchestrator.get_workflow_by_finance_deal(finance_deal_id)
-        if not workflow:
-            raise ValueError(f"No workflow found for finance deal {finance_deal_id}")
+        try:
+            workflow, _deal = await orchestrator.resolve_workflow_for_bitrix_deal(
+                finance_deal_id
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
         if not self._has_open_balance(workflow):
             return {

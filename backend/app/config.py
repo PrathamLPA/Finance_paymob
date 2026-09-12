@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     bitrix_sales_pipeline_id: str = "16"
     bitrix_finance_pipeline_id: str = ""
     bitrix_b2c_pipeline_id: str = ""
+    # When false (default): first payment only converts lead → Sales deal.
+    # Finance/B2C cards come from Bitrix tunnel/copy; API resolves workflow via deal LEAD_ID.
+    bitrix_create_extra_deals_on_payment: bool = False
     bitrix_field_invoice_reference: str = "UF_CRM_INVOICE_REFERENCE"
     bitrix_field_invoice_url: str = "UF_CRM_INVOICE_URL"
     bitrix_field_amount_paid: str = "UF_CRM_AMOUNT_PAID"
