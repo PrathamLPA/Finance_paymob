@@ -33,29 +33,26 @@ class InvoiceService:
         had_prior_invoice = bool(workflow.zoho_invoice_id)
         created_new = False
         if had_prior_invoice:
-            # Each later installment gets its own Zoho invoice (not only a payment on INV-1).
-            invoice = await self.zoho.create_invoice(
-                workflow_id=workflow.id,
-                customer_name=workflow.customer_name,
-                customer_email=workflow.customer_email,
-                total_amount=transaction.amount,
-                amount_paid=transaction.amount,
-                currency=transaction.currency or workflow.currency,
+            # Same Zoho invoice / customer ledger — record this payment only.
+            if workflow.zoho_customer_id:
+                customer_map = getattr(self.zoho, "_customer_ids", None)
+                if isinstance(customer_map, dict):
+                    customer_map[f"invoice:{workflow.zoho_invoice_id}"] = (
+                        workflow.zoho_customer_id
+                    )
+            invoice = await self.zoho.apply_payment_to_invoice(
+                invoice_id=workflow.zoho_invoice_id,
+                amount=transaction.amount,
+                currency=transaction.currency,
                 transaction_id=transaction.transaction_id,
+                total_amount=workflow.total_amount,
+                amount_paid=workflow.amount_paid,
             )
-            customer_map = getattr(self.zoho, "_customer_ids", {})
-            zoho_customer = customer_map.get(f"invoice:{invoice.invoice_id}")
-            if zoho_customer and not workflow.zoho_customer_id:
-                workflow.zoho_customer_id = zoho_customer
-            self.db.commit()
-            created_new = True
             logger.info(
-                "Zoho installment invoice created | workflow_id=%s invoice=%s amount=%s "
-                "(prior invoice kept as %s)",
+                "Zoho invoice payment applied | workflow_id=%s invoice=%s amount=%s",
                 workflow.id,
                 invoice.invoice_number,
                 transaction.amount,
-                workflow.zoho_invoice_id,
             )
         else:
             invoice = await self.zoho.create_invoice(
