@@ -118,6 +118,14 @@ class BitrixIntegration(Protocol):
         content: bytes,
     ) -> bool: ...
 
+    async def attach_deal_next_payment_proof(
+        self,
+        deal_id: int,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> bool: ...
+
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None: ...
 
     async def set_deal_payment_link(self, deal_id: int, payment_url: str) -> None: ...

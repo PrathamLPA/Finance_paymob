@@ -802,6 +802,26 @@ class MockBitrixClient:
         )
         return True
 
+    async def attach_deal_next_payment_proof(
+        self,
+        deal_id: int,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> bool:
+        field = (self.settings.bitrix_field_next_payment_proof or "").strip()
+        if not field or not content:
+            return False
+        deal = await self.get_deal(deal_id)
+        deal[field] = [{"name": filename, "size": len(content)}]
+        self._mock_deals[deal_id] = deal
+        logger.info(
+            "[MockBitrix] Attached invoice PDF as Proof of Next payment on deal %s | file=%s",
+            deal_id,
+            filename,
+        )
+        return True
+
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None:
         deal = await self.get_deal(deal_id)
         deal[self.settings.bitrix_field_total_amount] = str(summary.total_amount)
@@ -1663,6 +1683,46 @@ class RealBitrixClient:
             label="Invoice file",
             multiple=True,
         )
+
+    async def attach_deal_next_payment_proof(
+        self,
+        deal_id: int,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> bool:
+        """Attach installment 2+ invoice PDF to Finance deal Proof of Next payment UF."""
+        import base64
+
+        code = (self.settings.bitrix_field_next_payment_proof or "").strip()
+        if not code or not content or deal_id <= 0:
+            return False
+        safe_name = (filename or "Invoice.pdf").strip() or "Invoice.pdf"
+        file_value: dict[str, list[str]] = {
+            "fileData": [safe_name, base64.b64encode(content).decode("ascii")],
+        }
+        # Multi-file tile: send as a one-item list.
+        await self._call(
+            "crm.deal.update",
+            {"id": deal_id, "fields": {code: [file_value]}},
+        )
+        refreshed = await self.get_deal(deal_id)
+        if _is_blank(refreshed.get(code)):
+            logger.error(
+                "Bitrix accepted Proof of Next payment update but field stayed empty | "
+                "deal=%s field=%s",
+                deal_id,
+                code,
+            )
+            return False
+        logger.info(
+            "Attached invoice PDF as Proof of Next payment | deal=%s field=%s file=%s bytes=%s",
+            deal_id,
+            code,
+            safe_name,
+            len(content),
+        )
+        return True
 
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None:
         fields = {

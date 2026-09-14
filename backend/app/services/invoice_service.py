@@ -30,19 +30,32 @@ class InvoiceService:
         workflow: CustomerWorkflow,
         transaction: PaymentTransaction,
     ) -> InvoiceReference:
+        had_prior_invoice = bool(workflow.zoho_invoice_id)
         created_new = False
-        if workflow.zoho_invoice_id:
-            if workflow.zoho_customer_id:
-                customer_map = getattr(self.zoho, "_customer_ids", None)
-                if isinstance(customer_map, dict):
-                    customer_map[f"invoice:{workflow.zoho_invoice_id}"] = workflow.zoho_customer_id
-            invoice = await self.zoho.apply_payment_to_invoice(
-                invoice_id=workflow.zoho_invoice_id,
-                amount=transaction.amount,
-                currency=transaction.currency,
+        if had_prior_invoice:
+            # Each later installment gets its own Zoho invoice (not only a payment on INV-1).
+            invoice = await self.zoho.create_invoice(
+                workflow_id=workflow.id,
+                customer_name=workflow.customer_name,
+                customer_email=workflow.customer_email,
+                total_amount=transaction.amount,
+                amount_paid=transaction.amount,
+                currency=transaction.currency or workflow.currency,
                 transaction_id=transaction.transaction_id,
-                total_amount=workflow.total_amount,
-                amount_paid=workflow.amount_paid,
+            )
+            customer_map = getattr(self.zoho, "_customer_ids", {})
+            zoho_customer = customer_map.get(f"invoice:{invoice.invoice_id}")
+            if zoho_customer and not workflow.zoho_customer_id:
+                workflow.zoho_customer_id = zoho_customer
+            self.db.commit()
+            created_new = True
+            logger.info(
+                "Zoho installment invoice created | workflow_id=%s invoice=%s amount=%s "
+                "(prior invoice kept as %s)",
+                workflow.id,
+                invoice.invoice_number,
+                transaction.amount,
+                workflow.zoho_invoice_id,
             )
         else:
             invoice = await self.zoho.create_invoice(
@@ -76,7 +89,11 @@ class InvoiceService:
             )
 
         await self._publish_invoice_to_bitrix(
-            workflow, invoice, transaction, created_new=created_new
+            workflow,
+            invoice,
+            transaction,
+            created_new=created_new,
+            subsequent_payment=had_prior_invoice,
         )
         await self._email_invoice_to_customer(workflow, invoice, document.pdf_path)
         return invoice
@@ -181,7 +198,11 @@ class InvoiceService:
 
         try:
             await self._publish_invoice_to_bitrix(
-                workflow, invoice, transaction, created_new=created_new
+                workflow,
+                invoice,
+                transaction,
+                created_new=created_new,
+                subsequent_payment=False,
             )
             steps["bitrix"] = "ok"
         except Exception as exc:
@@ -244,6 +265,7 @@ class InvoiceService:
         transaction: PaymentTransaction,
         *,
         created_new: bool,
+        subsequent_payment: bool = False,
     ) -> None:
         summary = PaymentSummary(
             total_amount=workflow.total_amount,
@@ -274,48 +296,84 @@ class InvoiceService:
         lines = [
             f"Zoho invoice {action}: {invoice.invoice_number}",
             f"Paid this payment: {transaction.amount} {transaction.currency}",
-            f"Total paid: {invoice.amount_paid} / {invoice.total_amount} {invoice.currency}",
-            f"Remaining: {invoice.remaining_balance} {invoice.currency}",
+            f"Total paid: {workflow.amount_paid} / {workflow.total_amount} {workflow.currency}",
+            f"Remaining: {workflow.remaining_balance} {workflow.currency}",
         ]
         if invoice.pdf_url:
             lines.append(f"Invoice link: {invoice.pdf_url}")
         comment = "\n".join(lines)
         files = self._invoice_pdf_files(invoice)
 
-        # Complete-lead Payment Proof + lead card Invoice (tile) — PDF when empty.
-        # Convert can run before Zoho invoice exists, so these attach after invoice sync.
         if files:
-            try:
-                filename, content = files[0]
-                attached_proof = await self.bitrix.attach_lead_payment_proof_if_empty(
-                    workflow.bitrix_lead_id,
-                    filename=filename,
-                    content=content,
-                )
-                if attached_proof:
-                    logger.info(
-                        "Invoice PDF set as Bitrix Payment Proof on lead %s | invoice=%s",
-                        workflow.bitrix_lead_id,
-                        invoice.invoice_number,
+            filename, content = files[0]
+            if subsequent_payment:
+                # Installment 2+ → Finance "Proof of Next payment" (lead often converted).
+                target_deal = workflow.finance_deal_id or workflow.sales_deal_id
+                if target_deal:
+                    try:
+                        attached = await self.bitrix.attach_deal_next_payment_proof(
+                            int(target_deal),
+                            filename=filename,
+                            content=content,
+                        )
+                        if attached:
+                            logger.info(
+                                "Invoice PDF set as Proof of Next payment on deal %s | invoice=%s",
+                                target_deal,
+                                invoice.invoice_number,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Failed to attach next-payment proof on deal %s",
+                            target_deal,
+                        )
+                else:
+                    logger.warning(
+                        "No finance/sales deal to attach Proof of Next payment | workflow=%s",
+                        workflow.id,
                     )
-                attached_invoice = await self.bitrix.attach_lead_invoice_file_if_empty(
-                    workflow.bitrix_lead_id,
-                    filename=filename,
-                    content=content,
-                )
-                if attached_invoice:
-                    logger.info(
-                        "Invoice PDF set on Bitrix Invoice field on lead %s | invoice=%s",
+            else:
+                # First invoice → lead Payment Proof + Invoice tile (if lead still exists).
+                try:
+                    attached_proof = await self.bitrix.attach_lead_payment_proof_if_empty(
                         workflow.bitrix_lead_id,
-                        invoice.invoice_number,
+                        filename=filename,
+                        content=content,
                     )
-            except Exception:
-                logger.exception(
-                    "Failed to attach invoice PDF on lead %s",
-                    workflow.bitrix_lead_id,
-                )
+                    if attached_proof:
+                        logger.info(
+                            "Invoice PDF set as Bitrix Payment Proof on lead %s | invoice=%s",
+                            workflow.bitrix_lead_id,
+                            invoice.invoice_number,
+                        )
+                    attached_invoice = await self.bitrix.attach_lead_invoice_file_if_empty(
+                        workflow.bitrix_lead_id,
+                        filename=filename,
+                        content=content,
+                    )
+                    if attached_invoice:
+                        logger.info(
+                            "Invoice PDF set on Bitrix Invoice field on lead %s | invoice=%s",
+                            workflow.bitrix_lead_id,
+                            invoice.invoice_number,
+                        )
+                except Exception as exc:
+                    message = str(exc).lower()
+                    if "not found" in message:
+                        logger.warning(
+                            "Lead %s gone (converted) — skip lead invoice file attach | invoice=%s",
+                            workflow.bitrix_lead_id,
+                            invoice.invoice_number,
+                        )
+                    else:
+                        logger.exception(
+                            "Failed to attach invoice PDF on lead %s",
+                            workflow.bitrix_lead_id,
+                        )
 
-        targets: list[tuple[str, int]] = [("LEAD", workflow.bitrix_lead_id)]
+        targets: list[tuple[str, int]] = []
+        if workflow.bitrix_lead_id and not subsequent_payment:
+            targets.append(("LEAD", workflow.bitrix_lead_id))
         if workflow.bitrix_estimate_id:
             targets.append(("quote", int(workflow.bitrix_estimate_id)))
         for deal_id in deal_ids:
