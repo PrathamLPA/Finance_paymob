@@ -93,25 +93,6 @@ class InvoiceService:
             subsequent_payment=had_prior_invoice,
         )
         await self._email_invoice_to_customer(workflow, invoice, document.pdf_path)
-        if created_new:
-            try:
-                triggered = await self.bitrix.trigger_invoice_sent(
-                    workflow.bitrix_lead_id
-                )
-                if not triggered:
-                    logger.info(
-                        "Invoice-sent stage trigger not configured | lead=%s invoice=%s",
-                        workflow.bitrix_lead_id,
-                        invoice.invoice_number,
-                    )
-            except Exception:
-                # Invoice/payment already succeeded; a Bitrix automation outage must
-                # not make Paymob retry and risk recording the transaction twice.
-                logger.exception(
-                    "Failed to trigger Bitrix invoice-sent automation | lead=%s invoice=%s",
-                    workflow.bitrix_lead_id,
-                    invoice.invoice_number,
-                )
         return invoice
 
     async def retrigger_invoice_delivery(

@@ -1911,12 +1911,14 @@ class WorkflowOrchestrator:
             body=comment,
         )
 
+        invoice_synced = False
         if skip_zoho or dev_simulate:
             if dev_simulate:
                 logger.info("Dev simulate - skipping Zoho invoice sync")
         else:
             try:
                 await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
+                invoice_synced = True
             except Exception:
                 logger.exception(
                     "Failed to sync invoice after payment for lead %s",
@@ -1931,6 +1933,26 @@ class WorkflowOrchestrator:
             except Exception:
                 logger.exception(
                     "Complete-lead autofill after invoice failed for lead %s",
+                    workflow.bitrix_lead_id,
+                )
+
+        # Move to the Bitrix trigger stage only after every lead write is complete.
+        # Calling this from InvoiceService raced with the final Complete-lead update.
+        if first_payment and invoice_synced and not skip_deals and not dev_simulate:
+            try:
+                triggered = await self.bitrix.trigger_invoice_sent(
+                    workflow.bitrix_lead_id
+                )
+                if not triggered:
+                    logger.info(
+                        "Invoice-sent stage trigger not configured | lead=%s",
+                        workflow.bitrix_lead_id,
+                    )
+            except Exception:
+                # Payment and invoice are already committed. Do not make Paymob
+                # retry the transaction when only Bitrix automation is unavailable.
+                logger.exception(
+                    "Failed to trigger Bitrix invoice-sent automation | lead=%s",
                     workflow.bitrix_lead_id,
                 )
 
