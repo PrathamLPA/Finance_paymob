@@ -1177,28 +1177,24 @@ class RealBitrixClient:
         if lead_id <= 0:
             raise ValueError("A positive Bitrix lead id is required")
 
-        url = template.replace("{{ID}}", str(lead_id)).replace("{ID}", str(lead_id))
-        if url == template and f"LEAD_{lead_id}" not in url:
-            raise ValueError(
-                "BITRIX_INVOICE_SENT_TRIGGER_URL must contain {{ID}} for the lead id"
-            )
+        # The generated URL supplies the trigger's unique code. Invoke the
+        # documented method through our existing CRM-scoped webhook instead of
+        # calling the generated webhook credential directly; some portals return
+        # a misleading 404 "Method not found" for that direct URL.
+        from urllib.parse import parse_qs, urlparse
 
-        timeout = httpx.Timeout(connect=12.0, read=30.0, write=30.0, pool=12.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url)
-        try:
-            payload = response.json()
-        except ValueError:
-            payload = {}
-        if response.is_error or (isinstance(payload, dict) and payload.get("error")):
-            reason = (
-                payload.get("error_description")
-                if isinstance(payload, dict)
-                else None
-            ) or response.text[:300]
-            raise RuntimeError(
-                f"Bitrix invoice-sent trigger failed ({response.status_code}): {reason}"
+        code = (parse_qs(urlparse(template).query).get("code") or [""])[0].strip()
+        if not code:
+            raise ValueError(
+                "BITRIX_INVOICE_SENT_TRIGGER_URL is missing its code parameter"
             )
+        await self._call(
+            "crm.automation.trigger",
+            {
+                "target": f"LEAD_{lead_id}",
+                "code": code,
+            },
+        )
         logger.info("Triggered Bitrix invoice-sent automation for lead %s", lead_id)
         return True
 
