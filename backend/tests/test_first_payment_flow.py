@@ -31,6 +31,13 @@ def test_lead_trigger_email_uses_middleware_url_not_paymob(client, seed_lead):
 
 def test_first_payment_invoices_without_backend_convert(client, seed_lead, db_session):
     seed_lead(202, email="first@test.com", amount=Decimal("10000"))
+    from app.integrations.factory import get_bitrix_client
+
+    bitrix = get_bitrix_client()
+    bitrix.settings.bitrix_invoice_sent_trigger_url = (
+        "https://bitrix.test/rest/crm.automation.trigger/"
+        "?target=LEAD_{{ID}}&code=test"
+    )
     link = client.post(
         "/api/dev/send-payment-link",
         json={"lead_id": 202, "customer_email": "first@test.com", "total_amount": "10000"},
@@ -78,16 +85,15 @@ def test_first_payment_invoices_without_backend_convert(client, seed_lead, db_se
     assert workflow.finance_deal_id is None
     assert workflow.b2c_deal_id is None
 
-    from app.integrations.factory import get_bitrix_client
     from app.config import get_settings
 
-    bitrix = get_bitrix_client()
     lead = bitrix._mock_leads[202]
     i1_date_field = get_settings().bitrix_field_installment_1_date
     assert lead.get(i1_date_field)
     assert str(lead.get(i1_date_field))[:10] == workflow.first_payment_at.date().isoformat()
     # Still on lead stage — Bitrix automation performs Complete / convert.
     assert str(lead.get("STATUS_ID") or "").upper() != "CONVERTED"
+    assert bitrix._mock_invoice_sent_triggers == [202]
 
     lead_comments = bitrix._mock_comments.get(("LEAD", 202), [])
     assert any("Zoho invoice" in item["COMMENT"] for item in lead_comments)

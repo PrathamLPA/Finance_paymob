@@ -529,6 +529,7 @@ class MockBitrixClient:
         self._mock_department_managers: dict[int, list[int]] = {}
         self._mock_mail_sent: list[dict[str, Any]] = []
         self._mock_notifications: list[dict[str, Any]] = []
+        self._mock_invoice_sent_triggers: list[int] = []
         self._next_estimate_id = self.MOCK_ESTIMATE_BASE
         self.seed_user(101, email="agent@test.com", name="Sales Agent")
 
@@ -593,6 +594,13 @@ class MockBitrixClient:
             "CURRENCY_ID": self.settings.default_currency,
             "STATUS_ID": self.settings.bitrix_lead_payment_stage_id,
         }
+
+    async def trigger_invoice_sent(self, lead_id: int) -> bool:
+        if not self.settings.bitrix_invoice_sent_trigger_url:
+            return False
+        self._mock_invoice_sent_triggers.append(lead_id)
+        logger.info("[MockBitrix] Triggered invoice-sent automation for lead %s", lead_id)
+        return True
 
     async def get_contact(self, contact_id: int) -> dict[str, Any] | None:
         return self._mock_contacts.get(int(contact_id))
@@ -1160,6 +1168,39 @@ class RealBitrixClient:
 
     async def get_lead(self, lead_id: int) -> dict[str, Any]:
         return await self._call("crm.lead.get", {"id": lead_id})
+
+    async def trigger_invoice_sent(self, lead_id: int) -> bool:
+        """Invoke Bitrix Track inbound webhook after first invoice delivery."""
+        template = (self.settings.bitrix_invoice_sent_trigger_url or "").strip()
+        if not template:
+            return False
+        if lead_id <= 0:
+            raise ValueError("A positive Bitrix lead id is required")
+
+        url = template.replace("{{ID}}", str(lead_id)).replace("{ID}", str(lead_id))
+        if url == template and f"LEAD_{lead_id}" not in url:
+            raise ValueError(
+                "BITRIX_INVOICE_SENT_TRIGGER_URL must contain {{ID}} for the lead id"
+            )
+
+        timeout = httpx.Timeout(connect=12.0, read=30.0, write=30.0, pool=12.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url)
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        if response.is_error or (isinstance(payload, dict) and payload.get("error")):
+            reason = (
+                payload.get("error_description")
+                if isinstance(payload, dict)
+                else None
+            ) or response.text[:300]
+            raise RuntimeError(
+                f"Bitrix invoice-sent trigger failed ({response.status_code}): {reason}"
+            )
+        logger.info("Triggered Bitrix invoice-sent automation for lead %s", lead_id)
+        return True
 
     async def get_contact(self, contact_id: int) -> dict[str, Any] | None:
         try:

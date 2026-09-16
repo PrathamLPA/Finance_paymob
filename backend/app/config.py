@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Bitrix24
     bitrix24_webhook_url: str = ""
     bitrix_webhook_secret: str = ""
+    # Bitrix "Track inbound webhook" URL. Must contain {{ID}} for the lead id.
+    # Called only after the first invoice is published and emailed successfully.
+    bitrix_invoice_sent_trigger_url: str = ""
     bitrix_lead_payment_stage_id: str = "LEAD_PAYMENT"
     bitrix_finance_generate_link_stage_id: str = "FINANCE_GENERATE_LINK"
     # Bitrix deal CATEGORY_ID for "Sales" (the convert-to-deal picker)
