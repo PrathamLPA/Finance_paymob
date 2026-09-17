@@ -40,6 +40,7 @@
 
     <main class="main-content">
         <nav class="steps" aria-label="Payment progress">
+            {% if not is_subsequent_payment %}
             <div class="step active">
                 <span class="step-num" id="nav-num-buyer">1</span>
                 <span class="step-label">Buyer</span>
@@ -50,18 +51,19 @@
                 <span class="step-label">Candidates</span>
             </div>
             <div class="step-line" aria-hidden="true"></div>
+            {% endif %}
             <div class="step">
-                <span class="step-num" id="nav-num-amount">3</span>
+                <span class="step-num" id="nav-num-amount">{% if is_subsequent_payment %}1{% else %}3{% endif %}</span>
                 <span class="step-label">Amount</span>
             </div>
             <div class="step-line" aria-hidden="true"></div>
             <div class="step">
-                <span class="step-num" id="nav-num-mode">4</span>
+                <span class="step-num" id="nav-num-mode">{% if is_subsequent_payment %}2{% else %}4{% endif %}</span>
                 <span class="step-label">Pay</span>
             </div>
             <div class="step-line" aria-hidden="true"></div>
             <div class="step">
-                <span class="step-num" id="nav-num-pay">5</span>
+                <span class="step-num" id="nav-num-pay">{% if is_subsequent_payment %}3{% else %}5{% endif %}</span>
                 <span class="step-label">Terms</span>
             </div>
         </nav>
@@ -101,6 +103,46 @@
             <form method="post" action="/payment/{{ token }}/accept" class="accept-form" id="accept-form">
                 <input type="hidden" name="participants_json" id="participants-json" value="{{ participants_json }}">
 
+                {% if is_subsequent_payment %}
+                <input type="hidden" name="course_for" value="{{ course_for }}">
+                <input type="hidden" name="registrant_name" id="registrant-name" value="{{ registrant_name }}">
+                <input type="hidden" name="registrant_email" id="registrant-email" value="{{ registrant_email }}">
+                <input type="hidden" name="registrant_phone" id="registrant-phone" value="{{ registrant_phone }}">
+                <section class="registrant-panel" aria-labelledby="buyer-heading">
+                    <div class="panel-header">
+                        <h2 class="section-heading" id="buyer-heading">Customer and course details</h2>
+                    </div>
+                    <p class="terms-divider-hint">
+                        Details verified during the first payment are reused for this installment.
+                    </p>
+                    <dl class="amount-summary">
+                        <div class="amount-row">
+                            <dt>Name</dt>
+                            <dd>{{ registrant_name }}</dd>
+                        </div>
+                        <div class="amount-row">
+                            <dt>Email</dt>
+                            <dd>{{ registrant_email }}</dd>
+                        </div>
+                        <div class="amount-row">
+                            <dt>Phone</dt>
+                            <dd>{{ registrant_phone }}</dd>
+                        </div>
+                    </dl>
+                    {% if courses %}
+                    <ul class="course-inventory" aria-label="Selected courses">
+                        {% for course in courses %}
+                        <li class="course-chip">
+                            <span class="course-chip-name">{{ course.product_name }}</span>
+                            <span class="course-chip-qty">
+                                {{ course.quantity }} seat{% if course.quantity != 1 %}s{% endif %}
+                            </span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </section>
+                {% else %}
                 <section class="registrant-panel" aria-labelledby="buyer-heading">
                     <div class="panel-header">
                         <span class="panel-step-badge" id="badge-buyer">Step 1</span>
@@ -224,10 +266,11 @@
                     <p class="field-hint" id="seats-hint"></p>
                 </section>
                 {% endif %}
+                {% endif %}
 
                 <section class="amount-panel" aria-labelledby="amount-heading">
                     <div class="panel-header">
-                        <span class="panel-step-badge" id="badge-amount">Step 3</span>
+                        <span class="panel-step-badge" id="badge-amount">Step {% if is_subsequent_payment %}1{% else %}3{% endif %}</span>
                         <h2 class="section-heading" id="amount-heading">Amount to pay</h2>
                     </div>
 
@@ -337,7 +380,7 @@
 
                 <section class="payment-mode-panel" aria-labelledby="payment-mode-heading">
                     <div class="panel-header">
-                        <span class="panel-step-badge" id="badge-payment-mode">Step 4</span>
+                        <span class="panel-step-badge" id="badge-payment-mode">Step {% if is_subsequent_payment %}2{% else %}4{% endif %}</span>
                         <div>
                             <h2 class="section-heading" id="payment-mode-heading">Payment method</h2>
                             <p class="terms-divider-hint">Choose how you want to pay. This is required before you continue.</p>
@@ -388,7 +431,7 @@
 
                 <section class="terms-accept-panel" id="terms-accept-section" aria-labelledby="terms-heading">
                     <div class="panel-header">
-                        <span class="panel-step-badge muted" id="badge-terms">Step 5</span>
+                        <span class="panel-step-badge muted" id="badge-terms">Step {% if is_subsequent_payment %}3{% else %}5{% endif %}</span>
                         <div>
                             <h2 class="section-heading" id="terms-heading">Terms &amp; Conditions</h2>
                             <p class="terms-divider-hint">Open the policy, scroll to the end, then confirm. The checkbox will be ticked for you.</p>
@@ -493,6 +536,7 @@
         const maxAmount = parseFloat(amountInput.max || '0');
         const courses = {{ courses | tojson }};
         const totalSeats = {{ total_seats }};
+        const isSubsequentPayment = {{ 'true' if is_subsequent_payment else 'false' }};
         const participantsInput = document.getElementById('participants-json');
         const participantsSection = document.getElementById('participants-section');
         const seatCards = document.getElementById('seat-cards');
@@ -507,7 +551,8 @@
 
         function courseForValue() {
             const checked = form.querySelector('input[name="course_for"]:checked');
-            return checked ? checked.value : '';
+            const stored = form.querySelector('input[name="course_for"]');
+            return checked ? checked.value : (stored ? stored.value : '');
         }
 
         function seatsRequired() {
@@ -574,6 +619,15 @@
         }
 
         function updateStepLabels() {
+            if (isSubsequentPayment) {
+                document.getElementById('badge-amount').textContent = 'Step 1';
+                document.getElementById('nav-num-amount').textContent = '1';
+                document.getElementById('badge-payment-mode').textContent = 'Step 2';
+                document.getElementById('nav-num-mode').textContent = '2';
+                document.getElementById('badge-terms').textContent = 'Step 3';
+                document.getElementById('nav-num-pay').textContent = '3';
+                return;
+            }
             const showCandidates = seatsRequired();
             let step = 1;
             document.getElementById('badge-buyer').textContent = 'Step ' + step++;

@@ -77,6 +77,14 @@ def _form_context(
     allows_partial = bool(data.get("allows_partial", False)) and minimum < remaining
     courses = data.get("courses") or []
     schedule = data.get("installment_schedule") or []
+    is_subsequent_payment = bool(data.get("is_subsequent_payment"))
+    if is_subsequent_payment:
+        course_for = course_for or data.get("course_for") or "self"
+        registrant_name = registrant_name or data.get("customer_name") or ""
+        registrant_email = registrant_email or data.get("customer_email") or ""
+        registrant_phone = registrant_phone or data.get("customer_phone") or ""
+        if participants is None:
+            participants = data.get("participants") or []
     return {
         "request": request,
         "token": token,
@@ -113,6 +121,7 @@ def _form_context(
         "error": error,
         "channel": (data.get("channel") or "online"),
         "payment_mode": payment_mode or "",
+        "is_subsequent_payment": is_subsequent_payment,
     }
 
 

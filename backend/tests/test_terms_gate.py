@@ -200,3 +200,98 @@ def test_locked_amount_ignores_customer_choice(client, seed_lead):
 
     status = client.get(f"/api/payment/{token}")
     assert status.json()["remaining_balance"] == "5000.00"
+
+
+def test_second_payment_reuses_first_payment_customer_details(client, db_session):
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+
+    from app.models.customer_workflow import CustomerWorkflow
+    from app.models.payment_session import (
+        SESSION_COMPLETED,
+        SESSION_PENDING,
+        SOURCE_FINANCE_DEAL,
+        SOURCE_LEAD,
+        PaymentSession,
+    )
+    from app.models.terms_acceptance import TermsAcceptance
+
+    workflow = CustomerWorkflow(
+        bitrix_lead_id=114,
+        finance_deal_id=9001,
+        customer_name="First Payer",
+        customer_email="first@test.com",
+        customer_phone="+971500001114",
+        total_amount=Decimal("100.00"),
+        amount_paid=Decimal("50.00"),
+        currency="AED",
+    )
+    db_session.add(workflow)
+    db_session.flush()
+    expires = datetime.now(timezone.utc) + timedelta(days=1)
+    first = PaymentSession(
+        workflow_id=workflow.id,
+        token="first-payment-details-token",
+        source_type=SOURCE_LEAD,
+        source_id=114,
+        charge_amount=Decimal("50.00"),
+        charge_source="installment_1",
+        amount_locked=True,
+        installment_number=1,
+        currency="AED",
+        merchant_reference="WF-FIRST-DETAILS",
+        status=SESSION_COMPLETED,
+        expires_at=expires,
+    )
+    second = PaymentSession(
+        workflow_id=workflow.id,
+        token="second-payment-details-token",
+        source_type=SOURCE_FINANCE_DEAL,
+        source_id=9001,
+        charge_amount=Decimal("50.00"),
+        charge_source="installment_2",
+        amount_locked=True,
+        installment_number=2,
+        currency="AED",
+        merchant_reference="WF-SECOND-DETAILS",
+        status=SESSION_PENDING,
+        expires_at=expires,
+    )
+    db_session.add_all([first, second])
+    db_session.flush()
+    db_session.add(
+        TermsAcceptance(
+            payment_session_id=first.id,
+            terms_version="1.0",
+            course_for="self",
+            registrant_name="First Payer",
+            registrant_email="first@test.com",
+            registrant_phone="+971500001114",
+        )
+    )
+    db_session.commit()
+
+    page = client.get(f"/api/payment/{second.token}")
+    assert page.status_code == 200
+    context = page.json()
+    assert context["is_subsequent_payment"] is True
+    assert context["customer_name"] == "First Payer"
+    assert context["customer_email"] == "first@test.com"
+
+    accepted = client.post(
+        f"/api/payment/{second.token}/accept",
+        json={
+            "accepted": True,
+            "course_for": "someone_else",
+            "registrant_name": "Changed Name",
+            "registrant_email": "changed@test.com",
+            "registrant_phone": "+971599999999",
+            "payment_mode": "card",
+        },
+    )
+    assert accepted.status_code == 200
+
+    db_session.refresh(workflow)
+    assert workflow.customer_name == "First Payer"
+    assert workflow.customer_email == "first@test.com"
+    assert workflow.customer_phone == "+971500001114"

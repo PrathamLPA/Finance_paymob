@@ -857,6 +857,15 @@ class MockBitrixClient:
             deal[self.settings.bitrix_field_payment_percentage] = str(summary.payment_percentage)
         if summary.payment_status and self.settings.bitrix_field_payment_status:
             deal[self.settings.bitrix_field_payment_status] = summary.payment_status
+        if (
+            summary.amount_paid > 0
+            and self.settings.bitrix_field_deal_paid_status
+        ):
+            deal[self.settings.bitrix_field_deal_paid_status] = (
+                self.settings.bitrix_deal_paid_status_fully_paid_enum
+                if summary.payment_status == "paid" or summary.remaining_balance <= 0
+                else self.settings.bitrix_deal_paid_status_partially_paid_enum
+            )
         if summary.latest_transaction_id and self.settings.bitrix_field_transaction_id:
             deal[self.settings.bitrix_field_transaction_id] = summary.latest_transaction_id
         self._mock_deals[deal_id] = deal
@@ -1874,6 +1883,15 @@ class RealBitrixClient:
             fields[self.settings.bitrix_field_payment_percentage] = str(summary.payment_percentage)
         if summary.payment_status and self.settings.bitrix_field_payment_status:
             fields[self.settings.bitrix_field_payment_status] = summary.payment_status
+        if (
+            summary.amount_paid > 0
+            and self.settings.bitrix_field_deal_paid_status
+        ):
+            fields[self.settings.bitrix_field_deal_paid_status] = (
+                self.settings.bitrix_deal_paid_status_fully_paid_enum
+                if summary.payment_status == "paid" or summary.remaining_balance <= 0
+                else self.settings.bitrix_deal_paid_status_partially_paid_enum
+            )
         if summary.latest_transaction_id and self.settings.bitrix_field_transaction_id:
             fields[self.settings.bitrix_field_transaction_id] = summary.latest_transaction_id
         await self._call(

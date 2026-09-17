@@ -109,7 +109,11 @@ class Settings(BaseSettings):
     # Complete-lead "Paid Status" enumeration
     bitrix_field_complete_paid_status: str = "UF_CRM_1789557091401"
     bitrix_complete_paid_status_fully_paid_enum: str = "19692"
-    bitrix_complete_paid_status_partially_paid_enum: str = "19694"
+    bitrix_complete_paid_status_partially_paid_enum: str = "19700"
+    # Deal-card "Paid Status" enumeration
+    bitrix_field_deal_paid_status: str = "UF_CRM_1789629158792"
+    bitrix_deal_paid_status_fully_paid_enum: str = "19696"
+    bitrix_deal_paid_status_partially_paid_enum: str = "19698"
     # Finance deal "Proof of Next payment" — installment 2+ invoice PDF
     bitrix_field_next_payment_proof: str = "UF_CRM_1789378609379"
     # Lead card "Invoice" multi-file UF (tile uploader under Payment Section)

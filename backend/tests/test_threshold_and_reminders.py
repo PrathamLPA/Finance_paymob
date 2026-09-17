@@ -3,10 +3,16 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from app.integrations.factory import get_bitrix_client, get_email_client
-from app.models.customer_workflow import STATUS_PARTIAL, STATUS_THRESHOLD_MET, CustomerWorkflow
+from app.models.customer_workflow import (
+    STATUS_PAID,
+    STATUS_PARTIAL,
+    STATUS_THRESHOLD_MET,
+    CustomerWorkflow,
+)
 from app.services.reminder_service import ReminderService
 from tests.conftest import SAMPLE_REGISTRANT
 
@@ -69,6 +75,32 @@ def test_threshold_payment_unlocks_finance_stage_and_stops_reminders(client, see
     assert deal["STAGE_ID"] == "FINANCE_THRESHOLD_MET"
     assert deal.get("UF_CRM_PAYMENT_PERCENTAGE") == "50.00"
     assert deal.get("UF_CRM_PAYMENT_STATUS") == STATUS_THRESHOLD_MET
+
+
+@pytest.mark.asyncio
+async def test_full_payment_sets_deal_card_paid_status(db_session):
+    from app.services.payment_threshold_service import PaymentThresholdService
+
+    workflow = CustomerWorkflow(
+        bitrix_lead_id=304,
+        finance_deal_id=9002,
+        customer_email="paid@test.com",
+        total_amount=Decimal("1000.00"),
+        amount_paid=Decimal("1000.00"),
+        currency="AED",
+    )
+    db_session.add(workflow)
+    db_session.commit()
+    bitrix = get_bitrix_client()
+    bitrix._mock_deals[9002] = {"ID": 9002, "STAGE_ID": "PAYMENT"}
+
+    summary = await PaymentThresholdService(db_session).apply_after_payment(
+        workflow, latest_transaction_id="TX-FULL"
+    )
+
+    assert summary.payment_status == STATUS_PAID
+    deal = bitrix._mock_deals[9002]
+    assert deal["UF_CRM_1789629158792"] == "19696"
 
 
 def test_registrant_details_sync_to_workflow(client, seed_lead, db_session):

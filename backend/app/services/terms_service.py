@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import BackgroundTasks, HTTPException
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -307,6 +308,49 @@ class TermsService:
         if not accepted:
             raise HTTPException(status_code=400, detail="You must accept the Terms and Conditions to continue")
 
+        session = self.session_service.get_active_session_by_token(token)
+        if not session:
+            raise HTTPException(status_code=404, detail="Payment session not found or expired")
+
+        # Installment 2+ reuses the verified identity and candidate allocation
+        # captured with the first payment. The repeated page only asks the payer
+        # to confirm the amount, payment method, and current terms.
+        is_subsequent_payment = bool(
+            session.workflow.amount_paid > 0
+            or (
+                getattr(session, "installment_number", None)
+                and session.installment_number > 1
+            )
+        )
+        if is_subsequent_payment:
+            prior_acceptance = self.db.scalar(
+                select(TermsAcceptance)
+                .join(PaymentSession)
+                .where(
+                    PaymentSession.workflow_id == session.workflow_id,
+                    PaymentSession.id != session.id,
+                )
+                .order_by(TermsAcceptance.accepted_at.desc())
+            )
+            if prior_acceptance:
+                course_for = prior_acceptance.course_for or course_for or "self"
+                registrant_name = (
+                    prior_acceptance.registrant_name
+                    or session.workflow.customer_name
+                    or registrant_name
+                )
+                registrant_email = (
+                    prior_acceptance.registrant_email
+                    or session.workflow.customer_email
+                    or registrant_email
+                )
+                registrant_phone = (
+                    prior_acceptance.registrant_phone
+                    or session.workflow.customer_phone
+                    or registrant_phone
+                )
+                participants = prior_acceptance.participants_json or participants
+
         validation_error = self.validate_registrant_details(
             course_for=course_for,
             registrant_name=registrant_name,
@@ -326,10 +370,6 @@ class TermsService:
             chosen_mode = validate_customer_payment_mode(payment_mode)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        session = self.session_service.get_active_session_by_token(token)
-        if not session:
-            raise HTTPException(status_code=404, detail="Payment session not found or expired")
 
         bitrix = get_bitrix_client(self.settings)
         # Self-purchase: skip Bitrix product-row fetch on accept (page load already

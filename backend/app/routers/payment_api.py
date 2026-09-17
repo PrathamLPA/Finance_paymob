@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.db.session import get_db
 from app.integrations.factory import get_bitrix_client
 from app.models.payment_session import CHANNEL_BANK_TRANSFER, PaymentSession, SESSION_TERMS_ACCEPTED
+from app.models.terms_acceptance import TermsAcceptance
 from app.services.bank_transfer_service import BankTransferService
 from app.services.course_seats import load_lead_courses, total_seats
 from app.services.installment_plan import schedule_payload
@@ -106,6 +107,20 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
     pricing = workflow.pricing_snapshot or {}
     payment_amount = Decimal(session.charge_amount)
     balance_after = max(workflow.remaining_balance - payment_amount, Decimal("0.00"))
+    is_subsequent_payment = bool(
+        workflow.amount_paid > 0 or (installment_number and installment_number > 1)
+    )
+    prior_acceptance = None
+    if is_subsequent_payment:
+        prior_acceptance = db.scalar(
+            select(TermsAcceptance)
+            .join(PaymentSession)
+            .where(
+                PaymentSession.workflow_id == workflow.id,
+                PaymentSession.id != session.id,
+            )
+            .order_by(TermsAcceptance.accepted_at.desc())
+        )
 
     bank_transfer: dict[str, Any] | None = None
     if channel == CHANNEL_BANK_TRANSFER:
@@ -157,6 +172,17 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
         "customer_name": workflow.customer_name,
         "customer_email": workflow.customer_email,
         "customer_phone": workflow.customer_phone,
+        "is_subsequent_payment": is_subsequent_payment,
+        "course_for": (
+            prior_acceptance.course_for
+            if prior_acceptance and prior_acceptance.course_for
+            else "self"
+        ),
+        "participants": (
+            prior_acceptance.participants_json
+            if prior_acceptance and prior_acceptance.participants_json
+            else []
+        ),
     }
 
 
