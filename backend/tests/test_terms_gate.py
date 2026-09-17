@@ -219,9 +219,10 @@ def test_second_payment_reuses_first_payment_customer_details(client, db_session
     workflow = CustomerWorkflow(
         bitrix_lead_id=114,
         finance_deal_id=9001,
-        customer_name="First Payer",
-        customer_email="first@test.com",
-        customer_phone="+971500001114",
+        # Simulates a later Bitrix deal refresh changing workflow display fields.
+        customer_name="Bitrix Refreshed Name",
+        customer_email="bitrix@test.com",
+        customer_phone="+971599999998",
         total_amount=Decimal("100.00"),
         amount_paid=Decimal("50.00"),
         currency="AED",
@@ -277,6 +278,7 @@ def test_second_payment_reuses_first_payment_customer_details(client, db_session
     assert context["is_subsequent_payment"] is True
     assert context["customer_name"] == "First Payer"
     assert context["customer_email"] == "first@test.com"
+    assert context["customer_phone"] == "+971500001114"
 
     accepted = client.post(
         f"/api/payment/{second.token}/accept",

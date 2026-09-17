@@ -169,9 +169,21 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
         "required_percent": str(required_percent),
         "courses": courses,
         "total_seats": total_seats(courses),
-        "customer_name": workflow.customer_name,
-        "customer_email": workflow.customer_email,
-        "customer_phone": workflow.customer_phone,
+        "customer_name": (
+            prior_acceptance.registrant_name
+            if prior_acceptance and prior_acceptance.registrant_name
+            else workflow.customer_name
+        ),
+        "customer_email": (
+            prior_acceptance.registrant_email
+            if prior_acceptance and prior_acceptance.registrant_email
+            else workflow.customer_email
+        ),
+        "customer_phone": (
+            prior_acceptance.registrant_phone
+            if prior_acceptance and prior_acceptance.registrant_phone
+            else workflow.customer_phone
+        ),
         "is_subsequent_payment": is_subsequent_payment,
         "course_for": (
             prior_acceptance.course_for
