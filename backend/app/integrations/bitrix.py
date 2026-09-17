@@ -133,6 +133,24 @@ def build_complete_lead_autofill_fields(
         or lead.get("OPPORTUNITY")
         or context.get("product_total")
     )
+    try:
+        paid_decimal = Decimal(str(paid).split("|")[0].replace(",", "").strip())
+        total_decimal = Decimal(str(total).split("|")[0].replace(",", "").strip())
+    except (ArithmeticError, ValueError):
+        paid_decimal = None
+        total_decimal = None
+
+    paid_status_enum: str | None = None
+    if paid_decimal is not None and paid_decimal > 0:
+        paid_status_enum = (
+            settings.bitrix_complete_paid_status_fully_paid_enum
+            if total_decimal is not None
+            and total_decimal > 0
+            and paid_decimal >= total_decimal
+            else settings.bitrix_complete_paid_status_partially_paid_enum
+        )
+    set_if_empty(settings.bitrix_field_complete_paid_status, paid_status_enum)
+
     # Lead Payment Section "Total Amount_" (UF_CRM_1684374599490) + legacy deal total UF if empty
     set_if_empty(
         settings.bitrix_field_lead_total_amount, _as_bitrix_money(total, currency)

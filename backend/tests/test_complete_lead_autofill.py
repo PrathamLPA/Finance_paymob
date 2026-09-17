@@ -18,6 +18,9 @@ def test_complete_lead_autofill_fills_empty_only_and_copies_i2_due():
         bitrix_complete_trainer_shared_enum="12916",
         bitrix_complete_student_type_enum="13198",
         bitrix_complete_batch_type_enum="13200",
+        bitrix_field_complete_paid_status="UF_PAID_STATUS",
+        bitrix_complete_paid_status_fully_paid_enum="19692",
+        bitrix_complete_paid_status_partially_paid_enum="19694",
         bitrix_field_installment_2_due_date="UF_CRM_1684374296635",
         bitrix_field_installment_2_due_date_legacy="UF_CRM_1684374142163",
     )
@@ -37,6 +40,7 @@ def test_complete_lead_autofill_fills_empty_only_and_copies_i2_due():
     fields = build_complete_lead_autofill_fields(settings, lead, context)
 
     assert fields["UF_PAID"] == "1.00"
+    assert fields["UF_PAID_STATUS"] == "19694"
     assert "UF_NAME" not in fields  # existing value preserved
     assert fields["UF_SCHED"] == "12912"
     assert fields["UF_TRAINER"] == "12916"
@@ -85,6 +89,23 @@ def test_complete_lead_autofill_fills_payment_section_and_comments():
     assert fields["UF_DESIGNATION"] == "To be confirmed by Ops"
     assert fields["UF_DURATION"] == "To be confirmed by Ops"
     assert fields["OPPORTUNITY"] == "2.10"
+
+
+def test_complete_lead_autofill_marks_fully_paid_when_first_payment_covers_total():
+    settings = Settings(
+        bitrix_field_complete_paid_amount="UF_PAID",
+        bitrix_field_complete_paid_status="UF_PAID_STATUS",
+        bitrix_complete_paid_status_fully_paid_enum="19692",
+        bitrix_complete_paid_status_partially_paid_enum="19694",
+    )
+
+    fields = build_complete_lead_autofill_fields(
+        settings,
+        {"OPPORTUNITY": "100.00"},
+        {"amount_paid": "100.00", "total_amount": "100.00"},
+    )
+
+    assert fields["UF_PAID_STATUS"] == "19692"
 
 
 def test_mock_attach_lead_payment_proof_if_empty_only_once():
