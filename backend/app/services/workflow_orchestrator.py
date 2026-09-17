@@ -1944,8 +1944,9 @@ class WorkflowOrchestrator:
                     workflow.bitrix_lead_id
                 )
                 if not triggered:
-                    logger.info(
-                        "Invoice-sent stage trigger not configured | lead=%s",
+                    logger.error(
+                        "Invoice-sent stage trigger did not activate | lead=%s. "
+                        "See the preceding Bitrix trigger diagnostic log.",
                         workflow.bitrix_lead_id,
                     )
             except Exception:

@@ -1191,6 +1191,10 @@ class RealBitrixClient:
         """Invoke Bitrix Track inbound webhook after first invoice delivery."""
         template = (self.settings.bitrix_invoice_sent_trigger_url or "").strip()
         if not template:
+            logger.warning(
+                "Bitrix invoice-sent trigger skipped: URL is not configured | lead=%s",
+                lead_id,
+            )
             return False
         if lead_id <= 0:
             raise ValueError("A positive Bitrix lead id is required")
@@ -1206,14 +1210,91 @@ class RealBitrixClient:
             raise ValueError(
                 "BITRIX_INVOICE_SENT_TRIGGER_URL is missing its code parameter"
             )
-        await self._call(
+
+        try:
+            lead_before = await self.get_lead(lead_id)
+        except BitrixApiError as exc:
+            lead_before = {}
+            logger.warning(
+                "Could not read lead before invoice-sent trigger; continuing | "
+                "lead=%s code=%s detail=%s",
+                lead_id,
+                code,
+                exc,
+            )
+        status_before = str(lead_before.get("STATUS_ID") or "")
+        paid_status = lead_before.get(
+            self.settings.bitrix_field_complete_paid_status
+        )
+        logger.info(
+            "Calling Bitrix invoice-sent automation | lead=%s target=LEAD_%s "
+            "code=%s status_before=%s paid_status=%s payment_proof=%s invoice_file=%s",
+            lead_id,
+            lead_id,
+            code,
+            status_before or None,
+            paid_status,
+            not _is_blank(
+                lead_before.get(self.settings.bitrix_field_complete_payment_proof)
+            ),
+            not _is_blank(
+                lead_before.get(self.settings.bitrix_field_lead_invoice_file)
+            ),
+        )
+
+        response = await self._call(
             "crm.automation.trigger",
             {
                 "target": f"LEAD_{lead_id}",
                 "code": code,
             },
         )
-        logger.info("Triggered Bitrix invoice-sent automation for lead %s", lead_id)
+        activated = self._scalar(response) is True
+        if not activated:
+            logger.error(
+                "Bitrix invoice-sent automation was NOT activated | "
+                "lead=%s target=LEAD_%s code=%s status=%s api_result=%r. "
+                "Check that Track inbound webhook is active on a reachable lead stage "
+                "and that its current generated code matches BITRIX_INVOICE_SENT_TRIGGER_URL.",
+                lead_id,
+                lead_id,
+                code,
+                status_before or None,
+                self._scalar(response),
+            )
+            return False
+
+        try:
+            lead_after = await self.get_lead(lead_id)
+        except BitrixApiError as exc:
+            logger.info(
+                "Bitrix invoice-sent trigger activated; lead is no longer readable "
+                "(it may already be converted) | lead=%s code=%s detail=%s",
+                lead_id,
+                code,
+                exc,
+            )
+            return True
+
+        status_after = str(lead_after.get("STATUS_ID") or "")
+        if status_after == status_before:
+            logger.warning(
+                "Bitrix accepted invoice-sent trigger but lead stage is unchanged | "
+                "lead=%s code=%s status=%s. Check the trigger's destination stage, "
+                "automation conditions, and whether the trigger is enabled.",
+                lead_id,
+                code,
+                status_after or None,
+            )
+        else:
+            logger.info(
+                "Bitrix invoice-sent trigger activated | lead=%s code=%s "
+                "status_before=%s status_after=%s",
+                lead_id,
+                code,
+                status_before or None,
+                status_after or None,
+            )
         return True
 
     async def get_contact(self, contact_id: int) -> dict[str, Any] | None:

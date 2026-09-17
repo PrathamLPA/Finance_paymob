@@ -203,6 +203,62 @@ def test_real_bitrix_file_uf_uses_filedata_payload():
     assert base64.b64decode(b64) == b"%PDF-1.4"
 
 
+def test_real_bitrix_invoice_trigger_returns_false_when_bitrix_does_not_activate():
+    import asyncio
+
+    from app.integrations.bitrix import RealBitrixClient
+
+    class Stub(RealBitrixClient):
+        async def get_lead(self, lead_id: int) -> dict:
+            return {"ID": lead_id, "STATUS_ID": "10"}
+
+        async def _call(self, method: str, params: dict | None = None) -> dict:
+            assert method == "crm.automation.trigger"
+            assert params == {"target": "LEAD_99", "code": "7tmq9"}
+            return {"result": False}
+
+    client = Stub(
+        Settings(
+            bitrix_invoice_sent_trigger_url=(
+                "https://example.bitrix24.com/rest/x/crm.automation.trigger/"
+                "?target=LEAD_{{ID}}&code=7tmq9"
+            )
+        )
+    )
+
+    assert asyncio.run(client.trigger_invoice_sent(99)) is False
+
+
+def test_real_bitrix_invoice_trigger_logs_verified_stage_change():
+    import asyncio
+
+    from app.integrations.bitrix import RealBitrixClient
+
+    class Stub(RealBitrixClient):
+        activated = False
+
+        async def get_lead(self, lead_id: int) -> dict:
+            return {
+                "ID": lead_id,
+                "STATUS_ID": "CONVERTED" if self.activated else "10",
+            }
+
+        async def _call(self, method: str, params: dict | None = None) -> dict:
+            self.activated = True
+            return {"result": True}
+
+    client = Stub(
+        Settings(
+            bitrix_invoice_sent_trigger_url=(
+                "https://example.bitrix24.com/rest/x/crm.automation.trigger/"
+                "?target=LEAD_{{ID}}&code=7tmq9"
+            )
+        )
+    )
+
+    assert asyncio.run(client.trigger_invoice_sent(99)) is True
+
+
 def test_build_deal_payment_fields_copies_lead_and_fills_context_gaps():
     from app.integrations.bitrix import build_deal_payment_fields_from_lead
 
