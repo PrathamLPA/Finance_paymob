@@ -234,12 +234,15 @@ def evaluate_price_gate(
         line.product_id > 0 for line in lines
     ):
         reason = (
-            "Lead product rows are not linked to the catalog. "
-            "Pick the course from CRM → Catalog so the minimum price can be checked."
+            "Course is not linked to the inventory/catalog. "
+            "Manager approval is required for the sold amount."
         )
     elif missing:
         names = ", ".join(line.product_name for line in missing)
-        reason = f"Catalog minimum price missing for: {names}"
+        reason = (
+            f"Inventory/catalog minimum price is missing for: {names}. "
+            "Manager approval is required for the sold amount."
+        )
     elif blocked:
         details = "; ".join(
             f"{line.product_name} selling {line.compare_unit_price:.2f} "

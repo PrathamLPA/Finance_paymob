@@ -17,6 +17,8 @@ router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
 class ProductPriceOverride(BaseModel):
     product_id: int
+    # Identifies custom/unlinked course rows where Bitrix product_id is 0.
+    line_index: int | None = None
     selling_price: Decimal
 
 

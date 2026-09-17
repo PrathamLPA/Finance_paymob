@@ -262,6 +262,117 @@ async def test_price_gate_requests_manager_approval(db_session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_course_missing_from_catalog_uses_existing_manager_approval_flow(
+    db_session, monkeypatch
+):
+    monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
+    monkeypatch.setenv("BITRIX_APPROVAL_FALLBACK_EMAIL", "")
+    get_settings.cache_clear()
+
+    bitrix = get_bitrix_client()
+    bitrix.seed_user(
+        101, email="owner@test.com", name="Lead Owner", department_ids=[5]
+    )
+    bitrix.seed_user(
+        202, email="manager@test.com", name="Sales Manager", department_ids=[5]
+    )
+    bitrix.seed_department_manager(5, 202)
+    bitrix.seed_lead(
+        902, email="custom@test.com", name="Custom Course", amount=Decimal("2500")
+    )
+    bitrix.seed_lead_products(
+        902,
+        [
+            {
+                "productId": 0,
+                "productName": "Custom ACCA Course",
+                "price": 2500,
+                "quantity": 1,
+                "taxRate": 0,
+                "taxIncluded": "Y",
+            }
+        ],
+    )
+
+    orchestrator = WorkflowOrchestrator(db_session)
+    with pytest.raises(PriceApprovalPending) as pending:
+        await orchestrator.initiate_payment_from_lead(902)
+
+    approval = orchestrator.approval_service.get_by_token(
+        pending.value.approval_url.rsplit("/", 1)[-1]
+    )
+    public = orchestrator.approval_service.to_public_dict(approval)
+    assert public["below_minimum_lines"][0]["status"] == "NO CATALOG"
+    assert public["below_minimum_lines"][0]["selling_price"] == "2500.00"
+    assert public["below_minimum_lines"][0]["line_index"] == 1
+    assert "not in the inventory/catalog" in public["cases"][0]["summary"]
+
+    session = await orchestrator.complete_approved_payment(
+        approval.token, note="Approved sold amount"
+    )
+    assert session.charge_amount == Decimal("2500.00")
+
+
+@pytest.mark.asyncio
+async def test_manager_can_reject_unlisted_course_with_proposed_amount(
+    db_session, monkeypatch
+):
+    monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")
+    monkeypatch.setenv("BITRIX_APPROVAL_FALLBACK_EMAIL", "")
+    get_settings.cache_clear()
+
+    bitrix = get_bitrix_client()
+    bitrix.seed_user(
+        101, email="owner@test.com", name="Lead Owner", department_ids=[5]
+    )
+    bitrix.seed_user(
+        202, email="manager@test.com", name="Sales Manager", department_ids=[5]
+    )
+    bitrix.seed_department_manager(5, 202)
+    bitrix.seed_lead(
+        903, email="custom2@test.com", name="Custom Course", amount=Decimal("2500")
+    )
+    bitrix.seed_lead_products(
+        903,
+        [
+            {
+                "productId": 0,
+                "productName": "Unlisted Finance Course",
+                "price": 2500,
+                "quantity": 1,
+                "taxRate": 0,
+                "taxIncluded": "Y",
+            }
+        ],
+    )
+
+    orchestrator = WorkflowOrchestrator(db_session)
+    with pytest.raises(PriceApprovalPending) as pending:
+        await orchestrator.initiate_payment_from_lead(903)
+
+    token = pending.value.approval_url.rsplit("/", 1)[-1]
+    await orchestrator.reject_price_approval(
+        token,
+        note="Use manager price",
+        product_prices=[
+            {
+                "product_id": 0,
+                "line_index": 1,
+                "selling_price": Decimal("3000.00"),
+            }
+        ],
+        rejected_case="price",
+    )
+
+    comments = bitrix._mock_comments.get(("LEAD", 903), [])
+    assert any(
+        "Unlisted Finance Course" in c["COMMENT"]
+        and "preferred 3000.00" in c["COMMENT"]
+        for c in comments
+    )
+
+
+@pytest.mark.asyncio
 async def test_failed_notification_is_retried_on_next_trigger(db_session, monkeypatch):
     """A send that failed once must not be abandoned forever."""
     monkeypatch.setenv("BITRIX_PRICE_GATE_ENABLED", "true")

@@ -679,7 +679,10 @@ class WorkflowOrchestrator:
                 gate.reason,
             )
 
-        if not gate.ok and (gate.missing_catalog or not gate.lines):
+        # A course row that is missing from the inventory/catalog is a business
+        # approval case, not a hard failure. A completely empty product list
+        # remains blocked because there is no course or sold amount to approve.
+        if not gate.ok and not gate.lines:
             await self._post_gate_comment(
                 workflow, comment, state_key=f"blocked|{comment}"
             )
@@ -744,8 +747,12 @@ class WorkflowOrchestrator:
             )
             raise PriceApprovalPending(
                 (
-                    "Selling price is below the catalog minimum. "
-                    f"Manager approval requested ({approval.manager_email})."
+                    (
+                        "Course is not in the inventory/catalog. "
+                        if gate.missing_catalog
+                        else "Selling price is below the catalog minimum. "
+                    )
+                    + f"Manager approval requested ({approval.manager_email})."
                 ),
                 approval_url=approval_url,
                 approval_id=approval.id,
@@ -1116,13 +1123,22 @@ class WorkflowOrchestrator:
             for row in (product_prices or [])
             if int(row.get("product_id") or 0) > 0
         }
-        if price_map:
+        line_price_map = {
+            int(row.get("line_index") or 0): Decimal(
+                str(row.get("selling_price") or "0")
+            )
+            for row in (product_prices or [])
+            if int(row.get("line_index") or 0) > 0
+        }
+        if price_map or line_price_map:
             updated_lines = []
-            for row in lines_raw:
+            for fallback_index, row in enumerate(lines_raw, start=1):
                 product_id = int(row.get("product_id") or 0)
-                if product_id in price_map:
+                line_index = int(row.get("line_index") or fallback_index)
+                new_price = line_price_map.get(line_index) or price_map.get(product_id)
+                if new_price is not None:
                     row = dict(row)
-                    new_price = price_map[product_id].quantize(Decimal("0.01"))
+                    new_price = new_price.quantize(Decimal("0.01"))
                     row["selling_price"] = str(new_price)
                     catalog = row.get("catalog_min_price")
                     if catalog is not None:
@@ -1325,19 +1341,32 @@ class WorkflowOrchestrator:
             for row in (product_prices or [])
             if int(row.get("product_id") or 0) > 0
         }
+        line_price_map = {
+            int(row.get("line_index") or 0): Decimal(
+                str(row.get("selling_price") or "0")
+            )
+            for row in (product_prices or [])
+            if int(row.get("line_index") or 0) > 0
+        }
         for row in payload.get("manager_suggested_prices") or []:
             try:
                 pid = int(row.get("product_id") or 0)
+                line_index = int(row.get("line_index") or 0)
             except (TypeError, ValueError):
                 continue
+            if line_index > 0 and row.get("selling_price") not in (None, ""):
+                line_price_map.setdefault(
+                    line_index, Decimal(str(row["selling_price"]))
+                )
             if pid > 0 and row.get("selling_price") not in (None, ""):
                 price_map.setdefault(pid, Decimal(str(row["selling_price"])))
 
         lines: list[ProductLine] = []
-        for row in payload.get("lines") or []:
+        for fallback_index, row in enumerate(payload.get("lines") or [], start=1):
             product_id = int(row.get("product_id") or 0)
+            line_index = int(row.get("line_index") or fallback_index)
             catalog = row.get("catalog_min_price")
-            selling = price_map.get(product_id)
+            selling = line_price_map.get(line_index) or price_map.get(product_id)
             if selling is None:
                 selling = Decimal(str(row.get("selling_price") or "0"))
             lines.append(
@@ -1436,14 +1465,20 @@ class WorkflowOrchestrator:
                     for p in suggested_prices
                     if int(p.get("product_id") or 0) > 0
                 }
+                changed_line_indexes = {
+                    int(p.get("line_index") or 0)
+                    for p in suggested_prices
+                    if int(p.get("line_index") or 0) > 0
+                }
                 changed["prices"] = [
                     {
                         "product_id": line.product_id,
                         "product_name": line.product_name,
                         "selling_price": str(line.selling_price),
                     }
-                    for line in lines
+                    for line_index, line in enumerate(lines, start=1)
                     if line.product_id in changed_ids
+                    or line_index in changed_line_indexes
                 ]
             except Exception:
                 logger.exception(

@@ -46,7 +46,7 @@ def _user_display_name(user: dict[str, Any] | None) -> str | None:
 def _lines_payload(lines: list[ProductLine]) -> dict[str, Any]:
     payload_lines: list[dict[str, Any]] = []
     below_count = 0
-    for line in lines:
+    for line_index, line in enumerate(lines, start=1):
         below = line.is_below_minimum
         if below:
             below_count += 1
@@ -57,6 +57,7 @@ def _lines_payload(lines: list[ProductLine]) -> dict[str, Any]:
             )
         payload_lines.append(
             {
+                "line_index": line_index,
                 "product_id": line.product_id,
                 "product_name": line.product_name,
                 "quantity": str(line.quantity),
@@ -210,11 +211,23 @@ class PriceApprovalService:
         reasons = installment.get("reasons") or []
         cards: list[dict[str, Any]] = []
         if below_lines:
+            missing_catalog = [
+                line for line in below_lines if line.get("catalog_min_price") is None
+            ]
             cards.append(
                 {
                     "id": "price",
-                    "title": "Course prices below minimum",
-                    "summary": "One or more courses are priced under catalog minimum.",
+                    "title": (
+                        "Course requires price approval"
+                        if missing_catalog
+                        else "Course prices below minimum"
+                    ),
+                    "summary": (
+                        "One or more courses are not in the inventory/catalog. "
+                        "Approve the sold amount or reject with the manager-proposed amount."
+                        if missing_catalog
+                        else "One or more courses are priced under catalog minimum."
+                    ),
                     "reject_fields": "preferred_prices",
                 }
             )
@@ -626,6 +639,9 @@ class PriceApprovalService:
         all_lines = payload.get("lines") or []
         below = [line for line in all_lines if line.get("below_minimum")]
         ok = [line for line in all_lines if not line.get("below_minimum")]
+        missing_catalog = [
+            line for line in below if line.get("catalog_min_price") is None
+        ]
         below_count = payload.get("below_minimum_count", len(below))
         product_count = payload.get("product_count", len(all_lines))
         installment = payload.get("installment_policy") or {}
@@ -644,7 +660,11 @@ class PriceApprovalService:
             lines.extend(
                 [
                     f"Catalog minimum total: {approval.catalog_minimum_total} {approval.currency}",
-                    f"Products: {product_count} total | {below_count} below minimum",
+                    (
+                        f"Products: {product_count} total | {below_count} need approval"
+                        if missing_catalog
+                        else f"Products: {product_count} total | {below_count} below minimum"
+                    ),
                     "",
                     f"Needs price approval ({below_count}):",
                 ]
@@ -654,10 +674,15 @@ class PriceApprovalService:
                     catalog = line.get("catalog_min_price") or "missing"
                     discount = line.get("discount_amount")
                     discount_txt = f" | discount {discount}" if discount else ""
+                    status = (
+                        "NO CATALOG - APPROVAL REQUIRED"
+                        if line.get("catalog_min_price") is None
+                        else "BELOW MIN"
+                    )
                     lines.append(
                         f"- {line.get('product_name')} × {line.get('quantity')} | "
                         f"selling {line.get('selling_price')} | catalog min {catalog}"
-                        f"{discount_txt} | BELOW MIN"
+                        f"{discount_txt} | {status}"
                     )
             else:
                 lines.append("- (none)")
@@ -703,14 +728,21 @@ class PriceApprovalService:
         for row in rows:
             try:
                 product_id = int(row.get("product_id") or 0)
+                line_index = int(row.get("line_index") or 0)
             except (TypeError, ValueError):
                 continue
-            if product_id <= 0:
+            if product_id <= 0 and line_index <= 0:
                 continue
             price = row.get("selling_price")
             if price is None or str(price).strip() == "":
                 continue
-            cleaned.append({"product_id": product_id, "selling_price": str(price)})
+            cleaned.append(
+                {
+                    "product_id": product_id,
+                    "line_index": line_index or None,
+                    "selling_price": str(price),
+                }
+            )
         return cleaned
 
     @staticmethod
@@ -751,10 +783,16 @@ class PriceApprovalService:
             for row in (payload.get("lines") or [])
             if int(row.get("product_id") or 0) > 0
         }
+        lines_by_index = {
+            int(row.get("line_index") or 0): row
+            for row in (payload.get("lines") or [])
+            if int(row.get("line_index") or 0) > 0
+        }
         for row in payload.get("manager_suggested_prices") or []:
             pid = int(row.get("product_id") or 0)
-            meta = lines_by_id.get(pid) or {}
-            name = str(meta.get("product_name") or f"Product {pid}")
+            line_index = int(row.get("line_index") or 0)
+            meta = lines_by_index.get(line_index) or lines_by_id.get(pid) or {}
+            name = str(meta.get("product_name") or f"Course line {line_index or pid}")
             parts.append(
                 f"  • {name}: preferred {row.get('selling_price')} {currency}"
                 + (
