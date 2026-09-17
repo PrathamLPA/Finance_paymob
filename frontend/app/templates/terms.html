@@ -110,37 +110,32 @@
                 <input type="hidden" name="registrant_phone" id="registrant-phone" value="{{ registrant_phone }}">
                 <section class="registrant-panel" aria-labelledby="buyer-heading">
                     <div class="panel-header">
-                        <h2 class="section-heading" id="buyer-heading">Customer and course details</h2>
+                        <h2 class="section-heading" id="buyer-heading">Invoice details</h2>
                     </div>
-                    <p class="terms-divider-hint">
-                        Details verified during the first payment are reused for this installment.
-                    </p>
                     <dl class="amount-summary">
                         <div class="amount-row">
-                            <dt>Name</dt>
+                            <dt>Invoice name</dt>
                             <dd>{{ registrant_name }}</dd>
                         </div>
                         <div class="amount-row">
-                            <dt>Email</dt>
+                            <dt>Course</dt>
+                            <dd>
+                                {% for course in courses %}
+                                {{ course.product_name }}{% if not loop.last %}, {% endif %}
+                                {% else %}
+                                -
+                                {% endfor %}
+                            </dd>
+                        </div>
+                        <div class="amount-row">
+                            <dt>Email ID</dt>
                             <dd>{{ registrant_email }}</dd>
                         </div>
                         <div class="amount-row">
-                            <dt>Phone</dt>
+                            <dt>Phone number</dt>
                             <dd>{{ registrant_phone }}</dd>
                         </div>
                     </dl>
-                    {% if courses %}
-                    <ul class="course-inventory" aria-label="Selected courses">
-                        {% for course in courses %}
-                        <li class="course-chip">
-                            <span class="course-chip-name">{{ course.product_name }}</span>
-                            <span class="course-chip-qty">
-                                {{ course.quantity }} seat{% if course.quantity != 1 %}s{% endif %}
-                            </span>
-                        </li>
-                        {% endfor %}
-                    </ul>
-                    {% endif %}
                 </section>
                 {% else %}
                 <section class="registrant-panel" aria-labelledby="buyer-heading">
