@@ -284,6 +284,18 @@ class EmailIntegration(Protocol):
         payment_url: str,
     ) -> None: ...
 
+    def send_cash_payment_notice(
+        self,
+        *,
+        to_email: str,
+        customer_name: str | None,
+        payment_url: str,
+        installment_number: int,
+        amount: str,
+        currency: str,
+        details_already_complete: bool = False,
+    ) -> None: ...
+
     def send_installment_reminder(
         self,
         *,

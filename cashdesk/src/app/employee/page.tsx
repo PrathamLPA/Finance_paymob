@@ -179,8 +179,9 @@ function CollectionDetailModal({
             </div>
             {!detailsReady && !isCollected ? (
               <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                Form fill incomplete - customer must open the email link, enter name /
-                email / phone, and accept Terms before you can claim or collect cash.
+                Form fill incomplete — required on the first cash payment only. The
+                customer must open the email link, enter name / email / phone, and accept
+                Terms. Later installments reuse those details automatically.
               </p>
             ) : null}
             <dl>

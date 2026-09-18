@@ -242,16 +242,31 @@ class WorkflowOrchestrator:
             channel=CHANNEL_CASH,
         )
         cash.link_payment_session(collection, session.id)
+        # Re-check after session link (I2+ inherits form fill from first payment).
+        details_ready = cash.inherit_details_from_prior_payment(collection, workflow) or (
+            cash._collection_details_ready(collection)
+        )
         payment_url = self.session_service.build_payment_url(session.token)
 
-        comment = (
-            f"Cash collection queued (Cash Desk)\n"
-            f"Installment {collection.installment_number}: "
-            f"{collection.due_amount} {collection.currency}\n"
-            f"Customer must fill name / email / phone and accept Terms first.\n"
-            f"Fill-details link: {payment_url}\n"
-            f"After that, pay at the office desk - collect in Cash Desk."
-        )
+        if details_ready:
+            comment = (
+                f"Cash collection queued (Cash Desk)\n"
+                f"Installment {collection.installment_number}: "
+                f"{collection.due_amount} {collection.currency}\n"
+                f"Customer details already on file from the first payment "
+                f"— no new form fill required.\n"
+                f"Collect at the office desk via Cash Desk.\n"
+                f"Reference link: {payment_url}"
+            )
+        else:
+            comment = (
+                f"Cash collection queued (Cash Desk)\n"
+                f"Installment {collection.installment_number}: "
+                f"{collection.due_amount} {collection.currency}\n"
+                f"Customer must fill name / email / phone and accept Terms first.\n"
+                f"Fill-details link: {payment_url}\n"
+                f"After that, pay at the office desk - collect in Cash Desk."
+            )
         try:
             await self.bitrix.add_timeline_comment(
                 entity_type=entity_type,
@@ -270,23 +285,28 @@ class WorkflowOrchestrator:
 
         if email_client and workflow.customer_email:
             await asyncio.to_thread(
-                self.email.send_payment_request,
+                self.email.send_cash_payment_notice,
                 to_email=workflow.customer_email,
                 customer_name=workflow.customer_name,
                 payment_url=payment_url,
+                installment_number=installment_number,
+                amount=str(collection.due_amount),
+                currency=collection.currency or workflow.currency or "AED",
+                details_already_complete=details_ready,
             )
             workflow.last_reminder_at = datetime.now(timezone.utc)
             self.db.commit()
 
         logger.info(
             "Cash intake queued | lead_id=%s installment=%s collection_id=%s "
-            "session=%s amount=%s emailed=%s",
+            "session=%s amount=%s emailed=%s details_ready=%s",
             workflow.bitrix_lead_id,
             installment_number,
             collection.id,
             session.id,
             collection.due_amount,
             bool(email_client and workflow.customer_email),
+            details_ready,
         )
         raise CashCollectionQueued(collection)
 

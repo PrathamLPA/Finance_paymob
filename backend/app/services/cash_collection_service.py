@@ -145,6 +145,86 @@ class CashCollectionService:
             row.proof_original_name or path.name,
         )
 
+    def _prior_registrant_details(
+        self, workflow: CustomerWorkflow
+    ) -> tuple[str, str, str] | None:
+        """Name/email/phone from an earlier terms acceptance on this workflow."""
+        from app.models.payment_session import PaymentSession
+        from app.models.terms_acceptance import TermsAcceptance
+
+        prior = self.db.scalar(
+            select(TermsAcceptance)
+            .join(
+                PaymentSession,
+                PaymentSession.id == TermsAcceptance.payment_session_id,
+            )
+            .where(PaymentSession.workflow_id == workflow.id)
+            .order_by(TermsAcceptance.id.desc())
+        )
+        if prior:
+            name = (prior.registrant_name or "").strip()
+            email = (prior.registrant_email or "").strip()
+            phone = (prior.registrant_phone or "").strip()
+            if name and email:
+                return name, email, phone
+
+        name = (workflow.customer_name or "").strip()
+        email = (workflow.customer_email or "").strip()
+        phone = (workflow.customer_phone or "").strip()
+        if (
+            workflow.amount_paid
+            and Decimal(workflow.amount_paid) > 0
+            and name
+            and email
+        ):
+            return name, email, phone
+        return None
+
+    def inherit_details_from_prior_payment(
+        self,
+        row: CashCollection,
+        workflow: CustomerWorkflow | None = None,
+    ) -> bool:
+        """I2+ cash: reuse first-payment form fill — no second terms visit required."""
+        if row.details_ready_at:
+            return True
+        if row.status == STATUS_COLLECTED:
+            return True
+
+        number = int(row.installment_number or 1)
+        workflow = workflow or row.workflow or self.db.get(
+            CustomerWorkflow, row.workflow_id
+        )
+        if not workflow:
+            return False
+
+        is_subsequent = number > 1 or (
+            workflow.amount_paid is not None
+            and Decimal(workflow.amount_paid) > 0
+        )
+        if not is_subsequent:
+            return False
+
+        details = self._prior_registrant_details(workflow)
+        if not details:
+            return False
+
+        name, email, phone = details
+        row.customer_name = name
+        row.customer_email = email
+        row.customer_phone = phone or row.customer_phone
+        row.details_ready_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(row)
+        logger.info(
+            "Cash details inherited from prior payment | collection_id=%s "
+            "workflow=%s installment=%s",
+            row.id,
+            workflow.id,
+            number,
+        )
+        return True
+
     def enqueue_from_workflow(
         self,
         workflow: CustomerWorkflow,
@@ -190,6 +270,7 @@ class CashCollectionService:
             existing.currency = workflow.currency or self.settings.default_currency
             self.db.commit()
             self.db.refresh(existing)
+            self.inherit_details_from_prior_payment(existing, workflow)
             return existing
 
         row = CashCollection(
@@ -223,15 +304,19 @@ class CashCollectionService:
                     existing.bitrix_lead_id,
                     existing.installment_number,
                 )
+                self.inherit_details_from_prior_payment(existing, workflow)
                 return existing
             raise
         self.db.refresh(row)
+        self.inherit_details_from_prior_payment(row, workflow)
         logger.info(
-            "Cash collection enqueued id=%s lead=%s installment=%s amount=%s",
+            "Cash collection enqueued id=%s lead=%s installment=%s amount=%s "
+            "details_ready=%s",
             row.id,
             row.bitrix_lead_id,
             row.installment_number,
             row.due_amount,
+            bool(row.details_ready_at),
         )
         return row
 
@@ -366,6 +451,9 @@ class CashCollectionService:
 
     def _collection_details_ready(self, row: CashCollection) -> bool:
         if row.details_ready_at:
+            return True
+        # I2+ already filled details on I1 — inherit without another form visit.
+        if self.inherit_details_from_prior_payment(row):
             return True
         if not row.payment_session_id:
             return False

@@ -47,6 +47,44 @@ class MockEmailClient:
         )
         self._write_email("Payment Request", to_email, body)
 
+    def send_cash_payment_notice(
+        self,
+        *,
+        to_email: str,
+        customer_name: str | None,
+        payment_url: str,
+        installment_number: int,
+        amount: str,
+        currency: str,
+        details_already_complete: bool = False,
+    ) -> None:
+        name = customer_name or "Customer"
+        if details_already_complete:
+            body = (
+                f"Dear {name},\n\n"
+                f"Installment {installment_number} of {currency} {amount} is due "
+                f"and should be paid in cash at the Learners Point office desk.\n\n"
+                f"Your details from the first payment are already on file — "
+                f"no need to fill the form again.\n\n"
+                f"Please visit the office to complete this cash payment.\n\n"
+                f"Reference (optional): {payment_url}\n\n"
+                f"Regards,\n{self.settings.sendgrid_from_name}"
+            )
+            subject = f"Cash payment due — Installment {installment_number}"
+        else:
+            body = (
+                f"Dear {name},\n\n"
+                f"Installment {installment_number} of {currency} {amount} is due "
+                f"and should be paid in cash at the Learners Point office desk.\n\n"
+                f"Please open the secure link below first to confirm your details "
+                f"and accept the Terms and Conditions:\n\n"
+                f"{payment_url}\n\n"
+                f"After that, pay at the office desk.\n\n"
+                f"Regards,\n{self.settings.sendgrid_from_name}"
+            )
+            subject = "Cash payment — complete your details"
+        self._write_email(subject, to_email, body)
+
     def send_installment_reminder(
         self,
         *,
@@ -258,6 +296,63 @@ class RealEmailClient(MockEmailClient):
         if not self._send_mail(to_email=to_email, subject="Payment Request", body=body):
             super().send_payment_request(
                 to_email=to_email, customer_name=customer_name, payment_url=payment_url
+            )
+
+    def send_cash_payment_notice(
+        self,
+        *,
+        to_email: str,
+        customer_name: str | None,
+        payment_url: str,
+        installment_number: int,
+        amount: str,
+        currency: str,
+        details_already_complete: bool = False,
+    ) -> None:
+        if not self._sendgrid_ready():
+            return super().send_cash_payment_notice(
+                to_email=to_email,
+                customer_name=customer_name,
+                payment_url=payment_url,
+                installment_number=installment_number,
+                amount=amount,
+                currency=currency,
+                details_already_complete=details_already_complete,
+            )
+        name = customer_name or "Customer"
+        if details_already_complete:
+            body = (
+                f"Dear {name},\n\n"
+                f"Installment {installment_number} of {currency} {amount} is due "
+                f"and should be paid in cash at the Learners Point office desk.\n\n"
+                f"Your details from the first payment are already on file — "
+                f"no need to fill the form again.\n\n"
+                f"Please visit the office to complete this cash payment.\n\n"
+                f"Reference (optional): {payment_url}\n\n"
+                f"Regards,\n{self.settings.sendgrid_from_name}"
+            )
+            subject = f"Cash payment due — Installment {installment_number}"
+        else:
+            body = (
+                f"Dear {name},\n\n"
+                f"Installment {installment_number} of {currency} {amount} is due "
+                f"and should be paid in cash at the Learners Point office desk.\n\n"
+                f"Please open the secure link below first to confirm your details "
+                f"and accept the Terms and Conditions:\n\n"
+                f"{payment_url}\n\n"
+                f"After that, pay at the office desk.\n\n"
+                f"Regards,\n{self.settings.sendgrid_from_name}"
+            )
+            subject = "Cash payment — complete your details"
+        if not self._send_mail(to_email=to_email, subject=subject, body=body):
+            super().send_cash_payment_notice(
+                to_email=to_email,
+                customer_name=customer_name,
+                payment_url=payment_url,
+                installment_number=installment_number,
+                amount=amount,
+                currency=currency,
+                details_already_complete=details_already_complete,
             )
 
     def send_installment_reminder(
