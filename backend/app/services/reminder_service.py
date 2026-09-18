@@ -221,7 +221,7 @@ class ReminderService:
         from app.services.bank_transfer_service import BankTransferService
 
         number_for_mode = installment_number or 1
-        # Later installments: blank mode → online Paymob link (customer can choose).
+        # Later installments: blank mode → online Paymob link.
         # Only honor cash/bank if that installment's own Payment Mode UF is set.
         mode_fallback = force_installment_number is None
         if await resolve_is_cash_payment_mode(
@@ -331,6 +331,17 @@ class ReminderService:
             session._replaced_previous_link = True  # type: ignore[attr-defined]
 
         payment_url = self.session_service.build_payment_url(session.token)
+        from app.services.payment_mode import is_payment_mode_blank
+
+        if is_payment_mode_blank(
+            lead, installment_number=number_for_mode, settings=self.settings
+        ):
+            await orchestrator._comment_missing_payment_mode(
+                installment_number=number_for_mode,
+                entity_type="LEAD" if workflow.bitrix_lead_id else "DEAL",
+                entity_id=workflow.bitrix_lead_id or workflow.finance_deal_id or 0,
+                payment_url=payment_url,
+            )
         logger.info(
             "Reminder charge plan | workflow_id=%s source=%s amount=%s %s token=%s...",
             workflow.id,

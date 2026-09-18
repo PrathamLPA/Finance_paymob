@@ -98,24 +98,9 @@ class PaymentSessionService:
         customer_payment_mode: str | None = None,
     ) -> list[int]:
         from app.integrations.factory import get_bitrix_client
-        from app.services.payment_mode import (
-            paymob_methods_for_customer_mode,
-            resolve_paymob_payment_method_ids_async,
-            validate_customer_payment_mode,
-        )
+        from app.services.payment_mode import resolve_paymob_payment_method_ids_async
 
-        if customer_payment_mode:
-            try:
-                mode = validate_customer_payment_mode(customer_payment_mode)
-                methods = paymob_methods_for_customer_mode(mode, self.settings)
-                if methods:
-                    return methods
-            except ValueError:
-                logger.warning(
-                    "Invalid customer_payment_mode=%r; falling back to Bitrix",
-                    customer_payment_mode,
-                )
-
+        _ = customer_payment_mode  # unused: Bitrix Payment Mode is authoritative
         number = installment_number or 1
         bitrix = get_bitrix_client(self.settings)
         lead = workflow.bitrix_lead_payload or {}
@@ -350,7 +335,6 @@ class PaymentSessionService:
             payment_method_ids=await self._resolve_paymob_methods(
                 workflow,
                 installment_number=getattr(session, "installment_number", None),
-                customer_payment_mode=getattr(session, "customer_payment_mode", None),
             ),
         )
         session.merchant_reference = new_reference

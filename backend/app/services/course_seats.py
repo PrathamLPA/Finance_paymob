@@ -83,6 +83,25 @@ def participants_for_buyer(
     return people
 
 
+def expand_single_candidate(
+    courses: list[dict[str, Any]],
+    participants: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Someone-else: one candidate receives every course on the order.
+
+    Accepts either a single candidate payload or an already-expanded seat list.
+    """
+    items = list(participants or [])
+    if len(items) != 1:
+        return items
+    person = items[0]
+    name = str(person.get("name") or "").strip()
+    email = str(person.get("email") or "").strip()
+    if not name or not email or total_seats(courses) < 1:
+        return items
+    return participants_for_buyer(courses, name=name, email=email)
+
+
 def validate_participants(
     courses: list[dict[str, Any]],
     participants: list[dict[str, Any]] | None,
@@ -92,7 +111,7 @@ def validate_participants(
     if seats == 0:
         return None
 
-    items = participants or []
+    items = expand_single_candidate(courses, participants) or []
     if len(items) != seats:
         return (
             f"Please assign all {seats} course seat(s). "
@@ -137,9 +156,10 @@ def normalize_participants(
     participants: list[dict[str, Any]] | None,
     courses: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    expanded = expand_single_candidate(courses, participants)
     names = {int(c["product_id"]): str(c["product_name"]) for c in courses}
     cleaned: list[dict[str, Any]] = []
-    for person in participants or []:
+    for person in expanded or []:
         try:
             product_id = int(person.get("product_id") or 0)
         except (TypeError, ValueError):

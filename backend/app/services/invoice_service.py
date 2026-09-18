@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,17 @@ from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_transaction import PaymentTransaction
 
 logger = logging.getLogger(__name__)
+
+
+def _pricing_lines_from_workflow(workflow: CustomerWorkflow) -> list[dict[str, Any]] | None:
+    """Course rows from the payment-stage pricing snapshot (Bitrix products)."""
+    snapshot = workflow.pricing_snapshot
+    if not isinstance(snapshot, dict):
+        return None
+    lines = snapshot.get("lines")
+    if not isinstance(lines, list) or not lines:
+        return None
+    return [line for line in lines if isinstance(line, dict)]
 
 
 class InvoiceService:
@@ -63,6 +75,7 @@ class InvoiceService:
                 amount_paid=workflow.amount_paid,
                 currency=workflow.currency,
                 transaction_id=transaction.transaction_id,
+                pricing_lines=_pricing_lines_from_workflow(workflow),
             )
             workflow.zoho_invoice_id = invoice.invoice_id
             customer_map = getattr(self.zoho, "_customer_ids", {})
@@ -148,6 +161,7 @@ class InvoiceService:
                     amount_paid=workflow.amount_paid,
                     currency=workflow.currency,
                     transaction_id=transaction.transaction_id,
+                    pricing_lines=_pricing_lines_from_workflow(workflow),
                 )
                 workflow.zoho_invoice_id = invoice.invoice_id
                 customer_map = getattr(self.zoho, "_customer_ids", {})

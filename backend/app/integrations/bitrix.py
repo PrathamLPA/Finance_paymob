@@ -222,6 +222,10 @@ def build_complete_lead_autofill_fields(
         joined = " ".join(str(p).strip() for p in name_parts if p and str(p).strip())
         name = joined or lead.get("TITLE")
     set_if_empty(settings.bitrix_field_complete_student_name, name)
+    student_email = context.get("student_email") or context.get("customer_email")
+    student_phone = context.get("student_phone") or context.get("customer_phone")
+    set_if_empty(settings.bitrix_field_student_mail, student_email)
+    set_if_empty(settings.bitrix_field_student_contact, student_phone)
     set_if_empty(
         settings.bitrix_field_complete_enrollment_date, date.today().isoformat()
     )
@@ -630,11 +634,16 @@ class MockBitrixClient:
         return {
             "5774": "cash",
             "5786": "cash",
+            "5776": "website payment",
+            "5778": "bank transfer",
+            "5782": "tabby",
+            "5784": "tamara",
             "5788": "online",
             "5790": "bank_transfer",
             "5792": "purchase_order",
             "5794": "tabby",
             "5796": "others",
+            "13156": "card",
         }
 
     async def get_deal(self, deal_id: int) -> dict[str, Any]:
@@ -923,6 +932,29 @@ class MockBitrixClient:
             deal[self.settings.bitrix_field_customer_phone] = phone
         self._mock_deals[deal_id] = deal
         logger.info("[MockBitrix] Synced customer details on deal %s", deal_id)
+
+    async def sync_lead_student_details(
+        self,
+        lead_id: int,
+        *,
+        name: str | None,
+        email: str | None,
+        phone: str | None,
+    ) -> None:
+        lead = self._mock_leads.setdefault(lead_id, {"ID": lead_id})
+        if name and self.settings.bitrix_field_complete_student_name:
+            lead[self.settings.bitrix_field_complete_student_name] = name
+        if email and self.settings.bitrix_field_student_mail:
+            lead[self.settings.bitrix_field_student_mail] = email
+        if phone and self.settings.bitrix_field_student_contact:
+            lead[self.settings.bitrix_field_student_contact] = phone
+        self._mock_leads[lead_id] = lead
+        logger.info(
+            "[MockBitrix] Synced student details on lead %s name=%s email=%s",
+            lead_id,
+            bool(name),
+            bool(email),
+        )
 
     async def list_product_rows(self, *, owner_type: str, owner_id: int) -> list[dict[str, Any]]:
         return list(self._mock_product_rows.get((owner_type.upper(), owner_id), []))
@@ -1972,6 +2004,30 @@ class RealBitrixClient:
         if not fields:
             return
         await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
+
+    async def sync_lead_student_details(
+        self,
+        lead_id: int,
+        *,
+        name: str | None,
+        email: str | None,
+        phone: str | None,
+    ) -> None:
+        fields: dict[str, Any] = {}
+        if name and self.settings.bitrix_field_complete_student_name:
+            fields[self.settings.bitrix_field_complete_student_name] = name
+        if email and self.settings.bitrix_field_student_mail:
+            fields[self.settings.bitrix_field_student_mail] = email
+        if phone and self.settings.bitrix_field_student_contact:
+            fields[self.settings.bitrix_field_student_contact] = phone
+        if not fields:
+            return
+        await self.update_lead_fields(lead_id, fields)
+        logger.info(
+            "Synced student details on Bitrix lead %s fields=%s",
+            lead_id,
+            list(fields),
+        )
 
     async def list_product_rows(self, *, owner_type: str, owner_id: int) -> list[dict[str, Any]]:
         result = await self._call(

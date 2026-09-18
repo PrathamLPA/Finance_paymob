@@ -379,8 +379,10 @@ def test_lead_payment_link_posts_timeline_comment(client, seed_lead):
     assert response.status_code == 200
     assert response.json()["status"] == "processed"
     comments = bitrix._mock_comments.get(("LEAD", 410), [])
-    assert len(comments) == 1
-    assert response.json()["payment_url"] in comments[0]["COMMENT"]
+    assert len(comments) >= 1
+    joined = "\n".join(c.get("COMMENT") or "" for c in comments)
+    assert response.json()["payment_url"] in joined
+    assert "Payment Mode is not set for Installment 1" in joined
 
 
 def test_repeat_lead_update_reuses_active_payment_link(client, seed_lead):

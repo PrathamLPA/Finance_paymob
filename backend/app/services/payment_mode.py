@@ -515,8 +515,57 @@ async def resolve_is_bank_transfer_payment_mode(
     )
 
 
+async def resolve_session_channel_from_bitrix(
+    lead: dict[str, Any] | None,
+    *,
+    installment_number: int,
+    settings: Settings,
+    bitrix: Any,
+    allow_cross_installment_fallback: bool = True,
+) -> str:
+    """Map Bitrix Payment Mode UF → payment session channel."""
+    from app.models.payment_session import (
+        CHANNEL_BANK_TRANSFER,
+        CHANNEL_CASH,
+        CHANNEL_ONLINE,
+    )
+
+    if await resolve_is_cash_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix=bitrix,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
+    ):
+        return CHANNEL_CASH
+    if await resolve_is_bank_transfer_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix=bitrix,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
+    ):
+        return CHANNEL_BANK_TRANSFER
+    return CHANNEL_ONLINE
+
+
+def is_payment_mode_blank(
+    lead: dict[str, Any] | None,
+    *,
+    installment_number: int,
+    settings: Settings,
+) -> bool:
+    """True when the installment's Bitrix Payment Mode UF is empty."""
+    return (
+        payment_mode_enum_id(
+            lead, installment_number=installment_number, settings=settings
+        )
+        is None
+    )
+
+
 # ---------------------------------------------------------------------------
-# Customer-chosen payment mode (terms page)
+# Customer-chosen payment mode (legacy — terms page no longer collects this)
 # ---------------------------------------------------------------------------
 
 CUSTOMER_PAYMENT_MODES = frozenset(

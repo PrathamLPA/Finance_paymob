@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     bitrix_field_complete_trainer_shared: str = "UF_CRM_1771501047627"
     bitrix_field_complete_ops_notes: str = "UF_CRM_1771501226065"
     bitrix_field_complete_student_name: str = "UF_CRM_1771503330575"
+    # Lead card student identity (Learners Point — filled from terms acceptance)
+    bitrix_field_student_mail: str = "UF_CRM_1789714405705"
+    bitrix_field_student_contact: str = "UF_CRM_1789714441645"
     bitrix_field_complete_enrollment_date: str = "UF_CRM_1771503410009"
     bitrix_field_complete_credit_card: str = "UF_CRM_1772016277089"
     bitrix_field_complete_tenure: str = "UF_CRM_1772019664771"

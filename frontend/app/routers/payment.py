@@ -476,13 +476,13 @@ async def accept_terms_and_redirect(
             return await _reject("Please enter a valid payment amount.")
 
     if not (payment_mode or "").strip():
-        return await _reject("Choose a payment method.")
+        # Payment mode is taken from Bitrix; form value is optional/legacy.
+        payment_mode = None
 
     started = time.perf_counter()
     logger.info(
-        "accept start | token=%s... mode=%s course_for=%s",
+        "accept start | token=%s... course_for=%s",
         token[:8],
-        (payment_mode or "").strip(),
         course_for or "",
     )
     try:

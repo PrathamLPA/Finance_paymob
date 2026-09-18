@@ -56,10 +56,22 @@ class MockZohoBooksClient:
         amount_paid: Decimal,
         currency: str,
         transaction_id: str,
+        pricing_lines: list[dict[str, Any]] | None = None,
     ) -> InvoiceReference:
         invoice_id = f"MOCK-INV-{workflow_id}"
         remaining = max(total_amount - amount_paid, Decimal("0.00"))
-        pdf_path = self._write_mock_invoice_pdf(invoice_id, amount_paid, total_amount, remaining)
+        line_items = self._line_items(
+            total_amount=total_amount,
+            currency=currency,
+            pricing_lines=pricing_lines,
+        )
+        pdf_path = self._write_mock_invoice_pdf(
+            invoice_id,
+            amount_paid,
+            total_amount,
+            remaining,
+            line_items=line_items,
+        )
 
         invoice = InvoiceReference(
             invoice_id=invoice_id,
@@ -73,7 +85,12 @@ class MockZohoBooksClient:
         )
         self._invoices[invoice_id] = invoice
         self._customer_ids[f"invoice:{invoice_id}"] = f"MOCK-CUST-{workflow_id}"
-        logger.info("[MockZoho] Created invoice %s for workflow %s", invoice_id, workflow_id)
+        logger.info(
+            "[MockZoho] Created invoice %s for workflow %s lines=%s",
+            invoice_id,
+            workflow_id,
+            [item.get("name") for item in line_items],
+        )
         return invoice
 
     async def apply_payment_to_invoice(
@@ -131,6 +148,8 @@ class MockZohoBooksClient:
         amount_paid: Decimal,
         total_amount: Decimal,
         remaining: Decimal,
+        *,
+        line_items: list[dict[str, Any]] | None = None,
     ) -> Path:
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas
@@ -140,12 +159,83 @@ class MockZohoBooksClient:
         pdf_path = pdf_dir / f"{invoice_id}.pdf"
 
         c = canvas.Canvas(str(pdf_path), pagesize=letter)
-        c.drawString(72, 750, f"Invoice: {invoice_id}")
-        c.drawString(72, 730, f"Total: {total_amount}")
-        c.drawString(72, 710, f"Paid: {amount_paid}")
-        c.drawString(72, 690, f"Remaining: {remaining}")
+        y = 750
+        c.drawString(72, y, f"Invoice: {invoice_id}")
+        y -= 20
+        c.drawString(72, y, f"Total: {total_amount}")
+        y -= 20
+        c.drawString(72, y, f"Paid: {amount_paid}")
+        y -= 20
+        c.drawString(72, y, f"Remaining: {remaining}")
+        y -= 30
+        for item in line_items or []:
+            name = str(item.get("name") or "Item")[:60]
+            qty = item.get("quantity", 1)
+            rate = item.get("rate", 0)
+            c.drawString(72, y, f"{name}  qty={qty}  rate={rate}")
+            y -= 18
+            if y < 72:
+                break
         c.save()
         return pdf_path
+
+    def _line_items(
+        self,
+        *,
+        total_amount: Decimal,
+        currency: str,
+        pricing_lines: list[dict[str, Any]] | None = None,
+    ) -> list[dict]:
+        """Build Zoho line items from Bitrix/pricing snapshot courses when available."""
+        items: list[dict[str, Any]] = []
+        for raw in pricing_lines or []:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("product_name") or raw.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                quantity = Decimal(str(raw.get("quantity") or "1"))
+            except Exception:
+                quantity = Decimal("1")
+            if quantity <= 0:
+                quantity = Decimal("1")
+            amount: Decimal | None = None
+            for key in ("line_total", "unit_price", "rate", "price"):
+                if raw.get(key) is None:
+                    continue
+                try:
+                    amount = Decimal(str(raw[key]))
+                    if key != "line_total":
+                        amount = (amount * quantity).quantize(Decimal("0.01"))
+                    break
+                except Exception:
+                    continue
+            if amount is None or amount < 0:
+                continue
+            rate = (amount / quantity).quantize(Decimal("0.01"))
+            item: dict[str, Any] = {
+                "name": name[:200],
+                "description": name[:200],
+                "rate": float(rate),
+                "quantity": float(quantity),
+            }
+            if self.settings.zoho_default_item_id:
+                item["item_id"] = self.settings.zoho_default_item_id
+            items.append(item)
+
+        if items:
+            return items
+
+        item: dict[str, Any] = {
+            "name": "Course / Training Fee",
+            "description": f"Total fee ({currency})",
+            "rate": float(total_amount),
+            "quantity": 1,
+        }
+        if self.settings.zoho_default_item_id:
+            item["item_id"] = self.settings.zoho_default_item_id
+        return [item]
 
 
 class RealZohoBooksClient(MockZohoBooksClient):
@@ -468,17 +558,6 @@ class RealZohoBooksClient(MockZohoBooksClient):
         logger.info("Zoho contact created id=%s email=%s", contact_id, email_key or "-")
         return contact_id
 
-    def _line_items(self, *, total_amount: Decimal, currency: str) -> list[dict]:
-        item: dict[str, Any] = {
-            "name": "Course / Training Fee",
-            "description": f"Total fee ({currency})",
-            "rate": float(total_amount),
-            "quantity": 1,
-        }
-        if self.settings.zoho_default_item_id:
-            item["item_id"] = self.settings.zoho_default_item_id
-        return [item]
-
     async def _record_payment(
         self,
         *,
@@ -569,6 +648,7 @@ class RealZohoBooksClient(MockZohoBooksClient):
         amount_paid: Decimal,
         currency: str,
         transaction_id: str,
+        pricing_lines: list[dict[str, Any]] | None = None,
     ) -> InvoiceReference:
         if self.settings.use_mock_integrations or not self.settings.zoho_refresh_token:
             return await super().create_invoice(
@@ -579,27 +659,34 @@ class RealZohoBooksClient(MockZohoBooksClient):
                 amount_paid=amount_paid,
                 currency=currency,
                 transaction_id=transaction_id,
+                pricing_lines=pricing_lines,
             )
 
         customer_id = await self._find_or_create_customer(
             customer_name=customer_name,
             customer_email=customer_email,
         )
+        line_items = self._line_items(
+            total_amount=total_amount,
+            currency=currency,
+            pricing_lines=pricing_lines,
+        )
         payload = {
             "customer_id": customer_id,
             "currency_code": currency,
             "date": date.today().isoformat(),
-            "line_items": self._line_items(total_amount=total_amount, currency=currency),
+            "line_items": line_items,
             "reference_number": f"WF-{workflow_id}-{transaction_id}"[:50],
             "notes": f"Learners Point finance workflow {workflow_id}",
         }
         logger.info(
-            "Zoho create invoice | workflow_id=%s customer_id=%s total=%s paid=%s %s",
+            "Zoho create invoice | workflow_id=%s customer_id=%s total=%s paid=%s %s lines=%s",
             workflow_id,
             customer_id,
             total_amount,
             amount_paid,
             currency,
+            [item.get("name") for item in line_items],
         )
         response = await self._request("POST", "/invoices", json=payload)
         invoice = response.json().get("invoice") or {}

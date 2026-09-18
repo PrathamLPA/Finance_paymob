@@ -152,6 +152,15 @@ class BitrixIntegration(Protocol):
         phone: str | None,
     ) -> None: ...
 
+    async def sync_lead_student_details(
+        self,
+        lead_id: int,
+        *,
+        name: str | None,
+        email: str | None,
+        phone: str | None,
+    ) -> None: ...
+
     async def list_product_rows(self, *, owner_type: str, owner_id: int) -> list[dict[str, Any]]: ...
 
     async def get_catalog_min_price(self, product_id: int) -> Decimal | None: ...
@@ -249,6 +258,7 @@ class ZohoBooksIntegration(Protocol):
         amount_paid: Decimal,
         currency: str,
         transaction_id: str,
+        pricing_lines: list[dict[str, Any]] | None = None,
     ) -> InvoiceReference: ...
 
     async def apply_payment_to_invoice(

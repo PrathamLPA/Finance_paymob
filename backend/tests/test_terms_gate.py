@@ -132,7 +132,7 @@ def test_terms_email_goes_to_payment_link_recipient_not_registrant(db_session, m
     assert terms_mails[-1]["to"] == "link-recipient@test.com"
 
 
-def test_accept_requires_payment_mode(client, seed_lead):
+def test_accept_without_payment_mode_uses_bitrix_online(client, seed_lead):
     seed_lead(110)
     response = client.post(
         "/api/dev/send-payment-link",
@@ -141,41 +141,78 @@ def test_accept_requires_payment_mode(client, seed_lead):
     token = response.json()["token"]
     body = {**SAMPLE_REGISTRANT}
     body.pop("payment_mode", None)
-    reject = client.post(
+    accept = client.post(
         f"/api/payment/{token}/accept",
         json={"accepted": True, **body},
     )
-    assert reject.status_code == 400
+    assert accept.status_code == 200
+    assert "checkout_url" in accept.json()
 
 
 def test_accept_bank_transfer_returns_receipt_url(client, seed_lead):
+    from app.config import get_settings
+    from app.integrations.factory import get_bitrix_client
+
     seed_lead(111)
+    settings = get_settings()
+    bitrix = get_bitrix_client()
     response = client.post(
         "/api/dev/send-payment-link",
         json={"lead_id": 111, "customer_email": "customer@example.com"},
     )
+    assert response.status_code == 200
     token = response.json()["token"]
+    bitrix._mock_leads[111][settings.bitrix_field_payment_1_mode] = "5778"
     accept = client.post(
         f"/api/payment/{token}/accept",
-        json={"accepted": True, **{**SAMPLE_REGISTRANT, "payment_mode": "bank_transfer"}},
+        json={"accepted": True, **{k: v for k, v in SAMPLE_REGISTRANT.items() if k != "payment_mode"}},
     )
     assert accept.status_code == 200
     assert "/receipt" in accept.json()["checkout_url"]
 
 
 def test_accept_cash_returns_thank_you_url(client, seed_lead):
+    from app.config import get_settings
+    from app.integrations.factory import get_bitrix_client
+
     seed_lead(112)
+    settings = get_settings()
+    bitrix = get_bitrix_client()
     response = client.post(
         "/api/dev/send-payment-link",
         json={"lead_id": 112, "customer_email": "customer@example.com"},
     )
+    assert response.status_code == 200
     token = response.json()["token"]
+    # Bitrix Payment Mode drives the channel at accept time.
+    bitrix._mock_leads[112][settings.bitrix_field_payment_1_mode] = "5774"
     accept = client.post(
         f"/api/payment/{token}/accept",
-        json={"accepted": True, **{**SAMPLE_REGISTRANT, "payment_mode": "cash"}},
+        json={"accepted": True, **{k: v for k, v in SAMPLE_REGISTRANT.items() if k != "payment_mode"}},
     )
     assert accept.status_code == 200
     assert "thank-you" in accept.json()["checkout_url"]
+
+
+def test_blank_payment_mode_comments_on_bitrix(client, seed_lead):
+    from app.config import get_settings
+    from app.integrations.factory import get_bitrix_client
+
+    seed_lead(113)
+    settings = get_settings()
+    bitrix = get_bitrix_client()
+    # Explicitly blank installment-1 mode
+    bitrix._mock_leads[113].pop(settings.bitrix_field_payment_1_mode, None)
+    response = client.post(
+        "/api/dev/send-payment-link",
+        json={"lead_id": 113, "customer_email": "customer@example.com"},
+    )
+    assert response.status_code == 200
+    comments = bitrix._mock_comments.get(("LEAD", 113), [])
+    assert any(
+        "Payment Mode is not set for Installment 1" in (c.get("COMMENT") or c.get("comment") or str(c))
+        for c in comments
+    )
 
 
 def test_locked_amount_ignores_customer_choice(client, seed_lead):

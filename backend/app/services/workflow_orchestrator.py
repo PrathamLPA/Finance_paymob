@@ -1064,25 +1064,124 @@ class WorkflowOrchestrator:
         )
 
         from app.services.installment_plan import charge_installment_number_for_workflow
-        from app.models.payment_session import CHANNEL_ONLINE
 
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
-        # Customer chooses Card / Tabby / Tamara / Website / Bank / Cash on the link.
+        return await self._open_session_from_bitrix_payment_mode(
+            workflow,
+            lead=lead,
+            plan=plan,
+            installment_number=installment_number,
+            entity_type="LEAD",
+            entity_id=lead_id,
+            email_client=True,
+        )
+
+    async def _comment_missing_payment_mode(
+        self,
+        *,
+        installment_number: int,
+        entity_type: str,
+        entity_id: int,
+        payment_url: str | None = None,
+    ) -> None:
+        """Tell agents the installment Payment Mode UF is blank."""
+        lines = [
+            f"Payment Mode is not set for Installment {installment_number}.",
+            "An online payment link was sent (Card / default Paymob methods).",
+            "Set the Bitrix Payment Mode for this installment if Cash or Bank Transfer is required.",
+        ]
+        if payment_url:
+            lines.append(f"Payment link: {payment_url}")
+        try:
+            await self.bitrix.add_timeline_comment(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                comment="\n".join(lines),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to comment missing payment mode on %s %s",
+                entity_type,
+                entity_id,
+            )
+
+    async def _open_session_from_bitrix_payment_mode(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        lead: dict[str, Any],
+        plan: Any,
+        installment_number: int | None,
+        entity_type: str,
+        entity_id: int,
+        email_client: bool = True,
+        allow_cross_installment_fallback: bool = True,
+        announce: bool = True,
+        set_deal_payment_link: bool = False,
+    ):
+        """Create the payment session using Bitrix Payment Mode (not customer choice)."""
+        from app.models.payment_session import CHANNEL_CASH
+        from app.services.payment_mode import (
+            is_payment_mode_blank,
+            resolve_session_channel_from_bitrix,
+        )
+
+        number = installment_number or 1
+        mode_blank = is_payment_mode_blank(
+            lead, installment_number=number, settings=self.settings
+        )
+        channel = await resolve_session_channel_from_bitrix(
+            lead,
+            installment_number=number,
+            settings=self.settings,
+            bitrix=self.bitrix,
+            allow_cross_installment_fallback=allow_cross_installment_fallback,
+        )
+
+        if channel == CHANNEL_CASH:
+            await self.queue_cash_with_intake_link(
+                workflow,
+                lead=lead,
+                due_amount=plan.amount,
+                installment_number=number,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                charge_source=plan.source,
+                amount_locked=plan.locked,
+                email_client=email_client,
+            )
+            # queue_cash_with_intake_link always raises CashCollectionQueued
+            raise AssertionError("cash intake should raise CashCollectionQueued")
+
         session = await self.session_service.get_or_create_reusable_session(
             workflow,
             charge_amount=plan.amount,
             charge_source=plan.source,
             amount_locked=plan.locked,
             installment_number=installment_number,
-            channel=CHANNEL_ONLINE,
+            channel=channel,
         )
         payment_url = self.session_service.build_payment_url(session.token)
 
-        await self.announce_payment_link(session, entity_type="LEAD", entity_id=lead_id)
+        if mode_blank and session.link_commented_at is None:
+            await self._comment_missing_payment_mode(
+                installment_number=number,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                payment_url=payment_url,
+            )
 
-        if workflow.customer_email:
+        if set_deal_payment_link and workflow.finance_deal_id:
+            await self.bitrix.set_deal_payment_link(workflow.finance_deal_id, payment_url)
+
+        if announce:
+            await self.announce_payment_link(
+                session, entity_type=entity_type, entity_id=entity_id
+            )
+
+        if email_client and workflow.customer_email:
             await asyncio.to_thread(
                 self.email.send_payment_request,
                 to_email=workflow.customer_email,
@@ -1093,10 +1192,13 @@ class WorkflowOrchestrator:
             self.db.commit()
 
         logger.info(
-            "Payment link created for lead %s - estimate_id=%s channel=%s token %s...",
-            lead_id,
-            workflow.bitrix_estimate_id or "-",
-            CHANNEL_ONLINE,
+            "Payment link created | entity=%s %s channel=%s installment=%s "
+            "mode_blank=%s token %s...",
+            entity_type,
+            entity_id,
+            channel,
+            number,
+            mode_blank,
             session.token[:8],
         )
         return session
@@ -1780,35 +1882,35 @@ class WorkflowOrchestrator:
             workflow, lead=lead, settings=self.settings
         )
         from app.services.installment_plan import charge_installment_number_for_workflow
-        from app.models.payment_session import CHANNEL_ONLINE
 
         installment_number = charge_installment_number_for_workflow(workflow)
         if installment_number is None and plan.source == "installment_1":
             installment_number = 1
-        # Customer chooses payment mode on the link (not from Bitrix Payment Mode).
-        session = await self.session_service.get_or_create_reusable_session(
+        # Prefer live lead from Bitrix when available.
+        if workflow.bitrix_lead_id:
+            try:
+                fresh = await self.bitrix.get_lead(workflow.bitrix_lead_id)
+                if fresh:
+                    lead = fresh
+                    workflow.bitrix_lead_payload = fresh
+                    self.db.commit()
+            except Exception:
+                logger.exception(
+                    "Could not refresh Bitrix lead %s before finance-deal payment mode",
+                    workflow.bitrix_lead_id,
+                )
+        return await self._open_session_from_bitrix_payment_mode(
             workflow,
-            charge_amount=plan.amount,
-            charge_source=plan.source,
-            amount_locked=plan.locked,
+            lead=lead,
+            plan=plan,
             installment_number=installment_number,
-            channel=CHANNEL_ONLINE,
+            entity_type="DEAL",
+            entity_id=finance_deal_id,
+            email_client=False,
+            allow_cross_installment_fallback=False,
+            announce=True,
+            set_deal_payment_link=True,
         )
-
-        payment_url = self.session_service.build_payment_url(session.token)
-        # Write link to Bitrix deal field so Bitrix can email it (no SendGrid).
-        await self.bitrix.set_deal_payment_link(finance_deal_id, payment_url)
-        await self.announce_payment_link(session, entity_type="DEAL", entity_id=finance_deal_id)
-        workflow.last_reminder_at = datetime.now(timezone.utc)
-        self.db.commit()
-
-        logger.info(
-            "Payment link created for finance deal %s - token %s... lead=%s",
-            finance_deal_id,
-            session.token[:8],
-            workflow.bitrix_lead_id,
-        )
-        return session
 
     async def _create_dev_simulated_deals(self, workflow: CustomerWorkflow) -> None:
         """Assign mock Bitrix deal IDs for local dev webhook simulation."""
@@ -1861,15 +1963,7 @@ class WorkflowOrchestrator:
         installment_1_date: str | None = None,
     ) -> None:
         """First payment: autofill Complete-lead fields only — Bitrix automation converts."""
-        context = {
-            "customer_email": workflow.customer_email,
-            "customer_name": workflow.customer_name,
-            "total_amount": str(workflow.total_amount),
-            "amount_paid": str(workflow.amount_paid),
-            "payment_amount": str(workflow.amount_paid),
-            "remaining_balance": str(workflow.remaining_balance),
-            "currency": workflow.currency,
-        }
+        context = self._student_context_from_workflow(workflow)
         if installment_1_date:
             context["installment_1_date"] = installment_1_date
 
@@ -2007,6 +2101,41 @@ class WorkflowOrchestrator:
         self.db.refresh(workflow)
         return workflow
 
+    def _student_context_from_workflow(self, workflow: CustomerWorkflow) -> dict[str, Any]:
+        """Build Complete-lead context with student identity from terms acceptance."""
+        from app.models.terms_acceptance import TermsAcceptance
+        from app.services.terms_service import TermsService
+
+        context: dict[str, Any] = {
+            "customer_email": workflow.customer_email,
+            "customer_name": workflow.customer_name,
+            "customer_phone": workflow.customer_phone,
+            "total_amount": str(workflow.total_amount),
+            "amount_paid": str(workflow.amount_paid),
+            "payment_amount": str(workflow.amount_paid),
+            "remaining_balance": str(workflow.remaining_balance),
+            "currency": workflow.currency,
+        }
+        prior = self.db.scalar(
+            select(TermsAcceptance)
+            .join(PaymentSession)
+            .where(PaymentSession.workflow_id == workflow.id)
+            .order_by(TermsAcceptance.accepted_at.desc())
+        )
+        if prior:
+            student_name, student_email, student_phone = TermsService._resolve_student_identity(
+                course_for=prior.course_for,
+                registrant_name=prior.registrant_name or workflow.customer_name,
+                registrant_email=prior.registrant_email or workflow.customer_email,
+                registrant_phone=prior.registrant_phone or workflow.customer_phone,
+                participants=prior.participants_json,
+            )
+            if student_name:
+                context["customer_name"] = student_name
+            context["student_email"] = student_email
+            context["student_phone"] = student_phone
+        return context
+
     async def _autofill_complete_lead_after_invoice(self, workflow: CustomerWorkflow) -> None:
         """Fill empty Complete-lead fields once Payment Proof exists; do not convert."""
         lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
@@ -2014,15 +2143,7 @@ class WorkflowOrchestrator:
         if status == "CONVERTED":
             return
 
-        context = {
-            "customer_email": workflow.customer_email,
-            "customer_name": workflow.customer_name,
-            "total_amount": str(workflow.total_amount),
-            "amount_paid": str(workflow.amount_paid),
-            "payment_amount": str(workflow.amount_paid),
-            "remaining_balance": str(workflow.remaining_balance),
-            "currency": workflow.currency,
-        }
+        context = self._student_context_from_workflow(workflow)
         i1_date_field = (self.settings.bitrix_field_installment_1_date or "").strip()
         if i1_date_field:
             stamped = lead.get(i1_date_field)

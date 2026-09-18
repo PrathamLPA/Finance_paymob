@@ -4,6 +4,64 @@ from app.config import Settings
 from app.integrations.bitrix import build_complete_lead_autofill_fields
 
 
+def test_complete_lead_autofill_writes_student_mail_and_contact():
+    settings = Settings(
+        bitrix_field_complete_student_name="UF_NAME",
+        bitrix_field_student_mail="UF_MAIL",
+        bitrix_field_student_contact="UF_PHONE",
+        bitrix_field_complete_enrollment_date="UF_ENROLL",
+        bitrix_field_complete_schedule_finalized="UF_SCHED",
+        bitrix_field_complete_trainer_shared="UF_TRAINER",
+        bitrix_field_complete_student_type="UF_STYPE",
+        bitrix_field_complete_batch_type="UF_BATCH",
+        bitrix_field_complete_ops_notes="UF_NOTES",
+        bitrix_complete_schedule_finalized_enum="12912",
+        bitrix_complete_trainer_shared_enum="12916",
+        bitrix_complete_student_type_enum="13198",
+        bitrix_complete_batch_type_enum="13200",
+    )
+    fields = build_complete_lead_autofill_fields(
+        settings,
+        {"TITLE": "Lead"},
+        {
+            "customer_name": "Sara Khan",
+            "student_email": "sara@test.com",
+            "student_phone": "+971500000001",
+            "amount_paid": "1.00",
+            "total_amount": "2.10",
+        },
+    )
+    assert fields["UF_NAME"] == "Sara Khan"
+    assert fields["UF_MAIL"] == "sara@test.com"
+    assert fields["UF_PHONE"] == "+971500000001"
+
+
+def test_resolve_student_identity_someone_else_uses_candidate():
+    from app.services.terms_service import TermsService
+
+    name, email, phone = TermsService._resolve_student_identity(
+        course_for="someone_else",
+        registrant_name="Payer",
+        registrant_email="payer@test.com",
+        registrant_phone="+971511111111",
+        participants=[{"name": "Sara", "email": "sara@test.com"}],
+    )
+    assert name == "Sara"
+    assert email == "sara@test.com"
+    assert phone is None
+
+    name, email, phone = TermsService._resolve_student_identity(
+        course_for="self",
+        registrant_name="Payer",
+        registrant_email="payer@test.com",
+        registrant_phone="+971511111111",
+        participants=[],
+    )
+    assert name == "Payer"
+    assert email == "payer@test.com"
+    assert phone == "+971511111111"
+
+
 def test_complete_lead_autofill_fills_empty_only_and_copies_i2_due():
     settings = Settings(
         bitrix_field_complete_paid_amount="UF_PAID",

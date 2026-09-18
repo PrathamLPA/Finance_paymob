@@ -258,7 +258,14 @@ class TermsService:
             if not workflow:
                 return
 
-            await service._sync_registrant_to_bitrix(workflow)
+            await service._sync_registrant_to_bitrix(
+                workflow,
+                course_for=course_for,
+                registrant_name=registrant_name,
+                registrant_email=registrant_email,
+                registrant_phone=registrant_phone,
+                participants=participants,
+            )
             # Prefer the payment-link recipient (same inbox as Payment Request),
             # not the registrant form email which may be a staff/agent address.
             to_email = (terms_to_email or "").strip() or (workflow.customer_email or "").strip()
@@ -361,50 +368,71 @@ class TermsService:
             raise HTTPException(status_code=400, detail=validation_error)
 
         from app.services.payment_mode import (
-            channel_for_customer_payment_mode,
-            sync_customer_payment_mode_to_bitrix,
-            validate_customer_payment_mode,
+            resolve_session_channel_from_bitrix,
         )
 
-        try:
-            chosen_mode = validate_customer_payment_mode(payment_mode)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
         bitrix = get_bitrix_client(self.settings)
-        # Self-purchase: skip Bitrix product-row fetch on accept (page load already
-        # showed seats; empty courses means participant validation is a no-op).
+        courses = await load_lead_courses(bitrix, session.workflow.bitrix_lead_id)
         if course_for == "self":
-            courses = []
-            if not participants:
-                participants = participants_for_buyer(
-                    courses,
-                    name=registrant_name.strip(),
-                    email=registrant_email.strip(),
-                )
+            # Buyer is the only student — assign them to every course on the order.
+            participants = participants_for_buyer(
+                courses,
+                name=registrant_name.strip(),
+                email=registrant_email.strip(),
+            )
         else:
-            courses = await load_lead_courses(bitrix, session.workflow.bitrix_lead_id)
-        participants_error = validate_participants(courses, participants)
-        if participants_error:
-            raise HTTPException(status_code=400, detail=participants_error)
+            participants_error = validate_participants(courses, participants)
+            if participants_error:
+                raise HTTPException(status_code=400, detail=participants_error)
         cleaned_participants = normalize_participants(participants, courses)
 
         amount = self.resolve_payment_amount(
             session.workflow, payment_amount, session=session
         )
 
-        from app.models.payment_session import CHANNEL_BANK_TRANSFER, CHANNEL_CASH
+        from app.models.payment_session import (
+            CHANNEL_BANK_TRANSFER,
+            CHANNEL_CASH,
+            CHANNEL_ONLINE,
+        )
 
-        chosen_channel = channel_for_customer_payment_mode(chosen_mode)
-        session.customer_payment_mode = chosen_mode
-        session.channel = chosen_channel
+        # Payment channel comes from Bitrix Payment Mode for this installment —
+        # customers no longer choose Card / Tabby / Cash on the terms page.
+        number = getattr(session, "installment_number", None) or 1
+        lead: dict = {}
+        workflow = session.workflow
+        if workflow.bitrix_lead_id:
+            try:
+                lead = await bitrix.get_lead(workflow.bitrix_lead_id) or {}
+                if lead:
+                    workflow.bitrix_lead_payload = lead
+                    self.db.commit()
+            except Exception:
+                logger.exception(
+                    "Could not refresh Bitrix lead %s before terms accept channel",
+                    workflow.bitrix_lead_id,
+                )
+                lead = workflow.bitrix_lead_payload or {}
+        else:
+            lead = workflow.bitrix_lead_payload or {}
+
+        # Later installments: only honor that installment's own mode (no cross-fallback).
+        allow_fallback = number <= 1
+        chosen_channel = await resolve_session_channel_from_bitrix(
+            lead if isinstance(lead, dict) else {},
+            installment_number=number,
+            settings=self.settings,
+            bitrix=bitrix,
+            allow_cross_installment_fallback=allow_fallback,
+        )
+        session.customer_payment_mode = None
+        session.channel = chosen_channel or getattr(session, "channel", None) or CHANNEL_ONLINE
         self.db.commit()
         self.db.refresh(session)
 
-        is_bank_transfer = chosen_channel == CHANNEL_BANK_TRANSFER
-        is_cash = chosen_channel == CHANNEL_CASH
+        is_bank_transfer = session.channel == CHANNEL_BANK_TRANSFER
+        is_cash = session.channel == CHANNEL_CASH
 
-        workflow = session.workflow
         # Keep the Payment Request recipient for the Terms email. Accept form may use
         # a different registrant_email (e.g. agent filling on behalf of the student).
         payment_link_email = (workflow.customer_email or "").strip()
@@ -415,31 +443,6 @@ class TermsService:
         workflow.customer_phone = registrant_phone.strip()
         self.db.commit()
         self.db.refresh(workflow)
-
-        # Bitrix UF + timeline comment: do not block redirect (cash/bank especially).
-        async def _bg_sync_payment_mode(**kwargs):
-            try:
-                await sync_customer_payment_mode_to_bitrix(**kwargs)
-            except Exception:
-                logger.exception(
-                    "Background Bitrix payment-mode sync failed | mode=%s lead=%s",
-                    kwargs.get("mode"),
-                    kwargs.get("lead_id"),
-                )
-
-        bitrix_mode_kwargs = {
-            "bitrix": bitrix,
-            "lead_id": workflow.bitrix_lead_id,
-            "installment_number": getattr(session, "installment_number", None) or 1,
-            "mode": chosen_mode,
-            "settings": self.settings,
-            "entity_type": "LEAD" if workflow.bitrix_lead_id else "DEAL",
-            "entity_id": workflow.bitrix_lead_id or workflow.finance_deal_id,
-        }
-        if background_tasks is not None:
-            background_tasks.add_task(_bg_sync_payment_mode, **bitrix_mode_kwargs)
-        else:
-            await _bg_sync_payment_mode(**bitrix_mode_kwargs)
 
         first_accept_this_request = False
         if session.status != SESSION_TERMS_ACCEPTED:
@@ -564,8 +567,37 @@ class TermsService:
                 detail="Could not start Paymob checkout. Please try again or ask for a new payment link.",
             ) from exc
 
-    async def _sync_registrant_to_bitrix(self, workflow: CustomerWorkflow) -> None:
+    async def _sync_registrant_to_bitrix(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        course_for: str | None = None,
+        registrant_name: str | None = None,
+        registrant_email: str | None = None,
+        registrant_phone: str | None = None,
+        participants: list[dict[str, Any]] | None = None,
+    ) -> None:
         bitrix = get_bitrix_client(self.settings)
+        student_name, student_email, student_phone = self._resolve_student_identity(
+            course_for=course_for,
+            registrant_name=registrant_name or workflow.customer_name,
+            registrant_email=registrant_email or workflow.customer_email,
+            registrant_phone=registrant_phone or workflow.customer_phone,
+            participants=participants,
+        )
+        if workflow.bitrix_lead_id:
+            try:
+                await bitrix.sync_lead_student_details(
+                    workflow.bitrix_lead_id,
+                    name=student_name,
+                    email=student_email,
+                    phone=student_phone,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to sync student details to Bitrix lead %s",
+                    workflow.bitrix_lead_id,
+                )
         deal_ids = [workflow.sales_deal_id, workflow.finance_deal_id, workflow.b2c_deal_id]
         for deal_id in deal_ids:
             if not deal_id:
@@ -573,9 +605,33 @@ class TermsService:
             try:
                 await bitrix.sync_deal_customer_details(
                     deal_id,
-                    name=workflow.customer_name,
-                    email=workflow.customer_email,
-                    phone=workflow.customer_phone,
+                    name=registrant_name or workflow.customer_name,
+                    email=registrant_email or workflow.customer_email,
+                    phone=registrant_phone or workflow.customer_phone,
                 )
             except Exception:
                 logger.exception("Failed to sync registrant to Bitrix deal %s", deal_id)
+
+    @staticmethod
+    def _resolve_student_identity(
+        *,
+        course_for: str | None,
+        registrant_name: str | None,
+        registrant_email: str | None,
+        registrant_phone: str | None,
+        participants: list[dict[str, Any]] | None,
+    ) -> tuple[str | None, str | None, str | None]:
+        """Student fields: self → payer; someone else → the one candidate."""
+        if (course_for or "").strip() == "someone_else":
+            people = [p for p in (participants or []) if isinstance(p, dict)]
+            if people:
+                first = people[0]
+                name = str(first.get("name") or "").strip() or None
+                email = str(first.get("email") or "").strip() or None
+                phone = str(first.get("phone") or "").strip() or None
+                return name, email, phone
+        return (
+            (registrant_name or "").strip() or None,
+            (registrant_email or "").strip() or None,
+            (registrant_phone or "").strip() or None,
+        )

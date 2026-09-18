@@ -631,6 +631,23 @@ body.error-page-body {
     line-height: 1.4;
 }
 
+.seat-card-single {
+    border-color: color-mix(in srgb, var(--primary) 22%, var(--border));
+}
+
+.candidate-course-list {
+    margin: 0.35rem 0 0;
+    padding-left: 1.1rem;
+    color: var(--foreground);
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.45;
+}
+
+.candidate-course-list li + li {
+    margin-top: 0.2rem;
+}
+
 /* ── Amount ── */
 .amount-summary {
     margin: 0 0 1.15rem;

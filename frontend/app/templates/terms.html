@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment - Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=19">
+    <link rel="stylesheet" href="/static/styles.css?v=20">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -48,7 +48,7 @@
             <div class="step-line" aria-hidden="true" id="nav-line-candidates"></div>
             <div class="step" id="nav-step-candidates">
                 <span class="step-num" id="nav-num-candidates">2</span>
-                <span class="step-label">Candidates</span>
+                <span class="step-label">Candidate</span>
             </div>
             <div class="step-line" aria-hidden="true"></div>
             {% endif %}
@@ -58,12 +58,7 @@
             </div>
             <div class="step-line" aria-hidden="true"></div>
             <div class="step">
-                <span class="step-num" id="nav-num-mode">{% if is_subsequent_payment %}2{% else %}4{% endif %}</span>
-                <span class="step-label">Pay</span>
-            </div>
-            <div class="step-line" aria-hidden="true"></div>
-            <div class="step">
-                <span class="step-num" id="nav-num-pay">{% if is_subsequent_payment %}3{% else %}5{% endif %}</span>
+                <span class="step-num" id="nav-num-pay">{% if is_subsequent_payment %}2{% else %}4{% endif %}</span>
                 <span class="step-label">Terms</span>
             </div>
         </nav>
@@ -204,7 +199,7 @@
                         </label>
 
                         <label class="field">
-                            <span class="field-label">Email</span>
+                            <span class="field-label" id="buyer-email-label">Email</span>
                             <span class="input-wrap">
                                 <span class="input-icon" aria-hidden="true">
                                     <svg viewBox="0 0 24 24" fill="none">
@@ -219,7 +214,7 @@
                         </label>
 
                         <label class="field">
-                            <span class="field-label">Phone number</span>
+                            <span class="field-label" id="buyer-phone-label">Phone number</span>
                             <span class="input-wrap">
                                 <span class="input-icon" aria-hidden="true">
                                     <svg viewBox="0 0 24 24" fill="none">
@@ -232,6 +227,9 @@
                             </span>
                         </label>
                     </div>
+                    <p class="field-hint" id="payer-hint" hidden>
+                        These details are for the person paying. The student details come next.
+                    </p>
                 </section>
 
                 {% if total_seats > 0 %}
@@ -239,19 +237,19 @@
                     <div class="panel-header">
                         <span class="panel-step-badge" id="badge-candidates">Step 2</span>
                         <div>
-                            <h2 class="section-heading" id="candidates-heading">Course candidates</h2>
-                            <p class="terms-divider-hint">
-                                Enter each candidate’s name and email. Courses on this order are shown below - no need to pick a course.
+                            <h2 class="section-heading" id="candidates-heading">Candidate details</h2>
+                            <p class="terms-divider-hint" id="candidates-hint">
+                                Enter the student who will take every course on this order.
                             </p>
                         </div>
                     </div>
 
-                    <ul class="course-inventory" id="course-inventory" aria-label="Courses on this order">
+                    <ul class="course-inventory" id="course-inventory" aria-label="Courses for this candidate">
                         {% for course in courses %}
                         <li class="course-chip" data-product-id="{{ course.product_id }}">
                             <span class="course-chip-name">{{ course.product_name }}</span>
                             <span class="course-chip-qty">
-                                {{ course.quantity }} seat{% if course.quantity != 1 %}s{% endif %}
+                                {{ course.quantity }} course{% if course.quantity != 1 %}s{% endif %}
                             </span>
                         </li>
                         {% endfor %}
@@ -373,60 +371,9 @@
                     </label>
                 </section>
 
-                <section class="payment-mode-panel" aria-labelledby="payment-mode-heading">
-                    <div class="panel-header">
-                        <span class="panel-step-badge" id="badge-payment-mode">Step {% if is_subsequent_payment %}2{% else %}4{% endif %}</span>
-                        <div>
-                            <h2 class="section-heading" id="payment-mode-heading">Payment method</h2>
-                            <p class="terms-divider-hint">Choose how you want to pay. This is required before you continue.</p>
-                        </div>
-                    </div>
-                    <fieldset class="course-for-fieldset payment-mode-fieldset">
-                        <legend class="sr-only">Payment method</legend>
-                        <div class="toggle-group payment-mode-group">
-                            <label class="toggle-btn{% if payment_mode == 'card' %} selected{% endif %}">
-                                <input type="radio" name="payment_mode" value="card" required
-                                    {% if payment_mode == 'card' %}checked{% endif %}>
-                                <span class="toggle-label">Card</span>
-                                <span class="toggle-hint">Debit or credit via Paymob</span>
-                            </label>
-                            <label class="toggle-btn{% if payment_mode == 'tabby' %} selected{% endif %}">
-                                <input type="radio" name="payment_mode" value="tabby" required
-                                    {% if payment_mode == 'tabby' %}checked{% endif %}>
-                                <span class="toggle-label">Tabby</span>
-                                <span class="toggle-hint">Pay in installments</span>
-                            </label>
-                            <label class="toggle-btn{% if payment_mode == 'tamara' %} selected{% endif %}">
-                                <input type="radio" name="payment_mode" value="tamara" required
-                                    {% if payment_mode == 'tamara' %}checked{% endif %}>
-                                <span class="toggle-label">Tamara</span>
-                                <span class="toggle-hint">Buy now, pay later</span>
-                            </label>
-                            <label class="toggle-btn{% if payment_mode == 'website_payment' %} selected{% endif %}">
-                                <input type="radio" name="payment_mode" value="website_payment" required
-                                    {% if payment_mode == 'website_payment' %}checked{% endif %}>
-                                <span class="toggle-label">Website payment</span>
-                                <span class="toggle-hint">Card, Tabby, or Tamara</span>
-                            </label>
-                            <label class="toggle-btn{% if payment_mode == 'bank_transfer' %} selected{% endif %}">
-                                <input type="radio" name="payment_mode" value="bank_transfer" required
-                                    {% if payment_mode == 'bank_transfer' %}checked{% endif %}>
-                                <span class="toggle-label">Bank transfer</span>
-                                <span class="toggle-hint">Transfer then upload receipt</span>
-                            </label>
-                            <label class="toggle-btn{% if payment_mode == 'cash' %} selected{% endif %}">
-                                <input type="radio" name="payment_mode" value="cash" required
-                                    {% if payment_mode == 'cash' %}checked{% endif %}>
-                                <span class="toggle-label">Cash</span>
-                                <span class="toggle-hint">Pay at the office desk</span>
-                            </label>
-                        </div>
-                    </fieldset>
-                </section>
-
                 <section class="terms-accept-panel" id="terms-accept-section" aria-labelledby="terms-heading">
                     <div class="panel-header">
-                        <span class="panel-step-badge muted" id="badge-terms">Step {% if is_subsequent_payment %}3{% else %}5{% endif %}</span>
+                        <span class="panel-step-badge muted" id="badge-terms">Step {% if is_subsequent_payment %}2{% else %}4{% endif %}</span>
                         <div>
                             <h2 class="section-heading" id="terms-heading">Terms &amp; Conditions</h2>
                             <p class="terms-divider-hint">Open the policy, scroll to the end, then confirm. The checkbox will be ticked for you.</p>
@@ -439,7 +386,7 @@
                             <button type="button" class="terms-link-btn" id="open-terms-modal">
                                 Terms and Conditions &amp; Refund Policy
                             </button>.
-                            <span id="consent-mode-note">Select a payment method above to continue.</span>
+                            <span id="consent-mode-note">I understand I will continue to the payment step set for this order.</span>
                         </p>
                     </div>
                     <button type="submit" class="btn-paymob" id="submit-btn" disabled>
@@ -453,7 +400,7 @@
                         </svg>
                     </button>
                     <p class="form-footer-note" id="submit-blocker-hint">
-                        Choose a payment method, accept the terms, then continue.
+                        Accept the terms, then continue.
                     </p>
                 </section>
             </form>
@@ -531,12 +478,17 @@
         const maxAmount = parseFloat(amountInput.max || '0');
         const courses = {{ courses | tojson }};
         const totalSeats = {{ total_seats }};
+        const paymentChannel = {{ (channel or 'online') | tojson }};
         const isSubsequentPayment = {{ 'true' if is_subsequent_payment else 'false' }};
         const participantsInput = document.getElementById('participants-json');
         const participantsSection = document.getElementById('participants-section');
         const seatCards = document.getElementById('seat-cards');
         const seatsHint = document.getElementById('seats-hint');
         const buyerNameLabel = document.getElementById('buyer-name-label');
+        const buyerEmailLabel = document.getElementById('buyer-email-label');
+        const buyerPhoneLabel = document.getElementById('buyer-phone-label');
+        const payerHint = document.getElementById('payer-hint');
+        const candidatesHint = document.getElementById('candidates-hint');
         const navStepCandidates = document.getElementById('nav-step-candidates');
         const navLineCandidates = document.getElementById('nav-line-candidates');
         let termsReadComplete = false;
@@ -587,24 +539,27 @@
 
         function collectParticipants() {
             if (!seatCards || !seatsRequired()) return [];
-            return Array.from(seatCards.querySelectorAll('.seat-card')).map((card) => ({
-                name: card.querySelector('.seat-name').value.trim(),
-                email: card.querySelector('.seat-email').value.trim(),
-                product_id: Number(card.getAttribute('data-product-id') || 0),
-                product_name: card.getAttribute('data-product-name') || '',
+            const card = seatCards.querySelector('.seat-card');
+            if (!card) return [];
+            const name = card.querySelector('.seat-name').value.trim();
+            const email = card.querySelector('.seat-email').value.trim();
+            // One candidate receives every course / seat on this order.
+            return expandSeats().map((seat) => ({
+                name: name,
+                email: email,
+                product_id: seat.product_id,
+                product_name: seat.product_name,
             }));
         }
 
         function seatsError() {
             if (!seatsRequired()) return '';
             const people = collectParticipants();
-            if (people.length !== totalSeats) return 'Please fill in all course seats.';
-            for (let i = 0; i < people.length; i++) {
-                const person = people[i];
-                if (!person.name) return 'Enter the name for candidate ' + (i + 1) + '.';
-                if (!person.email || !person.email.includes('@')) {
-                    return 'Enter a valid email for candidate ' + (i + 1) + '.';
-                }
+            if (!people.length) return 'Enter the candidate name and email.';
+            const person = people[0];
+            if (!person.name) return 'Enter the candidate’s full name.';
+            if (!person.email || !person.email.includes('@')) {
+                return 'Enter a valid email for the candidate.';
             }
             return '';
         }
@@ -617,10 +572,8 @@
             if (isSubsequentPayment) {
                 document.getElementById('badge-amount').textContent = 'Step 1';
                 document.getElementById('nav-num-amount').textContent = '1';
-                document.getElementById('badge-payment-mode').textContent = 'Step 2';
-                document.getElementById('nav-num-mode').textContent = '2';
-                document.getElementById('badge-terms').textContent = 'Step 3';
-                document.getElementById('nav-num-pay').textContent = '3';
+                document.getElementById('badge-terms').textContent = 'Step 2';
+                document.getElementById('nav-num-pay').textContent = '2';
                 return;
             }
             const showCandidates = seatsRequired();
@@ -634,11 +587,6 @@
             document.getElementById('badge-amount').textContent = 'Step ' + step;
             document.getElementById('nav-num-amount').textContent = step;
             step++;
-            const badgeMode = document.getElementById('badge-payment-mode');
-            if (badgeMode) badgeMode.textContent = 'Step ' + step;
-            const navMode = document.getElementById('nav-num-mode');
-            if (navMode) navMode.textContent = step;
-            step++;
             document.getElementById('badge-terms').textContent = 'Step ' + step;
             document.getElementById('nav-num-pay').textContent = step;
 
@@ -646,28 +594,22 @@
             if (navLineCandidates) navLineCandidates.hidden = !showCandidates;
         }
 
-        function paymentModeValue() {
-            const checked = form.querySelector('input[name="payment_mode"]:checked');
-            return checked ? checked.value : '';
-        }
-
-        function applyPaymentModeCopy() {
-            const mode = paymentModeValue();
+        function applyChannelCopy() {
             const consentNote = document.getElementById('consent-mode-note');
             const label = document.getElementById('submit-btn-label');
-            let consentExtra = 'Select a payment method above to continue.';
+            let consentExtra = 'I understand I will continue to the payment step set for this order.';
             let buttonLabel = 'Continue to payment';
-            let footerHint = 'Choose a payment method, accept the terms, then continue.';
+            let footerHint = 'Accept the terms, then continue.';
 
-            if (mode === 'cash') {
+            if (paymentChannel === 'cash') {
                 consentExtra = 'I understand I will complete registration here and pay cash at the office desk.';
                 buttonLabel = 'Confirm & finish';
                 footerHint = 'After this step, please make your cash payment at the Learners Point office desk.';
-            } else if (mode === 'bank_transfer') {
+            } else if (paymentChannel === 'bank_transfer') {
                 consentExtra = 'I understand I will upload my bank transfer receipt on the next step.';
                 buttonLabel = 'Continue to upload receipt';
                 footerHint = 'Next you will upload a clear photo or PDF of your transfer receipt.';
-            } else if (mode === 'card' || mode === 'tabby' || mode === 'tamara' || mode === 'website_payment') {
+            } else {
                 consentExtra = 'I understand I will be redirected to Paymob to complete payment securely.';
                 buttonLabel = 'Continue to Paymob';
                 footerHint = "You'll be redirected to Paymob's secure checkout to complete your payment.";
@@ -685,7 +627,20 @@
             const forSomeoneElse = courseForValue() === 'someone_else';
             if (participantsSection) participantsSection.hidden = !forSomeoneElse;
             if (buyerNameLabel) {
-                buyerNameLabel.textContent = forSomeoneElse ? 'Your name (payer)' : 'Name';
+                buyerNameLabel.textContent = forSomeoneElse ? 'Payer name' : 'Name';
+            }
+            if (buyerEmailLabel) {
+                buyerEmailLabel.textContent = forSomeoneElse ? 'Payer email' : 'Email';
+            }
+            if (buyerPhoneLabel) {
+                buyerPhoneLabel.textContent = forSomeoneElse ? 'Payer phone' : 'Phone number';
+            }
+            if (payerHint) payerHint.hidden = !forSomeoneElse;
+            if (candidatesHint) {
+                const courseCount = courses.length;
+                candidatesHint.textContent = courseCount > 1
+                    ? 'All ' + courseCount + ' courses on this order are for this one student.'
+                    : 'Enter the student who will take the course on this order.';
             }
             updateStepLabels();
         }
@@ -695,13 +650,12 @@
             const name = document.getElementById('registrant-name').value.trim();
             const email = document.getElementById('registrant-email').value.trim();
             const phone = document.getElementById('registrant-phone').value.trim();
-            const paymentMode = paymentModeValue();
             const problem = amountError();
             const seatProblem = seatsError();
             const blockerHint = document.getElementById('submit-blocker-hint');
             let blocker = '';
 
-            applyPaymentModeCopy();
+            applyChannelCopy();
 
             if (!amountLocked) {
                 amountHint.classList.toggle('field-hint-error', Boolean(problem));
@@ -718,13 +672,13 @@
             if (!courseFor) {
                 blocker = 'Choose whether this course is for you or someone else.';
             } else if (!name || !email || !phone) {
-                blocker = 'Fill in your name, email, and phone number above.';
+                blocker = courseFor === 'someone_else'
+                    ? 'Fill in the payer name, email, and phone number above.'
+                    : 'Fill in your name, email, and phone number above.';
             } else if (seatProblem) {
                 blocker = seatProblem;
             } else if (problem) {
                 blocker = problem;
-            } else if (!paymentMode) {
-                blocker = 'Choose a payment method above.';
             } else if (!termsReadComplete || !checkbox.checked) {
                 blocker = 'Open the Terms and Conditions link, scroll to the end, then confirm.';
             }
@@ -750,31 +704,32 @@
 
         function renderSeatCards() {
             if (!seatCards || totalSeats <= 0) return;
-            const seats = expandSeats();
-            const html = seats.map((seat, i) => {
-                const prior = restored[i] || {};
-                const priorName = escapeHtml(prior.name || '');
-                const priorEmail = escapeHtml(prior.email || '');
-                const courseName = escapeHtml(seat.product_name);
-                return (
-                    '<article class="seat-card" data-product-id="' + seat.product_id +
-                    '" data-product-name="' + courseName + '">' +
-                    '<div class="seat-card-header">' +
-                    '<span class="seat-badge">Candidate ' + (i + 1) + '</span>' +
-                    '</div>' +
-                    '<div class="form-fields seat-fields">' +
-                    '<label class="field field-full"><span class="field-label">Candidate name</span>' +
-                    '<input type="text" class="field-input seat-name" placeholder="Full name" value="' + priorName + '"></label>' +
-                    '<label class="field field-full"><span class="field-label">Candidate email</span>' +
-                    '<input type="email" class="field-input seat-email" placeholder="name@example.com" value="' + priorEmail + '"></label>' +
-                    '<div class="seat-course-detail">' +
-                    '<span class="field-label">Course on this order</span>' +
-                    '<p class="seat-course-name">' + courseName + '</p>' +
-                    '</div>' +
-                    '</div></article>'
-                );
-            });
-            seatCards.innerHTML = html.join('');
+            const prior = restored[0] || {};
+            const priorName = escapeHtml(prior.name || '');
+            const priorEmail = escapeHtml(prior.email || '');
+            const courseNames = courses
+                .map((course) => escapeHtml(course.product_name))
+                .filter(Boolean);
+            const courseList = courseNames.length
+                ? '<ul class="candidate-course-list">' +
+                  courseNames.map((name) => '<li>' + name + '</li>').join('') +
+                  '</ul>'
+                : '';
+            seatCards.innerHTML =
+                '<article class="seat-card seat-card-single">' +
+                '<div class="seat-card-header">' +
+                '<span class="seat-badge">Student / candidate</span>' +
+                '</div>' +
+                '<div class="form-fields seat-fields">' +
+                '<label class="field field-full"><span class="field-label">Candidate name</span>' +
+                '<input type="text" class="field-input seat-name" autocomplete="name" placeholder="Full name as on certificate" value="' + priorName + '"></label>' +
+                '<label class="field field-full"><span class="field-label">Candidate email</span>' +
+                '<input type="email" class="field-input seat-email" autocomplete="email" placeholder="name@example.com" value="' + priorEmail + '"></label>' +
+                '<div class="seat-course-detail">' +
+                '<span class="field-label">Courses assigned to this person</span>' +
+                (courseList || '<p class="seat-course-name">All courses on this order</p>') +
+                '</div>' +
+                '</div></article>';
         }
 
         function bindToggleGroup(selector) {
@@ -792,7 +747,6 @@
         }
 
         bindToggleGroup('.course-for-fieldset .toggle-group');
-        bindToggleGroup('.payment-mode-group');
         bindToggleGroup('.amount-choice');
 
         form.querySelectorAll('input[name="amount_choice"]').forEach((radio) => {
@@ -841,9 +795,8 @@
             submitBtn.disabled = true;
             submitBtn.dataset.submitting = '1';
             const label = document.getElementById('submit-btn-label');
-            const mode = paymentModeValue();
             if (label) {
-                label.textContent = mode === 'cash' ? 'Saving...' : 'Continuing...';
+                label.textContent = paymentChannel === 'cash' ? 'Saving...' : 'Continuing...';
             }
             const hint = document.getElementById('submit-blocker-hint');
             if (hint) {

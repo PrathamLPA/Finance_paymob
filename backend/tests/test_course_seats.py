@@ -122,6 +122,7 @@ def test_accept_for_someone_else_requires_participants(client, seed_lead):
     )
     assert missing.status_code == 400
 
+    # One candidate is enough — all seats on the order are assigned to them.
     ok = client.post(
         f"/api/payment/{token}/accept",
         json={
@@ -129,13 +130,29 @@ def test_accept_for_someone_else_requires_participants(client, seed_lead):
             "course_for": "someone_else",
             "accepted": True,
             "participants": [
-                {"name": "Alice", "email": "alice@test.com", "product_id": 91},
-                {"name": "Bob", "email": "bob@test.com", "product_id": 91},
+                {"name": "Alice", "email": "alice@test.com"},
             ],
         },
     )
     assert ok.status_code == 200
     assert "checkout_url" in ok.json()
+
+
+def test_expand_single_candidate_assigns_every_course():
+    from app.services.course_seats import expand_single_candidate, validate_participants
+
+    courses = [
+        {"product_id": 10, "product_name": "ACCA", "quantity": 1},
+        {"product_id": 20, "product_name": "L5 Principles", "quantity": 1},
+    ]
+    people = expand_single_candidate(
+        courses,
+        [{"name": "Sara", "email": "sara@test.com"}],
+    )
+    assert len(people) == 2
+    assert {p["product_name"] for p in people} == {"ACCA", "L5 Principles"}
+    assert {p["name"] for p in people} == {"Sara"}
+    assert validate_participants(courses, [{"name": "Sara", "email": "sara@test.com"}]) is None
 
 
 def test_accept_for_self_skips_candidate_entry(client, seed_lead, db_session):
