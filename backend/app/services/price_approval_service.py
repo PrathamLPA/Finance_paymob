@@ -346,6 +346,13 @@ class PriceApprovalService:
             kinds.append("price")
         if installment_policy and installment_policy.get("needs_approval"):
             kinds.append("installment")
+        try:
+            from app.services.enrollment_type import is_one_on_one_enrollment
+
+            if is_one_on_one_enrollment(lead, self.settings) and "enrollment" not in kinds:
+                kinds.append("enrollment")
+        except Exception:
+            pass
 
         if not manager_email:
             raise ValueError(

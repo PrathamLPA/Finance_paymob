@@ -683,11 +683,20 @@ class WorkflowOrchestrator:
                 )
 
         gate = evaluate_price_gate(rows, catalog_prices)
+        from app.services.enrollment_type import (
+            apply_enrollment_type_to_gate,
+            is_one_on_one_enrollment,
+        )
+
+        enrollment_one_one = is_one_on_one_enrollment(lead, self.settings)
+        gate = apply_enrollment_type_to_gate(gate, lead, self.settings)
         comment = gate.summary_comment(currency=currency, amount_paid=workflow.amount_paid)
         logger.info(
-            "Price comparison | lead_id=%s result=%s total=%s catalog_min_total=%s lines=%s",
+            "Price comparison | lead_id=%s result=%s enrollment=%s total=%s "
+            "catalog_min_total=%s lines=%s",
             lead_id,
             "PASS" if gate.ok else "FAIL",
+            "one_one" if enrollment_one_one else "batch_or_unset",
             f"{gate.total_payable:.2f}",
             f"{gate.catalog_minimum_total:.2f}",
             _format_price_lines(gate),
@@ -765,15 +774,17 @@ class WorkflowOrchestrator:
                 approval.catalog_minimum_total,
                 approval_url,
             )
+            if gate.missing_catalog:
+                pending_prefix = "Course is not in the inventory/catalog. "
+            elif gate.blocked_lines:
+                pending_prefix = "Selling price is below the catalog minimum. "
+            elif enrollment_one_one:
+                pending_prefix = "Enrollment type is One-One. "
+            else:
+                pending_prefix = "Selling price is below the catalog minimum. "
             raise PriceApprovalPending(
-                (
-                    (
-                        "Course is not in the inventory/catalog. "
-                        if gate.missing_catalog
-                        else "Selling price is below the catalog minimum. "
-                    )
-                    + f"Manager approval requested ({approval.manager_email})."
-                ),
+                pending_prefix
+                + f"Manager approval requested ({approval.manager_email}).",
                 approval_url=approval_url,
                 approval_id=approval.id,
             )

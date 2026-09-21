@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     # Lead card student identity (Learners Point — filled from terms acceptance)
     bitrix_field_student_mail: str = "UF_CRM_1789714405705"
     bitrix_field_student_contact: str = "UF_CRM_1789714441645"
+    # Lead enrollment type: Batch → catalog/inventory path; One-One → manager approval
+    bitrix_field_enrollment_type: str = "UF_CRM_1789736997226"
+    bitrix_enrollment_batch_enum_ids: str = "19702"
+    bitrix_enrollment_one_one_enum_ids: str = "19704"
     bitrix_field_complete_enrollment_date: str = "UF_CRM_1771503410009"
     bitrix_field_complete_credit_card: str = "UF_CRM_1772016277089"
     bitrix_field_complete_tenure: str = "UF_CRM_1772019664771"
