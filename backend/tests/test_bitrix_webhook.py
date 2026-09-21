@@ -11,7 +11,7 @@ from tests.conftest import SAMPLE_REGISTRANT
 
 
 def _finance_deal(client, seed_lead, db_session, lead_id: int) -> int:
-    """First payment (no API convert); simulate Bitrix automation Sales + Finance tunnel."""
+    """First payment converts Lead→Sales; then simulate Finance tunnel copy."""
     seed_lead(lead_id, email="bitrix@test.com", amount=Decimal("10000"))
     link = client.post(
         "/api/dev/send-payment-link",
@@ -37,19 +37,8 @@ def _finance_deal(client, seed_lead, db_session, lead_id: int) -> int:
         select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == lead_id)
     )
     assert workflow is not None
-    assert workflow.sales_deal_id is None
-
-    # Bitrix automation created Sales deal, then tunnel copied Finance.
-    sales_id = 700000 + lead_id
-    bitrix._mock_deals[sales_id] = {
-        "ID": sales_id,
-        "LEAD_ID": lead_id,
-        "TITLE": f"Sales - lead {lead_id}",
-        "CATEGORY_ID": settings.bitrix_sales_pipeline_id or "16",
-        "OPPORTUNITY": "10000",
-        "CURRENCY_ID": "AED",
-    }
-    workflow.sales_deal_id = sales_id
+    assert workflow.sales_deal_id == bitrix.MOCK_SALES_DEAL_BASE + lead_id
+    sales_id = workflow.sales_deal_id
 
     finance_id = 800000 + lead_id
     bitrix._mock_deals[finance_id] = {

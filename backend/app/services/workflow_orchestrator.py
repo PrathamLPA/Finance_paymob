@@ -2085,8 +2085,8 @@ class WorkflowOrchestrator:
                     workflow.bitrix_lead_id,
                 )
 
-        # After invoice PDF attach, refill empty Complete-lead fields for Bitrix automation.
-        # Do not convert the lead here — Create using source / Deal Won is owned by Bitrix.
+        # After invoice PDF attach, refill empty Complete-lead fields, then convert
+        # Lead → Sales deal in the backend (Bitrix automation convert is unreliable).
         if first_payment and not skip_deals and not dev_simulate:
             try:
                 await self._autofill_complete_lead_after_invoice(workflow)
@@ -2095,9 +2095,16 @@ class WorkflowOrchestrator:
                     "Complete-lead autofill after invoice failed for lead %s",
                     workflow.bitrix_lead_id,
                 )
+            try:
+                await self._convert_lead_to_sales_after_first_payment(workflow)
+            except Exception:
+                logger.exception(
+                    "Lead→Sales convert failed for lead %s (payment/invoice already saved)",
+                    workflow.bitrix_lead_id,
+                )
 
-        # Move to the Bitrix trigger stage only after every lead write is complete.
-        # Calling this from InvoiceService raced with the final Complete-lead update.
+        # Optional Bitrix stage trigger (Deal Won robots / Finance tunnel). Safe if
+        # the lead is already CONVERTED — Bitrix may no-op; payment is already done.
         if first_payment and invoice_synced and not skip_deals and not dev_simulate:
             try:
                 triggered = await self.bitrix.trigger_invoice_sent(
@@ -2168,7 +2175,7 @@ class WorkflowOrchestrator:
         return context
 
     async def _autofill_complete_lead_after_invoice(self, workflow: CustomerWorkflow) -> None:
-        """Fill empty Complete-lead fields once Payment Proof exists; do not convert."""
+        """Fill empty Complete-lead fields once Payment Proof exists; convert is separate."""
         lead = await self.bitrix.get_lead(workflow.bitrix_lead_id)
         status = str(lead.get("STATUS_ID") or "").upper()
         if status == "CONVERTED":
@@ -2186,8 +2193,38 @@ class WorkflowOrchestrator:
             workflow.bitrix_lead_id, context
         )
         logger.info(
-            "Complete-lead autofill after invoice for lead %s — convert left to Bitrix automation",
+            "Complete-lead autofill after invoice for lead %s",
             workflow.bitrix_lead_id,
+        )
+
+    async def _convert_lead_to_sales_after_first_payment(
+        self, workflow: CustomerWorkflow
+    ) -> None:
+        """Convert Lead → Sales pipeline deal after first payment (backend-owned)."""
+        if workflow.sales_deal_id:
+            logger.info(
+                "Skip Lead→Sales convert | lead=%s already has sales_deal_id=%s",
+                workflow.bitrix_lead_id,
+                workflow.sales_deal_id,
+            )
+            return
+
+        context = self._student_context_from_workflow(workflow)
+        if workflow.first_payment_at:
+            context["installment_1_date"] = workflow.first_payment_at.date().isoformat()
+
+        sales_id = await self.bitrix.convert_lead_to_sales_deal(
+            workflow.bitrix_lead_id, context
+        )
+        workflow.sales_deal_id = sales_id
+        # Finance / B2C still come from Bitrix tunnel/copy — do not create here.
+        self.db.commit()
+        self.db.refresh(workflow)
+        logger.info(
+            "OK Lead→Sales convert | lead_id=%s sales_deal_id=%s pipeline=%s",
+            workflow.bitrix_lead_id,
+            sales_id,
+            self.settings.bitrix_sales_pipeline_id or "16",
         )
 
     async def collect_cash(

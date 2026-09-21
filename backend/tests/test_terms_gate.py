@@ -53,12 +53,13 @@ def test_acceptance_returns_checkout_url(client, seed_lead):
     assert "paymob.com" in accept.json()["checkout_url"]
 
 
-def test_terms_email_goes_to_payment_link_recipient_not_registrant(db_session, monkeypatch):
-    """Terms confirmation must match Payment Request inbox, not a different form email."""
+def test_terms_email_sends_pdf_to_form_email(db_session, monkeypatch):
+    """After accept, email the full Terms PDF to the address filled on the form."""
     import asyncio
     from decimal import Decimal
 
     from datetime import datetime, timedelta, timezone
+    from pathlib import Path
 
     from app.integrations.factory import get_email_client
     from app.models.customer_workflow import CustomerWorkflow
@@ -72,8 +73,8 @@ def test_terms_email_goes_to_payment_link_recipient_not_registrant(db_session, m
 
     workflow = CustomerWorkflow(
         bitrix_lead_id=113,
-        customer_email="agent-filled@test.com",
-        customer_name="Agent Filled",
+        customer_email="link-recipient@test.com",
+        customer_name="Link Recipient",
         total_amount=Decimal("5000.00"),
         amount_paid=Decimal("0.00"),
         currency="AED",
@@ -113,11 +114,11 @@ def test_terms_email_goes_to_payment_link_recipient_not_registrant(db_session, m
             session_id=session.id,
             workflow_id=workflow.id,
             course_for="self",
-            registrant_name="Agent Filled",
-            registrant_email="agent-filled@test.com",
+            registrant_name="Form Filled Name",
+            registrant_email="form-filled@test.com",
             registrant_phone="+971500000113",
             participants=None,
-            terms_to_email="link-recipient@test.com",
+            terms_to_email="form-filled@test.com",
         )
     )
 
@@ -129,7 +130,13 @@ def test_terms_email_goes_to_payment_link_recipient_not_registrant(db_session, m
         if m.get("subject") == "Terms and Conditions Acceptance"
     ]
     assert terms_mails, "expected Terms acceptance email"
-    assert terms_mails[-1]["to"] == "link-recipient@test.com"
+    assert terms_mails[-1]["to"] == "form-filled@test.com"
+    attachment = terms_mails[-1].get("attachment")
+    assert attachment, "expected Terms PDF attachment"
+    pdf_path = Path(attachment)
+    assert pdf_path.is_file()
+    # Compressed PDF stream — size should reflect full policy body, not a stub receipt.
+    assert pdf_path.stat().st_size > 2500
 
 
 def test_accept_without_payment_mode_uses_bitrix_online(client, seed_lead):

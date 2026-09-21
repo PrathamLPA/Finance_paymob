@@ -33,7 +33,7 @@ def _complete_first_payment(client, seed_lead, db_session, lead_id: int = 301) -
     ).json()
     assert payment["status"] == "ok"
 
-    # Simulate Bitrix automation convert + Finance tunnel after first payment.
+    # Backend already converted Lead→Sales; simulate Finance tunnel after that.
     from app.config import get_settings
     from app.integrations.factory import get_bitrix_client
 
@@ -43,21 +43,15 @@ def _complete_first_payment(client, seed_lead, db_session, lead_id: int = 301) -
         select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == lead_id)
     )
     assert workflow is not None
-    sales_id = 700000 + lead_id
+    assert workflow.sales_deal_id == bitrix.MOCK_SALES_DEAL_BASE + lead_id
+    sales_id = workflow.sales_deal_id
     finance_id = 800000 + lead_id
-    bitrix._mock_deals[sales_id] = {
-        "ID": sales_id,
-        "LEAD_ID": lead_id,
-        "TITLE": f"Sales - lead {lead_id}",
-        "CATEGORY_ID": settings.bitrix_sales_pipeline_id or "16",
-    }
     bitrix._mock_deals[finance_id] = {
         "ID": finance_id,
         "LEAD_ID": lead_id,
         "TITLE": f"Finance - lead {lead_id}",
         "STAGE_ID": settings.bitrix_finance_generate_link_stage_id,
     }
-    workflow.sales_deal_id = sales_id
     workflow.finance_deal_id = finance_id
     db_session.commit()
     payment["sales_deal_id"] = sales_id

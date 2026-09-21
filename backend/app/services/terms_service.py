@@ -156,6 +156,69 @@ class TermsService:
             "registrant_phone": form_values.get("registrant_phone") or "",
         }
 
+    def _terms_plain_lines(self) -> list[str]:
+        """Plain-text lines of the published T&C for the emailed PDF."""
+        try:
+            raw = self.load_terms_markdown()
+        except OSError:
+            logger.warning("Could not load terms markdown for PDF; using fallback notice")
+            return [
+                "The full Terms and Conditions were accepted online.",
+                f"See: {self.settings.refund_policy_url}",
+            ]
+
+        lines: list[str] = []
+        for line in raw.splitlines():
+            text = line.rstrip()
+            if not text.strip():
+                lines.append("")
+                continue
+            if text.startswith("# "):
+                lines.append(text[2:].strip())
+                continue
+            if text.startswith("- "):
+                lines.append(f"• {text[2:].strip()}")
+                continue
+            lines.append(text)
+        return lines
+
+    @staticmethod
+    def _pdf_draw_wrapped(
+        c: canvas.Canvas,
+        text: str,
+        *,
+        x: float,
+        y: float,
+        max_width: float,
+        font: str = "Helvetica",
+        size: int = 10,
+        leading: float = 14,
+    ) -> float:
+        """Draw wrapped text; return the y position after the last line."""
+        c.setFont(font, size)
+        words = text.split()
+        if not words:
+            return y - leading
+        current = words[0]
+        for word in words[1:]:
+            trial = f"{current} {word}"
+            if c.stringWidth(trial, font, size) <= max_width:
+                current = trial
+            else:
+                if y < 72:
+                    c.showPage()
+                    c.setFont(font, size)
+                    y = 750
+                c.drawString(x, y, current)
+                y -= leading
+                current = word
+        if y < 72:
+            c.showPage()
+            c.setFont(font, size)
+            y = 750
+        c.drawString(x, y, current)
+        return y - leading
+
     def generate_acceptance_pdf(
         self,
         session: PaymentSession,
@@ -166,30 +229,39 @@ class TermsService:
         registrant_phone: str,
         participants: list[dict] | None = None,
     ) -> str:
+        """Build a PDF with acceptance details + the full Terms and Conditions body."""
         pdf_dir = Path(self.settings.storage_path) / "pdfs" / "terms"
         pdf_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = pdf_dir / f"terms_acceptance_{session.id}_{session.token[:8]}.pdf"
 
-        # Short acceptance receipt only. Reprinting the full terms markdown
-        # was a major source of lag on Confirm & finish.
         course_label = "For me" if course_for == "self" else "For someone else"
         c = canvas.Canvas(str(pdf_path), pagesize=letter)
+        c.setFont("Helvetica-Bold", 14)
         c.drawString(72, 750, "Terms and Conditions - Acceptance Record")
-        c.drawString(72, 730, f"Version: {self.settings.terms_version}")
-        c.drawString(72, 710, f"Accepted at: {datetime.now(timezone.utc).isoformat()}")
-        c.drawString(72, 690, f"Session token: {session.token[:16]}...")
-        c.drawString(72, 670, f"Course registration: {course_label}")
-        c.drawString(72, 650, f"Buyer name: {registrant_name[:70]}")
-        c.drawString(72, 630, f"Buyer email: {registrant_email[:70]}")
-        c.drawString(72, 610, f"Buyer phone: {registrant_phone[:70]}")
+        c.setFont("Helvetica", 10)
+        y = 728
+        for line in (
+            f"Version: {self.settings.terms_version}",
+            f"Accepted at: {datetime.now(timezone.utc).isoformat()}",
+            f"Session token: {session.token[:16]}...",
+            f"Course registration: {course_label}",
+            f"Buyer name: {registrant_name[:70]}",
+            f"Buyer email: {registrant_email[:70]}",
+            f"Buyer phone: {registrant_phone[:70]}",
+        ):
+            c.drawString(72, y, line)
+            y -= 16
 
-        y = 580
         if participants:
+            y -= 6
+            c.setFont("Helvetica-Bold", 10)
             c.drawString(72, y, "Course candidates:")
             y -= 16
+            c.setFont("Helvetica", 9)
             for index, person in enumerate(participants, start=1):
                 if y < 72:
                     c.showPage()
+                    c.setFont("Helvetica", 9)
                     y = 750
                 label = (
                     f"{index}. {str(person.get('name') or '')[:40]} | "
@@ -198,14 +270,49 @@ class TermsService:
                 )
                 c.drawString(72, y, label[:95])
                 y -= 14
-            y -= 10
 
+        y -= 8
         if y < 100:
             c.showPage()
             y = 750
-        c.drawString(72, y, "The customer accepted the published Terms and Conditions online.")
+        c.setFont("Helvetica", 10)
+        c.drawString(72, y, "The customer accepted the Terms and Conditions below online.")
         y -= 16
-        c.drawString(72, y, f"Full refund policy: {self.settings.refund_policy_url}")
+        c.drawString(72, y, f"Refund policy URL: {self.settings.refund_policy_url}")
+        y -= 24
+
+        # Full policy body (runs in a background task after Accept).
+        c.setFont("Helvetica-Bold", 12)
+        if y < 100:
+            c.showPage()
+            y = 750
+        c.drawString(72, y, "Terms and Conditions")
+        y -= 20
+
+        for plain in self._terms_plain_lines():
+            if not plain.strip():
+                y -= 8
+                continue
+            is_heading = plain[:1].isdigit() or plain in (
+                "Payment Terms and Conditions",
+            )
+            font = "Helvetica-Bold" if is_heading else "Helvetica"
+            size = 11 if is_heading else 10
+            if y < 72:
+                c.showPage()
+                y = 750
+            y = self._pdf_draw_wrapped(
+                c,
+                plain,
+                x=72,
+                y=y,
+                max_width=468,
+                font=font,
+                size=size,
+                leading=14 if not is_heading else 16,
+            )
+            if is_heading:
+                y -= 2
 
         c.save()
         return str(pdf_path)
@@ -266,14 +373,18 @@ class TermsService:
                 registrant_phone=registrant_phone,
                 participants=participants,
             )
-            # Prefer the payment-link recipient (same inbox as Payment Request),
-            # not the registrant form email which may be a staff/agent address.
-            to_email = (terms_to_email or "").strip() or (workflow.customer_email or "").strip()
+            # Prefer the email filled on the terms form; fall back to payment-link / workflow.
+            to_email = (
+                (terms_to_email or "").strip()
+                or (registrant_email or "").strip()
+                or (workflow.customer_email or "").strip()
+            )
+            mail_name = (registrant_name or "").strip() or workflow.customer_name
             if to_email and is_valid_email(to_email):
                 await asyncio.to_thread(
                     service.email.send_terms_acceptance,
                     to_email=to_email,
-                    customer_name=workflow.customer_name,
+                    customer_name=mail_name,
                     pdf_path=pdf_path,
                     terms_version=service.settings.terms_version,
                 )
@@ -433,13 +544,13 @@ class TermsService:
         is_bank_transfer = session.channel == CHANNEL_BANK_TRANSFER
         is_cash = session.channel == CHANNEL_CASH
 
-        # Keep the Payment Request recipient for the Terms email. Accept form may use
-        # a different registrant_email (e.g. agent filling on behalf of the student).
+        # Snapshot payment-link inbox before overwriting with form details.
         payment_link_email = (workflow.customer_email or "").strip()
+        form_email = registrant_email.strip()
 
         # Always use the form details for Paymob / Bitrix, even on re-submit.
         workflow.customer_name = registrant_name.strip()
-        workflow.customer_email = registrant_email.strip()
+        workflow.customer_email = form_email
         workflow.customer_phone = registrant_phone.strip()
         self.db.commit()
         self.db.refresh(workflow)
@@ -487,7 +598,8 @@ class TermsService:
                     "registrant_email": registrant_email.strip(),
                     "registrant_phone": registrant_phone.strip(),
                     "participants": cleaned_participants,
-                    "terms_to_email": payment_link_email or registrant_email.strip(),
+                    # Send the T&C PDF to the email entered on the form.
+                    "terms_to_email": form_email or payment_link_email,
                 }
                 if background_tasks is not None:
                     background_tasks.add_task(
