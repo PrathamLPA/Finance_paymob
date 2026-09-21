@@ -667,7 +667,7 @@ class WorkflowOrchestrator:
             if price is not None:
                 catalog_prices[product_id] = price
                 logger.info(
-                    "Catalog price | lead_id=%s product_id=%s name=%s min=%s %s",
+                    "Catalog MIN_PRICE | lead_id=%s product_id=%s name=%s min=%s %s",
                     lead_id,
                     product_id,
                     name,
@@ -676,7 +676,7 @@ class WorkflowOrchestrator:
                 )
             else:
                 logger.warning(
-                    "Catalog price missing | lead_id=%s product_id=%s name=%s",
+                    "Catalog MIN_PRICE missing | lead_id=%s product_id=%s name=%s",
                     lead_id,
                     product_id,
                     name,

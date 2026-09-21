@@ -23,6 +23,65 @@ SCOPE_HINTS = {
 }
 
 
+def _csv_tokens(raw: str) -> set[str]:
+    return {part.strip().casefold() for part in (raw or "").split(",") if part.strip()}
+
+
+def resolve_catalog_min_price_type_id(
+    price_types: list[dict[str, Any]],
+    *,
+    xml_ids: str,
+    names: str,
+) -> int | None:
+    """Pick the catalogGroupId for MIN_PRICE (not retail/BASE)."""
+    want_xml = _csv_tokens(xml_ids)
+    want_names = _csv_tokens(names)
+    for item in price_types:
+        if not isinstance(item, dict):
+            continue
+        xml_id = str(item.get("xmlId") or item.get("XML_ID") or "").strip().casefold()
+        name = str(item.get("name") or item.get("NAME") or "").strip().casefold()
+        try:
+            type_id = int(item.get("id") or item.get("ID") or 0)
+        except (TypeError, ValueError):
+            type_id = 0
+        if type_id <= 0:
+            continue
+        if xml_id and xml_id in want_xml:
+            return type_id
+        if name and name in want_names:
+            return type_id
+    return None
+
+
+def price_amount_for_catalog_group(
+    prices: list[dict[str, Any]],
+    catalog_group_id: int,
+) -> Decimal | None:
+    """Return the price for a specific catalog price type id."""
+    amounts: list[Decimal] = []
+    for item in prices:
+        if not isinstance(item, dict):
+            continue
+        try:
+            group_id = int(
+                item.get("catalogGroupId")
+                or item.get("CATALOG_GROUP_ID")
+                or 0
+            )
+        except (TypeError, ValueError):
+            group_id = 0
+        if group_id != catalog_group_id:
+            continue
+        raw = item.get("price") if "price" in item else item.get("PRICE")
+        if raw is None or not str(raw).strip():
+            continue
+        amounts.append(Decimal(str(raw).replace(",", "").strip()))
+    if not amounts:
+        return None
+    return min(amounts)
+
+
 def _is_blank(value: Any) -> bool:
     return value in (None, "", [], {}, 0, "0")
 
@@ -1152,6 +1211,53 @@ class RealBitrixClient:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
         self.base_url = self.settings.bitrix24_webhook_url.rstrip("/") + "/"
+        self._min_price_type_id: int | None = None
+        self._min_price_type_resolved: bool = False
+
+    async def _resolve_min_price_type_id(self) -> int | None:
+        if self._min_price_type_resolved:
+            return self._min_price_type_id
+        self._min_price_type_resolved = True
+        try:
+            listed = await self._call(
+                "catalog.priceType.list",
+                {
+                    "select": ["id", "name", "xmlId", "base"],
+                    "order": {"id": "ASC"},
+                },
+            )
+            types = listed.get("priceTypes") or listed.get("result") or []
+            if isinstance(types, dict):
+                types = types.get("priceTypes") or []
+            if not isinstance(types, list):
+                types = []
+            type_id = resolve_catalog_min_price_type_id(
+                types,
+                xml_ids=self.settings.bitrix_catalog_min_price_type_xml_ids,
+                names=self.settings.bitrix_catalog_min_price_type_names,
+            )
+            self._min_price_type_id = type_id
+            if type_id:
+                logger.info(
+                    "Catalog MIN_PRICE type resolved | catalogGroupId=%s "
+                    "xml_ids=%s names=%s",
+                    type_id,
+                    self.settings.bitrix_catalog_min_price_type_xml_ids,
+                    self.settings.bitrix_catalog_min_price_type_names,
+                )
+            else:
+                logger.warning(
+                    "Catalog MIN_PRICE type not found among %s price type(s) | "
+                    "wanted xml=%s names=%s — minimum-price gate will treat "
+                    "products as missing catalog floor (not retail/BASE)",
+                    len(types),
+                    self.settings.bitrix_catalog_min_price_type_xml_ids,
+                    self.settings.bitrix_catalog_min_price_type_names,
+                )
+        except Exception:
+            logger.exception("catalog.priceType.list failed while resolving MIN_PRICE")
+            self._min_price_type_id = None
+        return self._min_price_type_id
 
     async def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         if not self.settings.bitrix24_webhook_url:
@@ -2045,55 +2151,54 @@ class RealBitrixClient:
         return list(rows) if isinstance(rows, list) else []
 
     async def get_catalog_min_price(self, product_id: int) -> Decimal | None:
-        """Resolve the catalog list/minimum price for a product id."""
+        """Resolve catalog floor from the MIN_PRICE type (not retail/BASE)."""
         if product_id <= 0:
             return None
 
-        # Prefer catalog.price.list (modern catalog module).
+        group_id = await self._resolve_min_price_type_id()
+        if not group_id:
+            return None
+
         try:
             listed = await self._call(
                 "catalog.price.list",
                 {
-                    "filter": {"productId": product_id},
+                    "filter": {
+                        "productId": product_id,
+                        "catalogGroupId": group_id,
+                    },
                     "select": ["id", "productId", "price", "currency", "catalogGroupId"],
                 },
             )
             prices = listed.get("prices") or listed.get("result") or []
             if isinstance(prices, dict):
                 prices = prices.get("prices") or []
-            if isinstance(prices, list) and prices:
-                amounts = []
-                for item in prices:
-                    raw = item.get("price") if isinstance(item, dict) else None
-                    if raw is None:
-                        continue
-                    amounts.append(Decimal(str(raw).replace(",", "").strip()))
-                if amounts:
-                    return min(amounts)
+            if not isinstance(prices, list):
+                prices = []
+            amount = price_amount_for_catalog_group(prices, group_id)
+            if amount is not None:
+                return amount
+            logger.info(
+                "No MIN_PRICE row for product_id=%s catalogGroupId=%s",
+                product_id,
+                group_id,
+            )
+            return None
         except BitrixApiError as exc:
             scope = exc.missing_scope
             logger.info(
-                "catalog.price.list unavailable | product_id=%s reason=%s%s "
-                "fallback=crm.product.get",
+                "catalog.price.list unavailable for MIN_PRICE | product_id=%s "
+                "reason=%s%s",
                 product_id,
                 exc.code,
                 f" add_scope={scope}" if scope else "",
             )
+            return None
         except Exception:
             logger.exception(
-                "catalog.price.list failed for product_id=%s; falling back to crm.product.get",
+                "catalog.price.list failed for MIN_PRICE | product_id=%s",
                 product_id,
             )
-
-        # Fallback for portals still exposing the legacy CRM product API.
-        try:
-            product = await self._call("crm.product.get", {"id": product_id})
-            raw = product.get("PRICE") or product.get("price")
-            if raw is None or not str(raw).strip():
-                return None
-            return Decimal(str(raw).replace(",", "").strip())
-        except Exception:
-            logger.exception("crm.product.get failed for product_id=%s", product_id)
             return None
 
     async def create_estimate(

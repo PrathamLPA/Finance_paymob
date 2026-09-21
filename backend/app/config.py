@@ -197,6 +197,11 @@ class Settings(BaseSettings):
     cashdesk_origin: str = "http://localhost:3001"
     # When true: payment link is only sent after catalog price check + Estimate create
     bitrix_price_gate_enabled: bool = True
+    # Catalog price type used as the floor (not retail/BASE). Match xmlId and/or name.
+    bitrix_catalog_min_price_type_xml_ids: str = "MIN_PRICE"
+    bitrix_catalog_min_price_type_names: str = (
+        "MIN_PRICE,Minimum,Min price,Minimum price,Min. price"
+    )
     # Sender address for Bitrix mail.message.send (must exist in mail.mailbox.senders)
     bitrix_mail_from: str = ""
     # Used when the lead owner has no department manager email
