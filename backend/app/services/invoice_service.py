@@ -288,7 +288,7 @@ class InvoiceService:
             payment_status=workflow.payment_status,
         )
 
-        deal_ids = [workflow.sales_deal_id, workflow.finance_deal_id, workflow.b2c_deal_id]
+        deal_ids = workflow.related_bitrix_deal_ids()
         for deal_id in deal_ids:
             if not deal_id:
                 continue

@@ -392,6 +392,46 @@ def build_complete_lead_autofill_fields(
     return {k: v for k, v in fields.items() if v is not None}
 
 
+def expand_product_units(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Expand product rows by quantity into unit slots (each with quantity 1)."""
+    units: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw_qty = row.get("quantity") if "quantity" in row else row.get("QUANTITY") or 1
+        try:
+            qty = int(Decimal(str(raw_qty).replace(",", "").split("|")[0]))
+        except Exception:
+            qty = 1
+        qty = max(1, qty)
+        unit = dict(row)
+        unit["quantity"] = 1
+        if "QUANTITY" in unit:
+            unit["QUANTITY"] = 1
+        for _ in range(qty):
+            units.append(dict(unit))
+    return units
+
+
+def _product_row_name(row: dict[str, Any]) -> str:
+    return str(
+        row.get("productName")
+        or row.get("PRODUCT_NAME")
+        or row.get("name")
+        or "Course"
+    ).strip() or "Course"
+
+
+def _product_row_unit_price(row: dict[str, Any]) -> str | None:
+    raw = row.get("price") if "price" in row else row.get("PRICE")
+    if raw in (None, ""):
+        return None
+    try:
+        return str(Decimal(str(raw).replace(",", "").split("|")[0]).quantize(Decimal("0.01")))
+    except Exception:
+        return str(raw).split("|")[0].strip() or None
+
+
 def payment_field_codes(settings: Settings) -> list[str]:
     """Lead/deal UF codes that belong on the PAYMENT INFO card."""
     codes = [
@@ -608,10 +648,12 @@ class MockBitrixClient:
         self._mock_estimates: dict[int, dict[str, Any]] = {}
         self._mock_users: dict[int, dict[str, Any]] = {}
         self._mock_department_managers: dict[int, list[int]] = {}
+        self._mock_departments: dict[int, dict[str, Any]] = {}
         self._mock_mail_sent: list[dict[str, Any]] = []
         self._mock_notifications: list[dict[str, Any]] = []
         self._mock_invoice_sent_triggers: list[int] = []
         self._next_estimate_id = self.MOCK_ESTIMATE_BASE
+        self._next_b2c_deal_id = self.MOCK_B2C_DEAL_BASE
         self.seed_user(101, email="agent@test.com", name="Sales Agent")
 
     def seed_lead(self, lead_id: int, *, email: str, name: str, amount: Decimal) -> None:
@@ -664,6 +706,12 @@ class MockBitrixClient:
         self._mock_department_managers.setdefault(department_id, [])
         if manager_user_id not in self._mock_department_managers[department_id]:
             self._mock_department_managers[department_id].append(manager_user_id)
+
+    def seed_department(self, department_id: int, *, name: str) -> None:
+        self._mock_departments[int(department_id)] = {
+            "ID": int(department_id),
+            "NAME": name,
+        }
 
     async def get_lead(self, lead_id: int) -> dict[str, Any]:
         if lead_id in self._mock_leads:
@@ -832,6 +880,74 @@ class MockBitrixClient:
         self._mock_deals[deal_id] = deal
         logger.info("[MockBitrix] Created B2C deal %s for lead %s", deal_id, lead_id)
         return deal_id
+
+    async def create_b2c_ops_deals_from_sales(
+        self,
+        *,
+        sales_deal_id: int,
+        lead_id: int,
+        context: dict[str, Any] | None = None,
+        assignee_user_ids: list[int] | None = None,
+    ) -> list[int]:
+        pipeline = (self.settings.bitrix_b2c_pipeline_id or "").strip()
+        if not pipeline:
+            logger.error(
+                "[MockBitrix] B2C Ops split skipped — BITRIX_B2C_PIPELINE_ID empty | "
+                "sales_deal_id=%s lead_id=%s",
+                sales_deal_id,
+                lead_id,
+            )
+            return []
+
+        context = context or {}
+        sales = await self.get_deal(sales_deal_id)
+        rows = await self.list_product_rows(owner_type="D", owner_id=sales_deal_id)
+        if not rows:
+            rows = await self.list_product_rows(owner_type="L", owner_id=lead_id)
+        units = expand_product_units(rows)
+        if not units:
+            units = [None]  # one card with no products
+
+        created: list[int] = []
+        base_title = str(sales.get("TITLE") or f"Sales {sales_deal_id}")
+        for index, unit in enumerate(units):
+            self._next_b2c_deal_id += 1
+            deal_id = self._next_b2c_deal_id
+            course_name = _product_row_name(unit) if unit else "Course"
+            unit_price = _product_row_unit_price(unit) if unit else None
+            assignee = sales.get("ASSIGNED_BY_ID")
+            if assignee_user_ids and index < len(assignee_user_ids):
+                assignee = assignee_user_ids[index]
+            deal: dict[str, Any] = {
+                "ID": deal_id,
+                "TITLE": f"{base_title} — {course_name}",
+                "STAGE_ID": "NEW",
+                "CATEGORY_ID": pipeline,
+                "OPPORTUNITY": unit_price or sales.get("OPPORTUNITY"),
+                "CURRENCY_ID": sales.get("CURRENCY_ID") or self.settings.default_currency,
+                "ASSIGNED_BY_ID": assignee,
+                "LEAD_ID": lead_id,
+                "CONTACT_ID": sales.get("CONTACT_ID"),
+                "COMPANY_ID": sales.get("COMPANY_ID"),
+            }
+            deal.update(build_deal_payment_fields_from_lead(self.settings, sales, context))
+            orig = (self.settings.bitrix_field_original_deal_id or "").strip()
+            if orig:
+                deal[orig] = sales_deal_id
+            self._mock_deals[deal_id] = deal
+            if unit:
+                self._mock_product_rows[("D", deal_id)] = [dict(unit)]
+            created.append(deal_id)
+
+        logger.info(
+            "[MockBitrix] Created %s B2C Ops deal(s) from sales %s lead %s | ids=%s assignees=%s",
+            len(created),
+            sales_deal_id,
+            lead_id,
+            created,
+            assignee_user_ids,
+        )
+        return created
 
     async def attach_invoice_reference(self, deal_id: int, invoice: InvoiceReference) -> None:
         deal = await self.get_deal(deal_id)
@@ -1154,6 +1270,62 @@ class MockBitrixClient:
                 if manager and manager.get("EMAIL"):
                     return manager
         return None
+
+    async def find_department_id_by_name(self, name: str) -> int | None:
+        needle = (name or "").strip().casefold()
+        if not needle:
+            return None
+        for dept_id, dept in self._mock_departments.items():
+            if str(dept.get("NAME") or "").strip().casefold() == needle:
+                return int(dept_id)
+        return None
+
+    async def list_department_employees(
+        self, department_id: int
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for user in self._mock_users.values():
+            depts = user.get("UF_DEPARTMENT") or []
+            if not isinstance(depts, list):
+                depts = [depts]
+            try:
+                ids = {int(d) for d in depts}
+            except (TypeError, ValueError):
+                continue
+            if int(department_id) not in ids:
+                continue
+            if user.get("ACTIVE") is False:
+                continue
+            out.append(
+                {
+                    "id": int(user["ID"]),
+                    "name": f"{user.get('NAME') or ''} {user.get('LAST_NAME') or ''}".strip(),
+                    "email": user.get("EMAIL"),
+                    "active": True,
+                }
+            )
+        out.sort(key=lambda row: row["id"])
+        return out
+
+    async def list_b2c_ops_employees(self) -> list[dict[str, Any]]:
+        raw_id = (self.settings.bitrix_b2c_ops_department_id or "").strip()
+        dept_id: int | None = None
+        if raw_id:
+            try:
+                dept_id = int(raw_id)
+            except ValueError:
+                dept_id = None
+        if dept_id is None:
+            name = (self.settings.bitrix_b2c_ops_department_name or "").strip()
+            dept_id = await self.find_department_id_by_name(name) if name else None
+        if not dept_id:
+            logger.warning(
+                "[MockBitrix] B2C Ops department not found | name=%r id=%r",
+                self.settings.bitrix_b2c_ops_department_name,
+                self.settings.bitrix_b2c_ops_department_id,
+            )
+            return []
+        return await self.list_department_employees(dept_id)
 
     async def send_mail(
         self,
@@ -1865,6 +2037,148 @@ class RealBitrixClient:
         )
         return deal_id
 
+    async def create_b2c_ops_deals_from_sales(
+        self,
+        *,
+        sales_deal_id: int,
+        lead_id: int,
+        context: dict[str, Any] | None = None,
+        assignee_user_ids: list[int] | None = None,
+    ) -> list[int]:
+        """Create one B2C Ops deal per Sales product unit (qty expands to N cards)."""
+        pipeline = (self.settings.bitrix_b2c_pipeline_id or "").strip()
+        if not pipeline:
+            logger.error(
+                "B2C Ops split skipped — BITRIX_B2C_PIPELINE_ID empty | "
+                "sales_deal_id=%s lead_id=%s",
+                sales_deal_id,
+                lead_id,
+            )
+            return []
+
+        context = context or {}
+        sales = await self.get_deal(sales_deal_id)
+        try:
+            rows = await self.list_product_rows(owner_type="D", owner_id=sales_deal_id)
+        except Exception:
+            logger.exception(
+                "Could not list products on sales deal %s for B2C Ops split", sales_deal_id
+            )
+            rows = []
+        if not rows:
+            try:
+                rows = await self.list_product_rows(owner_type="L", owner_id=lead_id)
+            except Exception:
+                logger.exception(
+                    "Could not list products on lead %s for B2C Ops split", lead_id
+                )
+                rows = []
+
+        units = expand_product_units(rows)
+        if not units:
+            units = [None]
+
+        created: list[int] = []
+        base_title = str(sales.get("TITLE") or f"Sales {sales_deal_id}")
+        for index, unit in enumerate(units):
+            course_name = _product_row_name(unit) if unit else "Course"
+            unit_price = _product_row_unit_price(unit) if unit else None
+            assignee = sales.get("ASSIGNED_BY_ID")
+            if assignee_user_ids and index < len(assignee_user_ids):
+                assignee = assignee_user_ids[index]
+            fields: dict[str, Any] = {
+                "TITLE": f"{base_title} — {course_name}",
+                "CATEGORY_ID": pipeline,
+                "OPPORTUNITY": unit_price or sales.get("OPPORTUNITY"),
+                "CURRENCY_ID": sales.get("CURRENCY_ID") or self.settings.default_currency,
+                "ASSIGNED_BY_ID": assignee,
+                "LEAD_ID": lead_id,
+            }
+            contact_id = sales.get("CONTACT_ID")
+            if contact_id not in (None, "", "0", 0):
+                fields["CONTACT_ID"] = contact_id
+            company_id = sales.get("COMPANY_ID")
+            if company_id not in (None, "", "0", 0):
+                fields["COMPANY_ID"] = company_id
+            fields.update(build_deal_payment_fields_from_lead(self.settings, sales, context))
+            orig = (self.settings.bitrix_field_original_deal_id or "").strip()
+            if orig:
+                fields[orig] = sales_deal_id
+
+            result = await self._call(
+                "crm.deal.add",
+                {"fields": {k: v for k, v in fields.items() if v not in (None, "")}},
+            )
+            deal_id = int(self._scalar(result))
+            if unit:
+                await self._set_deal_single_product_row(deal_id, unit)
+            created.append(deal_id)
+
+        logger.info(
+            "Created %s B2C Ops deal(s) from sales %s lead %s | ids=%s assignees=%s pipeline=%s",
+            len(created),
+            sales_deal_id,
+            lead_id,
+            created,
+            assignee_user_ids,
+            pipeline,
+        )
+        return created
+
+    async def _set_deal_single_product_row(
+        self, deal_id: int, row: dict[str, Any]
+    ) -> None:
+        """Attach exactly one product row (qty 1) to a B2C Ops deal."""
+        product_id = row.get("productId") or row.get("PRODUCT_ID")
+        price = row.get("price") if "price" in row else row.get("PRICE")
+        tax_rate = row.get("taxRate") if "taxRate" in row else row.get("TAX_RATE")
+        tax_included = (
+            row.get("taxIncluded") if "taxIncluded" in row else row.get("TAX_INCLUDED")
+        )
+        product_name = (
+            row.get("productName") or row.get("PRODUCT_NAME") or row.get("name")
+        )
+        modern = {
+            k: v
+            for k, v in {
+                "productId": product_id,
+                "price": price,
+                "quantity": 1,
+                "taxRate": tax_rate,
+                "taxIncluded": tax_included,
+                "productName": product_name,
+            }.items()
+            if v is not None
+        }
+        legacy = {
+            k: v
+            for k, v in {
+                "PRODUCT_ID": product_id,
+                "PRICE": price,
+                "QUANTITY": 1,
+                "TAX_RATE": tax_rate,
+                "TAX_INCLUDED": tax_included,
+                "PRODUCT_NAME": product_name,
+            }.items()
+            if v is not None
+        }
+        if not modern and not legacy:
+            return
+        try:
+            await self._call(
+                "crm.item.productrow.set",
+                {
+                    "ownerType": "D",
+                    "ownerId": deal_id,
+                    "productRows": [modern or legacy],
+                },
+            )
+        except BitrixApiError:
+            await self._call(
+                "crm.deal.productrows.set",
+                {"id": deal_id, "rows": [legacy or modern]},
+            )
+
     async def attach_invoice_reference(self, deal_id: int, invoice: InvoiceReference) -> None:
         fields = {
             self.settings.bitrix_field_invoice_reference: invoice.invoice_number,
@@ -2542,6 +2856,157 @@ class RealBitrixClient:
                     if fetched and fetched.get("EMAIL"):
                         return fetched
         return None
+
+    async def find_department_id_by_name(self, name: str) -> int | None:
+        needle = (name or "").strip()
+        if not needle:
+            return None
+        try:
+            result = await self._call("department.get", {"NAME": needle})
+        except BitrixApiError as exc:
+            logger.warning(
+                "department.get failed | name=%r reason=%s%s",
+                needle,
+                exc.code,
+                f" add_scope={exc.missing_scope}" if exc.missing_scope else "",
+            )
+            return None
+        rows = result.get("result") if isinstance(result, dict) else result
+        if not isinstance(rows, list):
+            rows = self._scalar(result) if not isinstance(result, list) else result
+        if not isinstance(rows, list):
+            return None
+        needle_cf = needle.casefold()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("NAME") or "").strip().casefold() == needle_cf:
+                try:
+                    return int(row.get("ID"))
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    async def list_department_employees(
+        self, department_id: int
+    ) -> list[dict[str, Any]]:
+        """Active employees in a department (im API, fallback to user.get)."""
+        employees: list[dict[str, Any]] = []
+        try:
+            result = await self._call(
+                "im.department.employees.get",
+                {"ID": [int(department_id)], "USER_DATA": "Y"},
+            )
+            raw = result.get("result") if isinstance(result, dict) else result
+            bucket = None
+            if isinstance(raw, dict):
+                bucket = raw.get(str(department_id)) or raw.get(int(department_id))
+            if isinstance(bucket, list):
+                for item in bucket:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("active") is False:
+                        continue
+                    try:
+                        uid = int(item.get("id") or item.get("ID") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if uid <= 0:
+                        continue
+                    employees.append(
+                        {
+                            "id": uid,
+                            "name": str(item.get("name") or "").strip(),
+                            "email": item.get("email"),
+                            "active": True,
+                        }
+                    )
+        except BitrixApiError as exc:
+            logger.warning(
+                "im.department.employees.get unavailable | dept=%s reason=%s — "
+                "falling back to user.get",
+                department_id,
+                exc.code,
+            )
+        except Exception:
+            logger.exception(
+                "im.department.employees.get failed | dept=%s — falling back to user.get",
+                department_id,
+            )
+
+        if employees:
+            employees.sort(key=lambda row: row["id"])
+            return employees
+
+        # Fallback: user.get filtered by UF_DEPARTMENT (needs user scope).
+        try:
+            result = await self._call(
+                "user.get",
+                {
+                    "FILTER": {"UF_DEPARTMENT": int(department_id), "ACTIVE": True},
+                    "sort": "ID",
+                    "order": "ASC",
+                },
+            )
+        except BitrixApiError as exc:
+            logger.warning(
+                "user.get by department failed | dept=%s reason=%s%s",
+                department_id,
+                exc.code,
+                f" add_scope={exc.missing_scope}" if exc.missing_scope else "",
+            )
+            return []
+        rows = result.get("result") if isinstance(result, dict) else result
+        if not isinstance(rows, list):
+            rows = []
+        for user in rows:
+            if not isinstance(user, dict):
+                continue
+            try:
+                uid = int(user.get("ID") or 0)
+            except (TypeError, ValueError):
+                continue
+            if uid <= 0:
+                continue
+            name = f"{user.get('NAME') or ''} {user.get('LAST_NAME') or ''}".strip()
+            employees.append(
+                {
+                    "id": uid,
+                    "name": name,
+                    "email": user.get("EMAIL"),
+                    "active": True,
+                }
+            )
+        employees.sort(key=lambda row: row["id"])
+        return employees
+
+    async def list_b2c_ops_employees(self) -> list[dict[str, Any]]:
+        raw_id = (self.settings.bitrix_b2c_ops_department_id or "").strip()
+        dept_id: int | None = None
+        if raw_id:
+            try:
+                dept_id = int(raw_id)
+            except ValueError:
+                dept_id = None
+        if dept_id is None:
+            name = (self.settings.bitrix_b2c_ops_department_name or "").strip()
+            if name:
+                dept_id = await self.find_department_id_by_name(name)
+        if not dept_id:
+            logger.warning(
+                "B2C Ops department not found | name=%r id=%r "
+                "action=set_BITRIX_B2C_OPS_DEPARTMENT_NAME_or_ID",
+                self.settings.bitrix_b2c_ops_department_name,
+                self.settings.bitrix_b2c_ops_department_id,
+            )
+            return []
+        employees = await self.list_department_employees(dept_id)
+        logger.info(
+            "Loaded %s B2C Ops employee(s) from department %s",
+            len(employees),
+            dept_id,
+        )
+        return employees
 
     async def send_mail(
         self,

@@ -69,7 +69,7 @@ def test_first_payment_invoices_and_converts_to_sales_deal(client, seed_lead, db
     assert payment.status_code == 200
     data = payment.json()
     assert data["status"] == "ok"
-    # Backend converts Lead → Sales; Finance/B2C still come from Bitrix tunnel.
+    # Backend converts Lead → Sales when BITRIX_BACKEND_CONVERT_LEAD_TO_SALES=true.
     expected_sales = bitrix.MOCK_SALES_DEAL_BASE + 202
     assert data["sales_deal_id"] == expected_sales
     assert data["finance_deal_id"] is None
@@ -163,6 +163,65 @@ def test_first_payment_notifies_agent_and_converts_to_sales(client, seed_lead, d
     assert any("Payment successful" in note["message"] for note in bitrix._mock_notifications)
     emails = get_email_client().sent_emails
     assert any("successful" in email["subject"].lower() and email["to"] == "agent@test.com" for email in emails)
+
+
+def test_first_payment_skips_backend_convert_when_flag_false(client, seed_lead, db_session):
+    """BITRIX_BACKEND_CONVERT_LEAD_TO_SALES=false leaves Lead→Sales to Bitrix."""
+    from sqlalchemy import select
+
+    from app.integrations.factory import get_bitrix_client
+    from app.models.payment_session import PaymentSession
+
+    seed_lead(206, email="bitrix-owns@test.com", amount=Decimal("10000"))
+    bitrix = get_bitrix_client()
+    bitrix.settings.bitrix_backend_convert_lead_to_sales = False
+    # Orchestrator reads get_settings() — flip the shared settings object too.
+    from app.config import get_settings
+
+    get_settings().bitrix_backend_convert_lead_to_sales = False
+    bitrix.settings.bitrix_invoice_sent_trigger_url = (
+        "https://bitrix.test/rest/crm.automation.trigger/"
+        "?target=LEAD_{{ID}}&code=test"
+    )
+
+    link = client.post(
+        "/api/dev/send-payment-link",
+        json={
+            "lead_id": 206,
+            "customer_email": "bitrix-owns@test.com",
+            "total_amount": "10000",
+        },
+    )
+    token = link.json()["token"]
+    client.post(
+        f"/api/payment/{token}/accept",
+        json={"accepted": True, **SAMPLE_REGISTRANT},
+    )
+    session = db_session.scalar(select(PaymentSession).where(PaymentSession.token == token))
+    assert session is not None
+    merchant_reference = session.merchant_reference
+    db_session.expire_all()
+
+    payment = client.post(
+        "/api/dev/simulate-paymob-webhook",
+        json={"merchant_reference": merchant_reference, "amount": "3000"},
+    )
+    assert payment.status_code == 200
+    data = payment.json()
+    assert data["sales_deal_id"] is None
+    assert data["b2c_deal_id"] is None
+
+    workflow = db_session.scalar(
+        select(CustomerWorkflow).where(CustomerWorkflow.bitrix_lead_id == 206)
+    )
+    assert workflow is not None
+    assert workflow.sales_deal_id is None
+    assert workflow.b2c_deal_id is None
+    # Invoice-sent trigger still fires so Bitrix Create using source can run.
+    assert 206 in bitrix._mock_invoice_sent_triggers
+    # Lead not converted by our API.
+    lead = bitrix._mock_leads[206]
+    assert str(lead.get("STATUS_ID") or "").upper() != "CONVERTED"
 
 
 @pytest.mark.asyncio

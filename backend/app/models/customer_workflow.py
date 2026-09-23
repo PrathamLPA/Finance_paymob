@@ -35,7 +35,9 @@ class CustomerWorkflow(Base):
     lead_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     sales_deal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     finance_deal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    # First B2C Ops card (compat); full list is b2c_deal_ids (one per course unit).
     b2c_deal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    b2c_deal_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     bitrix_estimate_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     # Fingerprint of the last price-gate comment, so re-running the stage does not
     # post an identical comment (which would retrigger the Bitrix update webhook).
@@ -85,6 +87,31 @@ class CustomerWorkflow(Base):
     @property
     def remaining_balance(self) -> Decimal:
         return max(self.total_amount - self.amount_paid, Decimal("0.00"))
+
+    def related_bitrix_deal_ids(self) -> list[int]:
+        """Sales + Finance + all B2C Ops cards (deduped, order preserved)."""
+        ordered: list[int] = []
+        seen: set[int] = set()
+        candidates: list[int | None] = [self.sales_deal_id, self.finance_deal_id]
+        if self.b2c_deal_ids:
+            for raw in self.b2c_deal_ids:
+                try:
+                    candidates.append(int(raw))
+                except (TypeError, ValueError):
+                    continue
+        candidates.append(self.b2c_deal_id)
+        for raw in candidates:
+            if not raw:
+                continue
+            try:
+                deal_id = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if deal_id in seen:
+                continue
+            seen.add(deal_id)
+            ordered.append(deal_id)
+        return ordered
 
     @property
     def is_first_payment_pending(self) -> bool:

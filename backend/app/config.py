@@ -51,9 +51,23 @@ class Settings(BaseSettings):
     # Bitrix deal CATEGORY_ID for "Sales" (the convert-to-deal picker)
     bitrix_sales_pipeline_id: str = "16"
     bitrix_finance_pipeline_id: str = ""
+    # B2C Ops pipeline Category ID — one Ops card per Sales course unit after convert.
     bitrix_b2c_pipeline_id: str = ""
-    # Backend converts Lead→Sales on first payment. Finance/B2C still come from Bitrix tunnel/copy.
-    # When true: also create Finance/B2C deals from the API (usually leave false).
+    # true = backend converts Lead→Sales after first payment.
+    # false = leave convert to Bitrix "Create using source" / Deal Won robots;
+    #         backend still autofills Complete-lead and fires the invoice-sent trigger.
+    bitrix_backend_convert_lead_to_sales: bool = True
+    # true = after Sales deal exists, create one B2C Ops card per course unit.
+    # Requires bitrix_b2c_pipeline_id. false = skip (Bitrix tunnel/copy can own B2C).
+    bitrix_backend_b2c_ops_split: bool = True
+    # Department used to resolve B2C Ops assignees (exact Bitrix department NAME).
+    bitrix_b2c_ops_department_name: str = "B2C - Student Support"
+    # Optional department ID override (skips name lookup when set).
+    bitrix_b2c_ops_department_id: str = ""
+    # When true, new B2C Ops cards are assigned round-robin to that department.
+    bitrix_b2c_ops_assign_from_department: bool = True
+    # When true: also create Finance from the API (usually leave false).
+    # Finance normally comes from Bitrix tunnel/copy.
     bitrix_create_extra_deals_on_payment: bool = False
     bitrix_field_invoice_reference: str = "UF_CRM_INVOICE_REFERENCE"
     bitrix_field_invoice_url: str = "UF_CRM_INVOICE_URL"

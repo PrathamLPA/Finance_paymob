@@ -1950,6 +1950,7 @@ class WorkflowOrchestrator:
         # Finance is tunneled from Sales in production; for mock, reuse sales id.
         workflow.finance_deal_id = workflow.sales_deal_id
         workflow.b2c_deal_id = None
+        workflow.b2c_deal_ids = None
         workflow.first_payment_at = datetime.now(timezone.utc)
         logger.info(
             "Dev simulate - mock Sales deal for lead %s: sales=%s (finance via tunnel later)",
@@ -2012,6 +2013,7 @@ class WorkflowOrchestrator:
         # If Sales already exists (LEAD_ID filter), store it for fast Finance mapping later.
         workflow.finance_deal_id = None
         workflow.b2c_deal_id = None
+        workflow.b2c_deal_ids = None
         workflow.first_payment_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(workflow)
@@ -2085,8 +2087,8 @@ class WorkflowOrchestrator:
                     workflow.bitrix_lead_id,
                 )
 
-        # After invoice PDF attach, refill empty Complete-lead fields, then convert
-        # Lead → Sales deal in the backend (Bitrix automation convert is unreliable).
+        # After invoice PDF attach, refill empty Complete-lead fields.
+        # Lead→Sales convert: backend when flag is true; otherwise Bitrix automation.
         if first_payment and not skip_deals and not dev_simulate:
             try:
                 await self._autofill_complete_lead_after_invoice(workflow)
@@ -2095,13 +2097,28 @@ class WorkflowOrchestrator:
                     "Complete-lead autofill after invoice failed for lead %s",
                     workflow.bitrix_lead_id,
                 )
-            try:
-                await self._convert_lead_to_sales_after_first_payment(workflow)
-            except Exception:
-                logger.exception(
-                    "Lead→Sales convert failed for lead %s (payment/invoice already saved)",
+            if self.settings.bitrix_backend_convert_lead_to_sales:
+                try:
+                    await self._convert_lead_to_sales_after_first_payment(workflow)
+                except Exception:
+                    logger.exception(
+                        "Lead→Sales convert failed for lead %s (payment/invoice already saved)",
+                        workflow.bitrix_lead_id,
+                    )
+            else:
+                logger.info(
+                    "Backend Lead→Sales convert disabled "
+                    "(BITRIX_BACKEND_CONVERT_LEAD_TO_SALES=false) — "
+                    "leaving convert to Bitrix automation | lead=%s",
                     workflow.bitrix_lead_id,
                 )
+                try:
+                    await self._link_sales_deal_if_present(workflow)
+                except Exception:
+                    logger.exception(
+                        "Sales deal lookup failed after Bitrix-owned convert path | lead=%s",
+                        workflow.bitrix_lead_id,
+                    )
 
         # Optional Bitrix stage trigger (Deal Won robots / Finance tunnel). Safe if
         # the lead is already CONVERTED — Bitrix may no-op; payment is already done.
@@ -2201,31 +2218,118 @@ class WorkflowOrchestrator:
         self, workflow: CustomerWorkflow
     ) -> None:
         """Convert Lead → Sales pipeline deal after first payment (backend-owned)."""
+        context = self._student_context_from_workflow(workflow)
+        if workflow.first_payment_at:
+            context["installment_1_date"] = workflow.first_payment_at.date().isoformat()
+
         if workflow.sales_deal_id:
             logger.info(
                 "Skip Lead→Sales convert | lead=%s already has sales_deal_id=%s",
                 workflow.bitrix_lead_id,
                 workflow.sales_deal_id,
             )
+            sales_id = workflow.sales_deal_id
+        else:
+            sales_id = await self.bitrix.convert_lead_to_sales_deal(
+                workflow.bitrix_lead_id, context
+            )
+            workflow.sales_deal_id = sales_id
+            self.db.commit()
+            self.db.refresh(workflow)
+            logger.info(
+                "OK Lead→Sales convert | lead_id=%s sales_deal_id=%s pipeline=%s",
+                workflow.bitrix_lead_id,
+                sales_id,
+                self.settings.bitrix_sales_pipeline_id or "16",
+            )
+
+        # One B2C Ops card per Sales course unit (qty expands). Fail-soft.
+        if not self.settings.bitrix_backend_b2c_ops_split:
+            logger.info(
+                "Backend B2C Ops split disabled "
+                "(BITRIX_BACKEND_B2C_OPS_SPLIT=false) | lead=%s sales=%s",
+                workflow.bitrix_lead_id,
+                sales_id,
+            )
             return
+        if workflow.b2c_deal_ids or workflow.b2c_deal_id:
+            logger.info(
+                "Skip B2C Ops split | lead=%s already has b2c_deal_id=%s ids=%s",
+                workflow.bitrix_lead_id,
+                workflow.b2c_deal_id,
+                workflow.b2c_deal_ids,
+            )
+            return
+        try:
+            assignee_user_ids: list[int] | None = None
+            if self.settings.bitrix_b2c_ops_assign_from_department:
+                from app.models.assignment_cursor import (
+                    B2C_OPS_CURSOR_KEY,
+                    claim_round_robin_ids,
+                )
 
-        context = self._student_context_from_workflow(workflow)
-        if workflow.first_payment_at:
-            context["installment_1_date"] = workflow.first_payment_at.date().isoformat()
+                employees = await self.bitrix.list_b2c_ops_employees()
+                pool = [int(e["id"]) for e in employees if e.get("id")]
+                if pool:
+                    # Match unit count: product rows expanded (or 1 empty card).
+                    try:
+                        rows = await self.bitrix.list_product_rows(
+                            owner_type="D", owner_id=sales_id
+                        )
+                    except Exception:
+                        rows = []
+                    if not rows:
+                        try:
+                            rows = await self.bitrix.list_product_rows(
+                                owner_type="L", owner_id=workflow.bitrix_lead_id
+                            )
+                        except Exception:
+                            rows = []
+                    from app.integrations.bitrix import expand_product_units
 
-        sales_id = await self.bitrix.convert_lead_to_sales_deal(
-            workflow.bitrix_lead_id, context
-        )
-        workflow.sales_deal_id = sales_id
-        # Finance / B2C still come from Bitrix tunnel/copy — do not create here.
-        self.db.commit()
-        self.db.refresh(workflow)
-        logger.info(
-            "OK Lead→Sales convert | lead_id=%s sales_deal_id=%s pipeline=%s",
-            workflow.bitrix_lead_id,
-            sales_id,
-            self.settings.bitrix_sales_pipeline_id or "16",
-        )
+                    unit_count = max(1, len(expand_product_units(rows)))
+                    assignee_user_ids = claim_round_robin_ids(
+                        self.db,
+                        key=B2C_OPS_CURSOR_KEY,
+                        pool=pool,
+                        count=unit_count,
+                    )
+                    logger.info(
+                        "B2C Ops assignees from department | lead=%s pool=%s assigned=%s",
+                        workflow.bitrix_lead_id,
+                        pool,
+                        assignee_user_ids,
+                    )
+                else:
+                    logger.warning(
+                        "B2C Ops department has no employees — "
+                        "cards keep Sales assignee | lead=%s",
+                        workflow.bitrix_lead_id,
+                    )
+
+            b2c_ids = await self.bitrix.create_b2c_ops_deals_from_sales(
+                sales_deal_id=sales_id,
+                lead_id=workflow.bitrix_lead_id,
+                context=context,
+                assignee_user_ids=assignee_user_ids,
+            )
+            if b2c_ids:
+                workflow.b2c_deal_ids = b2c_ids
+                workflow.b2c_deal_id = b2c_ids[0]
+                self.db.commit()
+                self.db.refresh(workflow)
+                logger.info(
+                    "OK B2C Ops split | lead_id=%s sales_deal_id=%s b2c_deal_ids=%s",
+                    workflow.bitrix_lead_id,
+                    sales_id,
+                    b2c_ids,
+                )
+        except Exception:
+            logger.exception(
+                "B2C Ops split failed for lead %s sales %s (payment/Sales already saved)",
+                workflow.bitrix_lead_id,
+                sales_id,
+            )
 
     async def collect_cash(
         self,
@@ -2560,7 +2664,7 @@ class WorkflowOrchestrator:
         targets: list[tuple[str, int]] = [("LEAD", workflow.bitrix_lead_id)]
         if workflow.bitrix_estimate_id:
             targets.append(("quote", int(workflow.bitrix_estimate_id)))
-        for deal_id in (workflow.sales_deal_id, workflow.finance_deal_id, workflow.b2c_deal_id):
+        for deal_id in workflow.related_bitrix_deal_ids():
             if deal_id:
                 targets.append(("DEAL", deal_id))
 

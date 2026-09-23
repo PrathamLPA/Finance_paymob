@@ -85,6 +85,7 @@ def seed_mock_data(db: Session) -> dict:
             workflow.sales_deal_id = None
             workflow.finance_deal_id = None
             workflow.b2c_deal_id = None
+            workflow.b2c_deal_ids = None
             workflow.zoho_invoice_id = f"MOCK-INV-{workflow.id}"
 
             txn_id = f"PM-{customer['lead_id']}-001"

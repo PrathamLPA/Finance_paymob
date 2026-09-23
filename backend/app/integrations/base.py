@@ -102,6 +102,15 @@ class BitrixIntegration(Protocol):
 
     async def create_b2c_deal(self, lead_id: int, context: dict[str, Any]) -> int: ...
 
+    async def create_b2c_ops_deals_from_sales(
+        self,
+        *,
+        sales_deal_id: int,
+        lead_id: int,
+        context: dict[str, Any] | None = None,
+        assignee_user_ids: list[int] | None = None,
+    ) -> list[int]: ...
+
     async def attach_invoice_reference(self, deal_id: int, invoice: InvoiceReference) -> None: ...
 
     async def attach_lead_payment_proof_if_empty(
@@ -207,6 +216,14 @@ class BitrixIntegration(Protocol):
     async def get_user(self, user_id: int) -> dict[str, Any] | None: ...
 
     async def resolve_manager_for_user(self, user_id: int) -> dict[str, Any] | None: ...
+
+    async def find_department_id_by_name(self, name: str) -> int | None: ...
+
+    async def list_department_employees(
+        self, department_id: int
+    ) -> list[dict[str, Any]]: ...
+
+    async def list_b2c_ops_employees(self) -> list[dict[str, Any]]: ...
 
     async def send_mail(
         self,
