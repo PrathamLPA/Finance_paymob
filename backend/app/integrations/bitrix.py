@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from decimal import Decimal
 from typing import Any
 
@@ -392,25 +393,160 @@ def build_complete_lead_autofill_fields(
     return {k: v for k, v in fields.items() if v is not None}
 
 
+# Addon suffixes stripped to find the parent course name (longest first).
+# Matching is case-insensitive. Add more suffixes later if inventory needs them.
+_COURSE_ADDON_SUFFIXES: tuple[str, ...] = (
+    "study materials",
+    "study material",
+    "exam",
+    "lab",
+    "laboratory",
+)
+
+
+def _normalize_product_label(name: str) -> str:
+    text = re.sub(r"[\s_\-]+", " ", str(name or "").strip())
+    return text.casefold()
+
+
+def course_base_key(name: str) -> str:
+    """Parent course key: 'CHRP Lab' / 'CHRP Exam' → 'chrp'."""
+    label = _normalize_product_label(name)
+    if not label:
+        return "course"
+    for suffix in _COURSE_ADDON_SUFFIXES:
+        for sep in (" ", "-", " – ", " — "):
+            token = f"{sep}{suffix}"
+            if label.endswith(token):
+                base = label[: -len(token)].strip(" -–—")
+                return base or label
+        if label == suffix:
+            return label
+    return label
+
+
+def is_course_addon_name(name: str) -> bool:
+    """True when the name looks like Lab / Exam / study materials for a parent course."""
+    label = _normalize_product_label(name)
+    base = course_base_key(name)
+    return bool(label) and base != label
+
+
+def _product_row_qty(row: dict[str, Any]) -> int:
+    raw_qty = row.get("quantity") if "quantity" in row else row.get("QUANTITY") or 1
+    try:
+        qty = int(Decimal(str(raw_qty).replace(",", "").split("|")[0]))
+    except Exception:
+        qty = 1
+    return max(1, qty)
+
+
+def _with_qty_one(row: dict[str, Any]) -> dict[str, Any]:
+    unit = dict(row)
+    unit["quantity"] = 1
+    if "QUANTITY" in unit:
+        unit["QUANTITY"] = 1
+    return unit
+
+
 def expand_product_units(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Expand product rows by quantity into unit slots (each with quantity 1)."""
     units: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
-        raw_qty = row.get("quantity") if "quantity" in row else row.get("QUANTITY") or 1
-        try:
-            qty = int(Decimal(str(raw_qty).replace(",", "").split("|")[0]))
-        except Exception:
-            qty = 1
-        qty = max(1, qty)
-        unit = dict(row)
-        unit["quantity"] = 1
-        if "QUANTITY" in unit:
-            unit["QUANTITY"] = 1
-        for _ in range(qty):
+        unit = _with_qty_one(row)
+        for _ in range(_product_row_qty(row)):
             units.append(dict(unit))
     return units
+
+
+def group_course_product_bundles(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group main course + Lab/Exam/materials into one bundle per parent course.
+
+    Example: CHRP, CHRP Lab, CHRP Exam, CHRP study materials → one bundle.
+    Bundle quantity follows the primary (non-addon) product qty, else max qty in group.
+    """
+    bundles: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = _product_row_name(row)
+        key = course_base_key(name)
+        if key not in bundles:
+            bundles[key] = {
+                "key": key,
+                "title": name,
+                "products": [],
+                "primary_qty": 0,
+                "max_qty": 1,
+            }
+            order.append(key)
+        bucket = bundles[key]
+        bucket["products"].append(dict(row))
+        qty = _product_row_qty(row)
+        bucket["max_qty"] = max(int(bucket["max_qty"]), qty)
+        if not is_course_addon_name(name):
+            bucket["primary_qty"] = max(int(bucket["primary_qty"]), qty)
+            # Prefer a non-addon name for the Ops card title.
+            bucket["title"] = name
+    out: list[dict[str, Any]] = []
+    for key in order:
+        bucket = bundles[key]
+        qty = int(bucket["primary_qty"] or bucket["max_qty"] or 1)
+        out.append(
+            {
+                "key": key,
+                "title": str(bucket["title"] or key),
+                "products": list(bucket["products"]),
+                "quantity": max(1, qty),
+            }
+        )
+    return out
+
+
+def expand_course_bundle_units(
+    rows: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """One Ops card slot per course bundle unit; each slot has all related products at qty 1."""
+    units: list[list[dict[str, Any]]] = []
+    for bundle in group_course_product_bundles(rows):
+        products = [_with_qty_one(p) for p in bundle["products"]]
+        if not products:
+            continue
+        for _ in range(int(bundle["quantity"])):
+            units.append([dict(p) for p in products])
+    return units
+
+
+def _bundle_display_name(products: list[dict[str, Any]] | None) -> str:
+    if not products:
+        return "Course"
+    for row in products:
+        name = _product_row_name(row)
+        if not is_course_addon_name(name):
+            return name
+    return _product_row_name(products[0])
+
+
+def _bundle_opportunity(products: list[dict[str, Any]] | None) -> str | None:
+    if not products:
+        return None
+    total = Decimal("0.00")
+    any_price = False
+    for row in products:
+        price = _product_row_unit_price(row)
+        if price is None:
+            continue
+        any_price = True
+        try:
+            total += Decimal(str(price))
+        except Exception:
+            continue
+    if not any_price:
+        return None
+    return str(total.quantize(Decimal("0.01")))
 
 
 def _product_row_name(row: dict[str, Any]) -> str:
@@ -904,17 +1040,17 @@ class MockBitrixClient:
         rows = await self.list_product_rows(owner_type="D", owner_id=sales_deal_id)
         if not rows:
             rows = await self.list_product_rows(owner_type="L", owner_id=lead_id)
-        units = expand_product_units(rows)
+        units = expand_course_bundle_units(rows)
         if not units:
-            units = [None]  # one card with no products
+            units = [[]]  # one card with no products
 
         created: list[int] = []
         base_title = str(sales.get("TITLE") or f"Sales {sales_deal_id}")
-        for index, unit in enumerate(units):
+        for index, products in enumerate(units):
             self._next_b2c_deal_id += 1
             deal_id = self._next_b2c_deal_id
-            course_name = _product_row_name(unit) if unit else "Course"
-            unit_price = _product_row_unit_price(unit) if unit else None
+            course_name = _bundle_display_name(products)
+            unit_price = _bundle_opportunity(products)
             assignee = sales.get("ASSIGNED_BY_ID")
             if assignee_user_ids and index < len(assignee_user_ids):
                 assignee = assignee_user_ids[index]
@@ -931,12 +1067,14 @@ class MockBitrixClient:
                 "COMPANY_ID": sales.get("COMPANY_ID"),
             }
             deal.update(build_deal_payment_fields_from_lead(self.settings, sales, context))
+            if unit_price:
+                deal["OPPORTUNITY"] = unit_price
             orig = (self.settings.bitrix_field_original_deal_id or "").strip()
             if orig:
                 deal[orig] = sales_deal_id
             self._mock_deals[deal_id] = deal
-            if unit:
-                self._mock_product_rows[("D", deal_id)] = [dict(unit)]
+            if products:
+                self._mock_product_rows[("D", deal_id)] = [dict(p) for p in products]
             created.append(deal_id)
 
         logger.info(
@@ -2074,15 +2212,15 @@ class RealBitrixClient:
                 )
                 rows = []
 
-        units = expand_product_units(rows)
+        units = expand_course_bundle_units(rows)
         if not units:
-            units = [None]
+            units = [[]]
 
         created: list[int] = []
         base_title = str(sales.get("TITLE") or f"Sales {sales_deal_id}")
-        for index, unit in enumerate(units):
-            course_name = _product_row_name(unit) if unit else "Course"
-            unit_price = _product_row_unit_price(unit) if unit else None
+        for index, products in enumerate(units):
+            course_name = _bundle_display_name(products)
+            unit_price = _bundle_opportunity(products)
             assignee = sales.get("ASSIGNED_BY_ID")
             if assignee_user_ids and index < len(assignee_user_ids):
                 assignee = assignee_user_ids[index]
@@ -2101,6 +2239,8 @@ class RealBitrixClient:
             if company_id not in (None, "", "0", 0):
                 fields["COMPANY_ID"] = company_id
             fields.update(build_deal_payment_fields_from_lead(self.settings, sales, context))
+            if unit_price:
+                fields["OPPORTUNITY"] = unit_price
             orig = (self.settings.bitrix_field_original_deal_id or "").strip()
             if orig:
                 fields[orig] = sales_deal_id
@@ -2110,8 +2250,8 @@ class RealBitrixClient:
                 {"fields": {k: v for k, v in fields.items() if v not in (None, "")}},
             )
             deal_id = int(self._scalar(result))
-            if unit:
-                await self._set_deal_single_product_row(deal_id, unit)
+            if products:
+                await self._set_deal_product_rows(deal_id, products)
             created.append(deal_id)
 
         logger.info(
@@ -2125,44 +2265,53 @@ class RealBitrixClient:
         )
         return created
 
-    async def _set_deal_single_product_row(
-        self, deal_id: int, row: dict[str, Any]
+    async def _set_deal_product_rows(
+        self, deal_id: int, rows: list[dict[str, Any]]
     ) -> None:
-        """Attach exactly one product row (qty 1) to a B2C Ops deal."""
-        product_id = row.get("productId") or row.get("PRODUCT_ID")
-        price = row.get("price") if "price" in row else row.get("PRICE")
-        tax_rate = row.get("taxRate") if "taxRate" in row else row.get("TAX_RATE")
-        tax_included = (
-            row.get("taxIncluded") if "taxIncluded" in row else row.get("TAX_INCLUDED")
-        )
-        product_name = (
-            row.get("productName") or row.get("PRODUCT_NAME") or row.get("name")
-        )
-        modern = {
-            k: v
-            for k, v in {
-                "productId": product_id,
-                "price": price,
-                "quantity": 1,
-                "taxRate": tax_rate,
-                "taxIncluded": tax_included,
-                "productName": product_name,
-            }.items()
-            if v is not None
-        }
-        legacy = {
-            k: v
-            for k, v in {
-                "PRODUCT_ID": product_id,
-                "PRICE": price,
-                "QUANTITY": 1,
-                "TAX_RATE": tax_rate,
-                "TAX_INCLUDED": tax_included,
-                "PRODUCT_NAME": product_name,
-            }.items()
-            if v is not None
-        }
-        if not modern and not legacy:
+        """Attach product rows (qty 1 each) to a B2C Ops deal."""
+        modern_rows: list[dict[str, Any]] = []
+        legacy_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            product_id = row.get("productId") or row.get("PRODUCT_ID")
+            price = row.get("price") if "price" in row else row.get("PRICE")
+            tax_rate = row.get("taxRate") if "taxRate" in row else row.get("TAX_RATE")
+            tax_included = (
+                row.get("taxIncluded") if "taxIncluded" in row else row.get("TAX_INCLUDED")
+            )
+            product_name = (
+                row.get("productName") or row.get("PRODUCT_NAME") or row.get("name")
+            )
+            modern = {
+                k: v
+                for k, v in {
+                    "productId": product_id,
+                    "price": price,
+                    "quantity": 1,
+                    "taxRate": tax_rate,
+                    "taxIncluded": tax_included,
+                    "productName": product_name,
+                }.items()
+                if v is not None
+            }
+            legacy = {
+                k: v
+                for k, v in {
+                    "PRODUCT_ID": product_id,
+                    "PRICE": price,
+                    "QUANTITY": 1,
+                    "TAX_RATE": tax_rate,
+                    "TAX_INCLUDED": tax_included,
+                    "PRODUCT_NAME": product_name,
+                }.items()
+                if v is not None
+            }
+            if modern:
+                modern_rows.append(modern)
+            if legacy:
+                legacy_rows.append(legacy)
+        if not modern_rows and not legacy_rows:
             return
         try:
             await self._call(
@@ -2170,14 +2319,19 @@ class RealBitrixClient:
                 {
                     "ownerType": "D",
                     "ownerId": deal_id,
-                    "productRows": [modern or legacy],
+                    "productRows": modern_rows or legacy_rows,
                 },
             )
         except BitrixApiError:
             await self._call(
                 "crm.deal.productrows.set",
-                {"id": deal_id, "rows": [legacy or modern]},
+                {"id": deal_id, "rows": legacy_rows or modern_rows},
             )
+
+    async def _set_deal_single_product_row(
+        self, deal_id: int, row: dict[str, Any]
+    ) -> None:
+        await self._set_deal_product_rows(deal_id, [row])
 
     async def attach_invoice_reference(self, deal_id: int, invoice: InvoiceReference) -> None:
         fields = {

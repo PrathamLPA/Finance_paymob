@@ -2285,9 +2285,9 @@ class WorkflowOrchestrator:
                             )
                         except Exception:
                             rows = []
-                    from app.integrations.bitrix import expand_product_units
+                    from app.integrations.bitrix import expand_course_bundle_units
 
-                    unit_count = max(1, len(expand_product_units(rows)))
+                    unit_count = max(1, len(expand_course_bundle_units(rows)))
                     assignee_user_ids = claim_round_robin_ids(
                         self.db,
                         key=B2C_OPS_CURSOR_KEY,
