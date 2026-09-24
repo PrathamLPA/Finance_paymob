@@ -1248,7 +1248,7 @@ class MockBitrixClient:
         deal_id = self.MOCK_SALES_DEAL_BASE + lead_id
         lead = await self.get_lead(lead_id)
         pipeline_id = str(self.settings.bitrix_sales_pipeline_id or "16")
-        self._mock_deals[deal_id] = {
+        deal: dict[str, Any] = {
             "ID": deal_id,
             "TITLE": f"Sales Deal - {lead.get('TITLE', lead_id)}",
             "STAGE_ID": "NEW",
@@ -1258,10 +1258,13 @@ class MockBitrixClient:
             "ASSIGNED_BY_ID": lead.get("ASSIGNED_BY_ID"),
             "LEAD_ID": lead_id,
         }
+        # Mirror live path: payment UFs land on create (not only a later update).
+        deal.update(build_deal_payment_fields_from_lead(self.settings, lead, context))
+        self._mock_deals[deal_id] = deal
         lead["STATUS_ID"] = "CONVERTED"
         self._mock_leads[lead_id] = lead
         await self.copy_lead_products_to_deal(lead_id, deal_id)
-        await self.copy_lead_payment_fields_to_deal(lead_id, deal_id)
+        await self.copy_lead_payment_fields_to_deal(lead_id, deal_id, context)
         logger.info(
             "[MockBitrix] Converted lead %s to Sales pipeline %s deal %s",
             lead_id,
@@ -2233,7 +2236,10 @@ class RealBitrixClient:
                         deal_id,
                     )
                 await self.copy_lead_products_to_deal(lead_id, deal_id)
-                await self.copy_lead_payment_fields_to_deal(lead_id, deal_id)
+                await self.copy_lead_payment_fields_to_deal(lead_id, deal_id, context)
+                await self._propagate_sales_fields_to_cloned_deals(
+                    deal_id, lead_id, context
+                )
                 logger.info(
                     "Converted lead %s via crm.lead.convert to Sales deal %s pipeline=%s",
                     lead_id,
@@ -2269,16 +2275,23 @@ class RealBitrixClient:
         existing = await self._find_sales_deal_for_lead(lead_id, pipeline_id)
         if existing:
             await self.copy_lead_products_to_deal(lead_id, existing)
-            await self.copy_lead_payment_fields_to_deal(lead_id, existing)
+            await self.copy_lead_payment_fields_to_deal(lead_id, existing, context)
+            await self._propagate_sales_fields_to_cloned_deals(
+                existing, lead_id, context
+            )
             logger.info(
                 "Lead %s already has Sales deal %s after CONVERTED — reusing",
                 lead_id,
                 existing,
             )
             return existing
-        deal_id = await self._create_sales_deal_from_lead(lead_id, pipeline_id)
+        deal_id = await self._create_sales_deal_from_lead(
+            lead_id, pipeline_id, context
+        )
         await self.copy_lead_products_to_deal(lead_id, deal_id)
-        await self.copy_lead_payment_fields_to_deal(lead_id, deal_id)
+        # Safety net if create-time files/scalars were dropped; skips non-empty file UFs.
+        await self.copy_lead_payment_fields_to_deal(lead_id, deal_id, context)
+        await self._propagate_sales_fields_to_cloned_deals(deal_id, lead_id, context)
         return deal_id
 
     async def prepare_lead_for_complete_conversion(
@@ -2468,8 +2481,20 @@ class RealBitrixClient:
         blob = f"{exc.code} {exc.description}".lower()
         return "not_found" in blob or "method not found" in blob
 
-    async def _create_sales_deal_from_lead(self, lead_id: int, pipeline_id: int) -> int:
+    async def _create_sales_deal_from_lead(
+        self,
+        lead_id: int,
+        pipeline_id: int,
+        context: dict[str, Any] | None = None,
+    ) -> int:
+        """Create Sales deal with payment/Complete UFs + invoice files in the same crm.deal.add.
+
+        Bitrix pipeline-clone robots fire on create and only snapshot fields present at
+        add-time; a follow-up crm.deal.update is too late for Finance/other clones.
+        """
         lead = await self.get_lead(lead_id)
+        enriched = dict(context or {})
+        enriched.setdefault("lead_id", lead_id)
         fields: dict[str, Any] = {
             "TITLE": lead.get("TITLE") or f"Sales - Lead {lead_id}",
             "CATEGORY_ID": pipeline_id,
@@ -2485,19 +2510,250 @@ class RealBitrixClient:
         if company_id not in (None, "", "0", 0):
             fields["COMPANY_ID"] = company_id
 
+        payment_fields = build_deal_payment_fields_from_lead(
+            self.settings, lead, enriched
+        )
+        fields.update(payment_fields)
+        file_fields = await self._file_payloads_for_deal_from_lead(lead)
+        fields.update(file_fields)
+
         result = await self._call(
             "crm.deal.add",
-            {"fields": {key: value for key, value in fields.items() if value not in (None, "")}},
+            {
+                "fields": {
+                    key: value for key, value in fields.items() if value not in (None, "")
+                }
+            },
         )
         deal_id = int(self._scalar(result))
         await self._ensure_lead_converted(lead_id, {})
         logger.info(
-            "Created Sales deal %s from lead %s pipeline=%s (crm.deal.add fallback)",
+            "Created Sales deal %s from lead %s pipeline=%s "
+            "(crm.deal.add with %s payment fields, %s file fields)",
             deal_id,
             lead_id,
             pipeline_id,
+            len([k for k in payment_fields if str(k).startswith("UF_")]),
+            list(file_fields),
         )
         return deal_id
+
+    async def _file_payloads_for_deal_from_lead(
+        self, lead: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Build deal file UF payloads (Payment Proof + Invoice) from lead file UFs."""
+        import base64
+
+        pairs = [
+            (
+                self.settings.bitrix_field_complete_payment_proof,
+                self.settings.bitrix_field_deal_payment_proof,
+                False,
+            ),
+            (
+                self.settings.bitrix_field_lead_invoice_file,
+                self.settings.bitrix_field_deal_invoice_file,
+                True,
+            ),
+        ]
+        out: dict[str, Any] = {}
+        for lead_code, deal_code, multiple in pairs:
+            lead_code = (lead_code or "").strip()
+            deal_code = (deal_code or "").strip()
+            if not lead_code or not deal_code:
+                continue
+            raw = lead.get(lead_code)
+            if _is_blank(raw):
+                continue
+            payloads: list[dict[str, list[str]]] = []
+            for entry in self._iter_crm_file_entries(raw):
+                downloaded = await self._download_bitrix_file_bytes(entry)
+                if not downloaded:
+                    continue
+                filename, content = downloaded
+                payloads.append(
+                    {
+                        "fileData": [
+                            filename,
+                            base64.b64encode(content).decode("ascii"),
+                        ]
+                    }
+                )
+            if not payloads:
+                logger.warning(
+                    "No downloadable lead files for deal create field %s (from %s)",
+                    deal_code,
+                    lead_code,
+                )
+                continue
+            out[deal_code] = payloads if multiple else payloads[0]
+        return out
+
+    async def _propagate_sales_fields_to_cloned_deals(
+        self,
+        sales_deal_id: int,
+        lead_id: int,
+        context: dict[str, Any] | None = None,
+    ) -> int:
+        """Push payment/invoice/products from Sales onto Bitrix-cloned deals.
+
+        Pipeline robots often clone Sales immediately with only TITLE/OPPORTUNITY.
+        We copy from the fully populated Sales deal (not the lead) so invoice files
+        and payment UFs land on Finance/other clones even if the lead is gone.
+
+        Retries once after a short delay because clone robots may finish after add.
+        """
+        import asyncio
+        import base64
+
+        orig = (self.settings.bitrix_field_original_deal_id or "").strip()
+        if not orig:
+            return 0
+
+        try:
+            sales = await self.get_deal(sales_deal_id)
+        except Exception:
+            logger.exception(
+                "Cannot propagate clones — Sales deal %s unreadable", sales_deal_id
+            )
+            return 0
+
+        # Scalars already on Sales (payment + Complete/Ops UFs + comments).
+        skip = {
+            "ID",
+            "TITLE",
+            "CATEGORY_ID",
+            "STAGE_ID",
+            "ASSIGNED_BY_ID",
+            "LEAD_ID",
+            "CONTACT_ID",
+            "COMPANY_ID",
+            "DATE_CREATE",
+            "DATE_MODIFY",
+            "CREATED_BY_ID",
+            "MODIFY_BY_ID",
+        }
+        file_codes = {
+            (self.settings.bitrix_field_deal_payment_proof or "").strip(),
+            (self.settings.bitrix_field_deal_invoice_file or "").strip(),
+        }
+        file_codes.discard("")
+        scalar_fields: dict[str, Any] = {}
+        for key, value in sales.items():
+            if key in skip or key in file_codes or _is_blank(value):
+                continue
+            if str(key).startswith("UF_") or key in ("COMMENTS", "SOURCE_ID", "OPPORTUNITY", "CURRENCY_ID"):
+                scalar_fields[key] = value
+        scalar_fields[orig] = sales_deal_id
+
+        # Rebuild file payloads from Sales so each clone gets its own file IDs.
+        file_fields: dict[str, Any] = {}
+        for deal_code, multiple in (
+            (self.settings.bitrix_field_deal_payment_proof, False),
+            (self.settings.bitrix_field_deal_invoice_file, True),
+        ):
+            deal_code = (deal_code or "").strip()
+            if not deal_code:
+                continue
+            raw = sales.get(deal_code)
+            if _is_blank(raw):
+                continue
+            payloads: list[dict[str, list[str]]] = []
+            for entry in self._iter_crm_file_entries(raw):
+                downloaded = await self._download_bitrix_file_bytes(entry)
+                if not downloaded:
+                    continue
+                filename, content = downloaded
+                payloads.append(
+                    {
+                        "fileData": [
+                            filename,
+                            base64.b64encode(content).decode("ascii"),
+                        ]
+                    }
+                )
+            if payloads:
+                file_fields[deal_code] = payloads if multiple else payloads[0]
+
+        try:
+            product_rows = self._scalar(
+                await self._call("crm.deal.productrows.get", {"id": sales_deal_id})
+            )
+        except Exception:
+            logger.exception("Could not read product rows on Sales %s", sales_deal_id)
+            product_rows = []
+        if not isinstance(product_rows, list):
+            product_rows = []
+
+        updated = 0
+        seen: set[int] = set()
+        for attempt in range(2):
+            if attempt:
+                await asyncio.sleep(3)
+            try:
+                result = await self._call(
+                    "crm.deal.list",
+                    {
+                        "filter": {orig: sales_deal_id},
+                        "select": ["ID", "CATEGORY_ID", "TITLE"],
+                        "start": 0,
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "Could not list clone deals for sales %s (filter %s=%s)",
+                    sales_deal_id,
+                    orig,
+                    sales_deal_id,
+                )
+                break
+            raw = self._scalar(result)
+            rows = raw if isinstance(raw, list) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    clone_id = int(row.get("ID") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if clone_id <= 0 or clone_id == sales_deal_id or clone_id in seen:
+                    continue
+                seen.add(clone_id)
+                try:
+                    fields = dict(scalar_fields)
+                    fields.update(file_fields)
+                    if fields:
+                        await self._call(
+                            "crm.deal.update",
+                            {"id": clone_id, "fields": fields},
+                        )
+                    if product_rows:
+                        await self._set_deal_product_rows(clone_id, product_rows)
+                    updated += 1
+                    logger.info(
+                        "Propagated Sales %s → clone %s (category=%s) "
+                        "scalars=%s files=%s products=%s",
+                        sales_deal_id,
+                        clone_id,
+                        row.get("CATEGORY_ID"),
+                        len(scalar_fields),
+                        list(file_fields),
+                        len(product_rows),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed propagating Sales %s → clone deal %s",
+                        sales_deal_id,
+                        clone_id,
+                    )
+        if updated:
+            logger.info(
+                "Propagated Sales %s onto %s Bitrix clone deal(s) (lead=%s)",
+                sales_deal_id,
+                updated,
+                lead_id,
+            )
+        return updated
 
     async def create_finance_deal(self, lead_id: int, context: dict[str, Any]) -> int:
         lead = await self.get_lead(lead_id)

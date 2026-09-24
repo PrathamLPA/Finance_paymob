@@ -479,3 +479,35 @@ def test_build_deal_fields_copies_complete_ops_and_remaps_enums():
     assert fields["UF_CRM_1789629158792"] == "19698"
     assert fields["UF_CRM_6992F5AE7DBBD"] == "To be confirmed by Ops"
     assert fields["UF_CRM_664F1583D7579"] == "it"
+
+
+def test_mock_convert_puts_payment_fields_on_sales_deal_at_create():
+    """Sales deal must receive payment UFs on create so Bitrix clones can inherit them."""
+    import asyncio
+    from decimal import Decimal
+
+    from app.integrations.bitrix import MockBitrixClient
+
+    bitrix = MockBitrixClient()
+    bitrix.seed_lead(9101, email="a@test.com", name="Student", amount=Decimal("4.20"))
+    lead = bitrix._mock_leads[9101]
+    lead["CURRENCY_ID"] = "AED"
+    lead["UF_CRM_1684374599490"] = "4.2|AED"
+    lead["UF_CRM_1684373846380"] = "2.1|AED"
+    lead["UF_CRM_1684373986749"] = "2026-09-24"
+    lead["UF_CRM_1684380172"] = "2.1|AED"
+    lead["UF_CRM_1684374142163"] = "2026-09-25"
+    lead["UF_CRM_1684374566210"] = "5828"
+    lead["UF_CRM_1684373954405"] = "5774"
+    lead["UF_CRM_1684374103659"] = "5794"
+
+    sales_id = asyncio.run(
+        bitrix.convert_lead_to_sales_deal(
+            9101, {"amount_paid": "2.10", "total_amount": "4.20"}
+        )
+    )
+    deal = bitrix._mock_deals[sales_id]
+    assert deal["UF_CRM_1684376291062"] == "4.2|AED"
+    assert deal["UF_CRM_1684376313437"] == "2.1|AED"
+    assert deal["UF_CRM_1684376450460"] == "2.1|AED"
+    assert deal["OPPORTUNITY"] == "4.20" or str(deal.get("OPPORTUNITY")) == "4.20"
