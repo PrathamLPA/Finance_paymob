@@ -569,7 +569,7 @@ def _product_row_unit_price(row: dict[str, Any]) -> str | None:
 
 
 def payment_field_codes(settings: Settings) -> list[str]:
-    """Lead/deal UF codes that belong on the PAYMENT INFO card."""
+    """Lead UF codes that belong on the PAYMENT INFO card (source for deal copy)."""
     codes = [
         settings.bitrix_field_lead_total_amount,
         settings.bitrix_field_total_amount,
@@ -602,19 +602,58 @@ def payment_field_codes(settings: Settings) -> list[str]:
     return out
 
 
+def _parse_id_map(raw: str | None) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for part in (raw or "").split(","):
+        piece = part.strip()
+        if not piece or ":" not in piece:
+            continue
+        src, dst = piece.split(":", 1)
+        src, dst = src.strip(), dst.strip()
+        if src and dst:
+            mapping[src] = dst
+    return mapping
+
+
+def _remap_enum_id(value: Any, mapping: dict[str, str]) -> Any:
+    if value in (None, "", [], {}) or not mapping:
+        return value
+    if isinstance(value, list):
+        return [_remap_enum_id(v, mapping) for v in value]
+    key = str(value).strip()
+    return mapping.get(key, value)
+
+
+def _lead_value(lead: dict[str, Any], *codes: str | None) -> Any:
+    for code in codes:
+        if not code:
+            continue
+        value = lead.get(code)
+        if not _is_blank(value):
+            return value
+    return None
+
+
 def build_deal_payment_fields_from_lead(
     settings: Settings,
     lead: dict[str, Any],
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Copy payment UF values from lead onto a deal; fill gaps from payment context."""
+    """Map lead PAYMENT INFO UFs onto Deal field codes (separate Bitrix UF IDs + enums)."""
     context = context or {}
     fields: dict[str, Any] = {}
-    for code in payment_field_codes(settings):
-        value = lead.get(code)
-        if _is_blank(value):
-            continue
+
+    def put(deal_code: str | None, value: Any, *, enum_map: str | None = None) -> None:
+        code = (deal_code or "").strip()
+        if not code or _is_blank(value):
+            return
+        if enum_map:
+            value = _remap_enum_id(value, _parse_id_map(enum_map))
         fields[code] = value
+
+    # Prefer explicit deal_* codes; fall back to lead codes for tests/local mocks.
+    def deal_or_lead(deal_code: str | None, lead_code: str | None) -> str | None:
+        return (deal_code or "").strip() or (lead_code or "").strip() or None
 
     currency = (
         context.get("currency")
@@ -626,33 +665,293 @@ def build_deal_payment_fields_from_lead(
     paid = context.get("amount_paid") or context.get("payment_amount")
     remaining = context.get("remaining_balance")
 
-    def fill(code: str | None, value: Any) -> None:
-        if not code or _is_blank(value) or code in fields:
-            return
-        fields[code] = value
+    put(
+        deal_or_lead(settings.bitrix_field_deal_total_amount, settings.bitrix_field_lead_total_amount),
+        _lead_value(lead, settings.bitrix_field_lead_total_amount)
+        or _as_bitrix_money(total, currency),
+    )
+    # Optional placeholder total used in tests when deal-specific total is unset
+    if (
+        settings.bitrix_field_total_amount
+        and settings.bitrix_field_total_amount not in fields
+        and not (settings.bitrix_field_deal_total_amount or "").strip()
+    ):
+        put(settings.bitrix_field_total_amount, _as_bitrix_money(total, currency))
 
-    fill(settings.bitrix_field_lead_total_amount, _as_bitrix_money(total, currency))
-    fill(settings.bitrix_field_total_amount, _as_bitrix_money(total, currency))
-    fill(settings.bitrix_field_amount_paid, str(paid).split("|")[0].strip() if paid else None)
-    fill(
-        settings.bitrix_field_complete_paid_amount,
-        str(paid).split("|")[0].strip() if paid else None,
+    put(
+        deal_or_lead(settings.bitrix_field_deal_amount_paid, settings.bitrix_field_amount_paid),
+        _lead_value(lead, settings.bitrix_field_amount_paid, settings.bitrix_field_complete_paid_amount)
+        or (str(paid).split("|")[0].strip() if paid else None),
     )
-    fill(
-        settings.bitrix_field_remaining_balance,
-        str(remaining).split("|")[0].strip() if remaining not in (None, "") else None,
-    )
-    fill(
-        settings.bitrix_field_installment_1,
-        _as_bitrix_money(
-            context.get("installment_1_amount") or paid,
-            currency,
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_remaining_balance,
+            settings.bitrix_field_remaining_balance,
+        ),
+        _lead_value(lead, settings.bitrix_field_remaining_balance)
+        or (
+            str(remaining).split("|")[0].strip()
+            if remaining not in (None, "")
+            else None
         ),
     )
-    # Paid date from first payment must win over any planned date already on the lead.
-    paid_i1_date = _as_bitrix_date(context.get("installment_1_date"))
-    if settings.bitrix_field_installment_1_date and paid_i1_date:
-        fields[settings.bitrix_field_installment_1_date] = paid_i1_date
+
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_installment_count,
+            settings.bitrix_field_installment_count,
+        ),
+        _lead_value(lead, settings.bitrix_field_installment_count),
+        enum_map=settings.bitrix_deal_installment_count_enum_map,
+    )
+    put(
+        deal_or_lead(settings.bitrix_field_deal_installment_1, settings.bitrix_field_installment_1),
+        _lead_value(lead, settings.bitrix_field_installment_1)
+        or _as_bitrix_money(context.get("installment_1_amount") or paid, currency),
+    )
+    paid_i1_date = _as_bitrix_date(context.get("installment_1_date")) or _lead_value(
+        lead, settings.bitrix_field_installment_1_date
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_installment_1_date,
+            settings.bitrix_field_installment_1_date,
+        ),
+        paid_i1_date,
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_payment_1_mode, settings.bitrix_field_payment_1_mode
+        ),
+        _lead_value(lead, settings.bitrix_field_payment_1_mode),
+        enum_map=settings.bitrix_deal_payment_1_mode_enum_map,
+    )
+
+    put(
+        deal_or_lead(settings.bitrix_field_deal_installment_2, settings.bitrix_field_installment_2),
+        _lead_value(lead, settings.bitrix_field_installment_2),
+    )
+    # Lead I2 due may live on the legacy field while TEMP points I2→I3 code.
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_installment_2_due_date,
+            settings.bitrix_field_installment_2_due_date_legacy
+            or settings.bitrix_field_installment_2_due_date,
+        ),
+        _lead_value(
+            lead,
+            settings.bitrix_field_installment_2_due_date_legacy,
+            settings.bitrix_field_installment_2_due_date,
+        ),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_payment_2_mode, settings.bitrix_field_payment_2_mode
+        ),
+        _lead_value(lead, settings.bitrix_field_payment_2_mode),
+        enum_map=settings.bitrix_deal_payment_2_mode_enum_map,
+    )
+
+    put(
+        deal_or_lead(settings.bitrix_field_deal_installment_3, settings.bitrix_field_installment_3),
+        _lead_value(lead, settings.bitrix_field_installment_3),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_installment_3_due_date,
+            settings.bitrix_field_installment_3_due_date,
+        ),
+        _lead_value(lead, settings.bitrix_field_installment_3_due_date),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_payment_3_mode, settings.bitrix_field_payment_3_mode
+        ),
+        _lead_value(lead, settings.bitrix_field_payment_3_mode),
+        enum_map=settings.bitrix_deal_payment_3_mode_enum_map,
+    )
+
+    put(
+        deal_or_lead(settings.bitrix_field_deal_installment_4, settings.bitrix_field_installment_4),
+        _lead_value(lead, settings.bitrix_field_installment_4),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_installment_4_due_date,
+            settings.bitrix_field_installment_4_due_date,
+        ),
+        _lead_value(lead, settings.bitrix_field_installment_4_due_date),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_payment_4_mode, settings.bitrix_field_payment_4_mode
+        ),
+        _lead_value(lead, settings.bitrix_field_payment_4_mode),
+        enum_map=settings.bitrix_deal_payment_4_mode_enum_map,
+    )
+
+    # --- Complete-lead / Ops / identity (deal uses different UF codes) ---
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_student_name,
+            settings.bitrix_field_complete_student_name,
+        ),
+        _lead_value(lead, settings.bitrix_field_complete_student_name),
+    )
+    put(
+        deal_or_lead(settings.bitrix_field_deal_student_mail, settings.bitrix_field_student_mail),
+        _lead_value(lead, settings.bitrix_field_student_mail),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_student_contact, settings.bitrix_field_student_contact
+        ),
+        _lead_value(lead, settings.bitrix_field_student_contact),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_enrollment_date,
+            settings.bitrix_field_complete_enrollment_date,
+        ),
+        _as_bitrix_date(_lead_value(lead, settings.bitrix_field_complete_enrollment_date))
+        or _lead_value(lead, settings.bitrix_field_complete_enrollment_date),
+    )
+    put(
+        deal_or_lead(settings.bitrix_field_deal_ops_notes, settings.bitrix_field_complete_ops_notes),
+        _lead_value(lead, settings.bitrix_field_complete_ops_notes),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_comment, settings.bitrix_field_complete_comment_uf
+        ),
+        _lead_value(lead, settings.bitrix_field_complete_comment_uf),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_schedule_finalized,
+            settings.bitrix_field_complete_schedule_finalized,
+        ),
+        _lead_value(lead, settings.bitrix_field_complete_schedule_finalized),
+        enum_map=settings.bitrix_deal_schedule_finalized_enum_map,
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_trainer_shared,
+            settings.bitrix_field_complete_trainer_shared,
+        ),
+        _lead_value(lead, settings.bitrix_field_complete_trainer_shared),
+        enum_map=settings.bitrix_deal_trainer_shared_enum_map,
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_student_type,
+            settings.bitrix_field_complete_student_type,
+        ),
+        _lead_value(lead, settings.bitrix_field_complete_student_type),
+        enum_map=settings.bitrix_deal_student_type_enum_map,
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_batch_type, settings.bitrix_field_complete_batch_type
+        ),
+        _lead_value(lead, settings.bitrix_field_complete_batch_type),
+        enum_map=settings.bitrix_deal_batch_type_enum_map,
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_training_mode, settings.bitrix_field_training_mode
+        ),
+        _lead_value(lead, settings.bitrix_field_training_mode),
+        enum_map=settings.bitrix_deal_training_mode_enum_map,
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_course_duration, settings.bitrix_field_course_duration
+        ),
+        _lead_value(lead, settings.bitrix_field_course_duration),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_class_timing, settings.bitrix_field_class_timing
+        ),
+        _lead_value(lead, settings.bitrix_field_class_timing),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_study_materials, settings.bitrix_field_study_materials
+        ),
+        _lead_value(lead, settings.bitrix_field_study_materials),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_certificates_promised,
+            settings.bitrix_field_certificates_promised,
+        ),
+        _lead_value(lead, settings.bitrix_field_certificates_promised),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_company_website, settings.bitrix_field_company_website
+        ),
+        _lead_value(lead, settings.bitrix_field_company_website),
+    )
+    put(
+        deal_or_lead(settings.bitrix_field_deal_designation, settings.bitrix_field_designation),
+        _lead_value(lead, settings.bitrix_field_designation),
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_industry_domain, settings.bitrix_field_industry_domain
+        ),
+        _lead_value(lead, settings.bitrix_field_industry_domain),
+        enum_map=settings.bitrix_deal_industry_domain_enum_map,
+    )
+    put(
+        deal_or_lead(
+            settings.bitrix_field_deal_department_training,
+            settings.bitrix_field_department_training,
+        ),
+        _lead_value(lead, settings.bitrix_field_department_training),
+        enum_map=settings.bitrix_deal_department_training_enum_map,
+    )
+
+    # Link back to source lead on the Sales/Finance deal card.
+    lead_id = lead.get("ID") or context.get("lead_id")
+    if lead_id not in (None, ""):
+        put(settings.bitrix_field_deal_lead_id, lead_id)
+        put(settings.bitrix_field_original_deal_id, lead_id)
+
+    # Prefer remapping lead Complete-lead paid status; else derive from amounts.
+    put(
+        settings.bitrix_field_deal_paid_status,
+        _lead_value(lead, settings.bitrix_field_complete_paid_status),
+        enum_map=settings.bitrix_deal_paid_status_enum_map,
+    )
+    if settings.bitrix_field_deal_paid_status not in fields:
+        try:
+            paid_amt = Decimal(str(paid).split("|")[0]) if paid not in (None, "") else None
+            total_amt = (
+                Decimal(str(total).split("|")[0]) if total not in (None, "") else None
+            )
+        except (ArithmeticError, ValueError):
+            paid_amt = total_amt = None
+        if paid_amt is not None and total_amt is not None and paid_amt > 0:
+            if paid_amt >= total_amt:
+                put(
+                    settings.bitrix_field_deal_paid_status,
+                    settings.bitrix_deal_paid_status_fully_paid_enum,
+                )
+            else:
+                put(
+                    settings.bitrix_field_deal_paid_status,
+                    settings.bitrix_deal_paid_status_partially_paid_enum,
+                )
+
+    # Standard CRM text fields when present on the lead
+    if not _is_blank(lead.get("COMMENTS")):
+        fields["COMMENTS"] = lead.get("COMMENTS")
+    if not _is_blank(lead.get("SOURCE_ID")):
+        fields["SOURCE_ID"] = lead.get("SOURCE_ID")
 
     opportunity = lead.get("OPPORTUNITY") or total
     if not _is_blank(opportunity):
@@ -827,16 +1126,24 @@ class MockBitrixClient:
         email: str,
         name: str,
         department_ids: list[int] | None = None,
+        handling_department_enum_id: int | None = None,
+        active: bool = True,
     ) -> None:
         parts = name.split()
-        self._mock_users[user_id] = {
+        user: dict[str, Any] = {
             "ID": user_id,
             "EMAIL": email,
             "NAME": parts[0] if parts else name,
             "LAST_NAME": " ".join(parts[1:]) if len(parts) > 1 else "",
             "UF_DEPARTMENT": department_ids or [],
-            "ACTIVE": True,
+            "ACTIVE": active,
         }
+        field = (
+            self.settings.bitrix_field_user_handling_department or "UF_USR_1790154777183"
+        ).strip()
+        if handling_department_enum_id is not None:
+            user[field] = int(handling_department_enum_id)
+        self._mock_users[user_id] = user
 
     def seed_department_manager(self, department_id: int, manager_user_id: int) -> None:
         self._mock_department_managers.setdefault(department_id, [])
@@ -1053,7 +1360,9 @@ class MockBitrixClient:
             unit_price = _bundle_opportunity(products)
             assignee = sales.get("ASSIGNED_BY_ID")
             if assignee_user_ids and index < len(assignee_user_ids):
-                assignee = assignee_user_ids[index]
+                candidate = assignee_user_ids[index]
+                if candidate not in (None, "", 0, "0"):
+                    assignee = candidate
             deal: dict[str, Any] = {
                 "ID": deal_id,
                 "TITLE": f"{base_title} — {course_name}",
@@ -1172,9 +1481,26 @@ class MockBitrixClient:
 
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None:
         deal = await self.get_deal(deal_id)
-        deal[self.settings.bitrix_field_total_amount] = str(summary.total_amount)
-        deal[self.settings.bitrix_field_amount_paid] = str(summary.amount_paid)
-        deal[self.settings.bitrix_field_remaining_balance] = str(summary.remaining_balance)
+        total_code = (
+            self.settings.bitrix_field_deal_total_amount
+            or self.settings.bitrix_field_total_amount
+            or self.settings.bitrix_field_lead_total_amount
+        )
+        paid_code = (
+            self.settings.bitrix_field_deal_amount_paid
+            or self.settings.bitrix_field_amount_paid
+            or self.settings.bitrix_field_complete_paid_amount
+        )
+        remaining_code = (
+            self.settings.bitrix_field_deal_remaining_balance
+            or self.settings.bitrix_field_remaining_balance
+        )
+        if total_code:
+            deal[total_code] = str(summary.total_amount)
+        if paid_code:
+            deal[paid_code] = str(summary.amount_paid)
+        if remaining_code:
+            deal[remaining_code] = str(summary.remaining_balance)
         if summary.payment_percentage is not None and self.settings.bitrix_field_payment_percentage:
             deal[self.settings.bitrix_field_payment_percentage] = str(summary.payment_percentage)
         if summary.payment_status and self.settings.bitrix_field_payment_status:
@@ -1195,7 +1521,12 @@ class MockBitrixClient:
 
     async def set_deal_payment_link(self, deal_id: int, payment_url: str) -> None:
         deal = await self.get_deal(deal_id)
-        deal[self.settings.bitrix_field_payment_link] = payment_url
+        link_code = (
+            self.settings.bitrix_field_deal_payment_link
+            or self.settings.bitrix_field_payment_link
+        )
+        if link_code:
+            deal[link_code] = payment_url
         self._mock_deals[deal_id] = deal
         logger.info("[MockBitrix] Set payment link on deal %s: %s", deal_id, payment_url)
 
@@ -1421,6 +1752,9 @@ class MockBitrixClient:
     async def list_department_employees(
         self, department_id: int
     ) -> list[dict[str, Any]]:
+        field = (
+            self.settings.bitrix_field_user_handling_department or "UF_USR_1790154777183"
+        ).strip()
         out: list[dict[str, Any]] = []
         for user in self._mock_users.values():
             depts = user.get("UF_DEPARTMENT") or []
@@ -1434,36 +1768,70 @@ class MockBitrixClient:
                 continue
             if user.get("ACTIVE") is False:
                 continue
+            hand_raw = user.get(field)
+            hand_id: int | None = None
+            if hand_raw not in (None, "", [], {}):
+                try:
+                    hand_id = int(hand_raw)
+                except (TypeError, ValueError):
+                    hand_id = None
             out.append(
                 {
                     "id": int(user["ID"]),
                     "name": f"{user.get('NAME') or ''} {user.get('LAST_NAME') or ''}".strip(),
                     "email": user.get("EMAIL"),
                     "active": True,
+                    "handling_department": hand_id,
                 }
             )
         out.sort(key=lambda row: row["id"])
         return out
 
     async def list_b2c_ops_employees(self) -> list[dict[str, Any]]:
-        raw_id = (self.settings.bitrix_b2c_ops_department_id or "").strip()
-        dept_id: int | None = None
-        if raw_id:
-            try:
-                dept_id = int(raw_id)
-            except ValueError:
-                dept_id = None
-        if dept_id is None:
+        dept_ids = self._b2c_ops_department_ids()
+        if not dept_ids:
             name = (self.settings.bitrix_b2c_ops_department_name or "").strip()
-            dept_id = await self.find_department_id_by_name(name) if name else None
-        if not dept_id:
+            found = await self.find_department_id_by_name(name) if name else None
+            if found:
+                dept_ids = [found]
+        if not dept_ids:
             logger.warning(
                 "[MockBitrix] B2C Ops department not found | name=%r id=%r",
                 self.settings.bitrix_b2c_ops_department_name,
                 self.settings.bitrix_b2c_ops_department_id,
             )
             return []
-        return await self.list_department_employees(dept_id)
+        merged: dict[int, dict[str, Any]] = {}
+        for dept_id in dept_ids:
+            for emp in await self.list_department_employees(dept_id):
+                merged[int(emp["id"])] = emp
+        return [merged[i] for i in sorted(merged)]
+
+    def _b2c_ops_department_ids(self) -> list[int]:
+        raw = (self.settings.bitrix_b2c_ops_department_id or "").strip()
+        if not raw:
+            return []
+        out: list[int] = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                out.append(int(part))
+            except ValueError:
+                continue
+        return out
+
+    async def find_user_id_by_handling_department(
+        self, handling_dept_enum_id: int
+    ) -> int | None:
+        """First active B2C - Student Support user with this Handiling Department."""
+        employees = await self.list_b2c_ops_employees()
+        target = int(handling_dept_enum_id)
+        for emp in employees:
+            if emp.get("handling_department") == target:
+                return int(emp["id"])
+        return None
 
     async def send_mail(
         self,
@@ -2223,7 +2591,9 @@ class RealBitrixClient:
             unit_price = _bundle_opportunity(products)
             assignee = sales.get("ASSIGNED_BY_ID")
             if assignee_user_ids and index < len(assignee_user_ids):
-                assignee = assignee_user_ids[index]
+                candidate = assignee_user_ids[index]
+                if candidate not in (None, "", 0, "0"):
+                    assignee = candidate
             fields: dict[str, Any] = {
                 "TITLE": f"{base_title} — {course_name}",
                 "CATEGORY_ID": pipeline,
@@ -2476,15 +2846,25 @@ class RealBitrixClient:
         return True
 
     async def update_deal_payment_summary(self, deal_id: int, summary: PaymentSummary) -> None:
+        total_code = (
+            self.settings.bitrix_field_deal_total_amount
+            or self.settings.bitrix_field_total_amount
+            or self.settings.bitrix_field_lead_total_amount
+        )
+        paid_code = (
+            self.settings.bitrix_field_deal_amount_paid
+            or self.settings.bitrix_field_amount_paid
+            or self.settings.bitrix_field_complete_paid_amount
+        )
+        remaining_code = (
+            self.settings.bitrix_field_deal_remaining_balance
+            or self.settings.bitrix_field_remaining_balance
+        )
         fields = {
-            self.settings.bitrix_field_total_amount: str(summary.total_amount),
-            self.settings.bitrix_field_amount_paid: str(summary.amount_paid),
-            self.settings.bitrix_field_remaining_balance: str(summary.remaining_balance),
+            total_code: str(summary.total_amount),
+            paid_code: str(summary.amount_paid),
+            remaining_code: str(summary.remaining_balance),
         }
-        if self.settings.bitrix_field_lead_total_amount:
-            fields[self.settings.bitrix_field_lead_total_amount] = str(summary.total_amount)
-        if self.settings.bitrix_field_complete_paid_amount:
-            fields[self.settings.bitrix_field_complete_paid_amount] = str(summary.amount_paid)
         if summary.payment_percentage is not None and self.settings.bitrix_field_payment_percentage:
             fields[self.settings.bitrix_field_payment_percentage] = str(summary.payment_percentage)
         if summary.payment_status and self.settings.bitrix_field_payment_status:
@@ -2506,11 +2886,17 @@ class RealBitrixClient:
         )
 
     async def set_deal_payment_link(self, deal_id: int, payment_url: str) -> None:
-        if not self.settings.bitrix_field_payment_link:
-            raise RuntimeError("BITRIX_FIELD_PAYMENT_LINK is not configured")
+        link_code = (
+            self.settings.bitrix_field_deal_payment_link
+            or self.settings.bitrix_field_payment_link
+        )
+        if not link_code:
+            raise RuntimeError(
+                "BITRIX_FIELD_DEAL_PAYMENT_LINK / BITRIX_FIELD_PAYMENT_LINK is not configured"
+            )
         await self._call(
             "crm.deal.update",
-            {"id": deal_id, "fields": {self.settings.bitrix_field_payment_link: payment_url}},
+            {"id": deal_id, "fields": {link_code: payment_url}},
         )
         logger.info("Set payment link on Bitrix deal %s", deal_id)
 
@@ -2815,25 +3201,201 @@ class RealBitrixClient:
         deal_id: int,
         context: dict[str, Any] | None = None,
     ) -> int:
-        """Copy PAYMENT INFO UFs from lead onto deal (installments, dates, modes, totals)."""
+        """Copy lead PAYMENT + Complete/Ops UFs onto deal (mapped deal field codes + enums)."""
         lead = await self.get_lead(lead_id)
         fields = build_deal_payment_fields_from_lead(self.settings, lead, context)
-        if not fields:
+        copied = 0
+        if fields:
+            await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
+            copied = len(fields)
             logger.info(
-                "No payment fields to copy from lead %s to deal %s",
+                "Copied %s lead→deal fields from lead %s to deal %s | fields=%s",
+                len(fields),
+                lead_id,
+                deal_id,
+                list(fields),
+            )
+        else:
+            logger.info(
+                "No scalar fields to copy from lead %s to deal %s",
                 lead_id,
                 deal_id,
             )
-            return 0
-        await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
-        logger.info(
-            "Copied %s payment fields from lead %s to deal %s | fields=%s",
-            len(fields),
-            lead_id,
-            deal_id,
-            list(fields),
+        files_copied = await self._copy_lead_file_fields_to_deal(lead, deal_id)
+        return copied + files_copied
+
+    async def _copy_lead_file_fields_to_deal(
+        self, lead: dict[str, Any], deal_id: int
+    ) -> int:
+        """Re-upload lead file UFs onto matching deal file UFs (Bitrix file IDs are not shareable)."""
+        pairs = [
+            (
+                self.settings.bitrix_field_complete_payment_proof,
+                self.settings.bitrix_field_deal_payment_proof,
+                False,
+                "Payment Proof",
+            ),
+            (
+                self.settings.bitrix_field_lead_invoice_file,
+                self.settings.bitrix_field_deal_invoice_file,
+                True,
+                "Invoice",
+            ),
+        ]
+        copied = 0
+        for lead_code, deal_code, multiple, label in pairs:
+            lead_code = (lead_code or "").strip()
+            deal_code = (deal_code or "").strip()
+            if not lead_code or not deal_code:
+                continue
+            raw = lead.get(lead_code)
+            if _is_blank(raw):
+                continue
+            try:
+                ok = await self._reupload_lead_files_to_deal_field(
+                    deal_id,
+                    deal_code,
+                    raw,
+                    multiple=multiple,
+                    label=label,
+                )
+                if ok:
+                    copied += 1
+            except Exception:
+                logger.exception(
+                    "Failed copying %s from lead to deal %s field %s",
+                    label,
+                    deal_id,
+                    deal_code,
+                )
+        return copied
+
+    def _iter_crm_file_entries(self, raw: Any) -> list[dict[str, Any]]:
+        if raw in (None, "", [], {}):
+            return []
+        if isinstance(raw, dict):
+            return [raw]
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        return []
+
+    async def _download_bitrix_file_bytes(
+        self, file_meta: dict[str, Any]
+    ) -> tuple[str, bytes] | None:
+        """Download a CRM UF file via disk.file.get DOWNLOAD_URL or absolute show/download URL."""
+        file_id = file_meta.get("id") or file_meta.get("ID") or file_meta.get("fileId")
+        filename = (
+            str(file_meta.get("name") or file_meta.get("FILE_NAME") or "").strip()
+            or f"file-{file_id or 'bin'}"
         )
-        return len(fields)
+        download_url = (
+            file_meta.get("downloadUrl")
+            or file_meta.get("DOWNLOAD_URL")
+            or file_meta.get("showUrl")
+            or file_meta.get("url")
+        )
+
+        # Prefer disk.file.get when we have a numeric id
+        if file_id not in (None, "", 0, "0"):
+            try:
+                disk = await self._call("disk.file.get", {"id": int(file_id)})
+                if isinstance(disk, dict):
+                    download_url = (
+                        disk.get("DOWNLOAD_URL")
+                        or disk.get("downloadUrl")
+                        or download_url
+                    )
+                    filename = str(disk.get("NAME") or filename)
+            except Exception:
+                logger.info(
+                    "disk.file.get unavailable for file id=%s — trying direct URL",
+                    file_id,
+                )
+
+        if not download_url:
+            return None
+        url = str(download_url)
+        if url.startswith("/"):
+            # Relative CRM download path — prefix portal origin from webhook URL
+            base = (self.settings.bitrix24_webhook_url or "").split("/rest/")[0].rstrip("/")
+            url = f"{base}{url}"
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                content = resp.content
+            if not content:
+                return None
+            return filename, content
+        except Exception:
+            logger.exception("Failed downloading Bitrix file url=%s", url)
+            return None
+
+    async def _reupload_lead_files_to_deal_field(
+        self,
+        deal_id: int,
+        deal_field: str,
+        raw: Any,
+        *,
+        multiple: bool,
+        label: str,
+    ) -> bool:
+        import base64
+
+        deal = await self.get_deal(deal_id)
+        if not _is_blank(deal.get(deal_field)):
+            logger.info(
+                "%s already set on deal %s — not overwriting",
+                label,
+                deal_id,
+            )
+            return False
+
+        payloads: list[dict[str, list[str]]] = []
+        for entry in self._iter_crm_file_entries(raw):
+            downloaded = await self._download_bitrix_file_bytes(entry)
+            if not downloaded:
+                continue
+            filename, content = downloaded
+            payloads.append(
+                {
+                    "fileData": [
+                        filename,
+                        base64.b64encode(content).decode("ascii"),
+                    ]
+                }
+            )
+        if not payloads:
+            logger.warning(
+                "No downloadable files for %s → deal %s field %s",
+                label,
+                deal_id,
+                deal_field,
+            )
+            return False
+
+        field_value: Any = payloads if multiple else payloads[0]
+        await self._call(
+            "crm.deal.update",
+            {"id": deal_id, "fields": {deal_field: field_value}},
+        )
+        refreshed = await self.get_deal(deal_id)
+        if _is_blank(refreshed.get(deal_field)):
+            logger.error(
+                "Bitrix accepted %s copy but deal field stayed empty | deal=%s field=%s",
+                label,
+                deal_id,
+                deal_field,
+            )
+            return False
+        logger.info(
+            "Copied %s file(s) as %s onto deal %s field %s",
+            len(payloads),
+            label,
+            deal_id,
+            deal_field,
+        )
+        return True
 
     async def copy_lead_products_to_deal(self, lead_id: int, deal_id: int) -> int:
         """Copy lead product rows onto the Sales deal (Complete-lead convert must keep products)."""
@@ -3044,8 +3606,74 @@ class RealBitrixClient:
     async def list_department_employees(
         self, department_id: int
     ) -> list[dict[str, Any]]:
-        """Active employees in a department (im API, fallback to user.get)."""
+        """Active employees in a department, including Handiling Department enum.
+
+        Prefers ``user.get`` so UF_USR_* (Handiling Department) is available for
+        course-based B2C Ops assignment. Falls back to im.department without UF.
+        """
+        field = (
+            self.settings.bitrix_field_user_handling_department or "UF_USR_1790154777183"
+        ).strip()
         employees: list[dict[str, Any]] = []
+
+        # Prefer user.get — includes custom user fields needed for assignment.
+        try:
+            result = await self._call(
+                "user.get",
+                {
+                    "FILTER": {"UF_DEPARTMENT": int(department_id), "ACTIVE": True},
+                    "sort": "ID",
+                    "order": "ASC",
+                },
+            )
+            rows = result.get("result") if isinstance(result, dict) else result
+            if not isinstance(rows, list):
+                rows = []
+            for user in rows:
+                if not isinstance(user, dict):
+                    continue
+                try:
+                    uid = int(user.get("ID") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if uid <= 0:
+                    continue
+                hand_raw = user.get(field)
+                hand_id: int | None = None
+                if hand_raw not in (None, "", [], {}):
+                    if isinstance(hand_raw, list) and hand_raw:
+                        hand_raw = hand_raw[0]
+                    try:
+                        hand_id = int(hand_raw)
+                    except (TypeError, ValueError):
+                        hand_id = None
+                name = f"{user.get('NAME') or ''} {user.get('LAST_NAME') or ''}".strip()
+                employees.append(
+                    {
+                        "id": uid,
+                        "name": name,
+                        "email": user.get("EMAIL"),
+                        "active": True,
+                        "handling_department": hand_id,
+                    }
+                )
+            if employees:
+                employees.sort(key=lambda row: row["id"])
+                return employees
+        except BitrixApiError as exc:
+            logger.warning(
+                "user.get by department failed | dept=%s reason=%s%s — "
+                "falling back to im.department",
+                department_id,
+                exc.code,
+                f" add_scope={exc.missing_scope}" if exc.missing_scope else "",
+            )
+        except Exception:
+            logger.exception(
+                "user.get by department failed | dept=%s — falling back to im.department",
+                department_id,
+            )
+
         try:
             result = await self._call(
                 "im.department.employees.get",
@@ -3073,80 +3701,32 @@ class RealBitrixClient:
                             "name": str(item.get("name") or "").strip(),
                             "email": item.get("email"),
                             "active": True,
+                            "handling_department": None,
                         }
                     )
         except BitrixApiError as exc:
             logger.warning(
-                "im.department.employees.get unavailable | dept=%s reason=%s — "
-                "falling back to user.get",
+                "im.department.employees.get unavailable | dept=%s reason=%s",
                 department_id,
                 exc.code,
             )
         except Exception:
             logger.exception(
-                "im.department.employees.get failed | dept=%s — falling back to user.get",
-                department_id,
+                "im.department.employees.get failed | dept=%s", department_id
             )
 
-        if employees:
-            employees.sort(key=lambda row: row["id"])
-            return employees
-
-        # Fallback: user.get filtered by UF_DEPARTMENT (needs user scope).
-        try:
-            result = await self._call(
-                "user.get",
-                {
-                    "FILTER": {"UF_DEPARTMENT": int(department_id), "ACTIVE": True},
-                    "sort": "ID",
-                    "order": "ASC",
-                },
-            )
-        except BitrixApiError as exc:
-            logger.warning(
-                "user.get by department failed | dept=%s reason=%s%s",
-                department_id,
-                exc.code,
-                f" add_scope={exc.missing_scope}" if exc.missing_scope else "",
-            )
-            return []
-        rows = result.get("result") if isinstance(result, dict) else result
-        if not isinstance(rows, list):
-            rows = []
-        for user in rows:
-            if not isinstance(user, dict):
-                continue
-            try:
-                uid = int(user.get("ID") or 0)
-            except (TypeError, ValueError):
-                continue
-            if uid <= 0:
-                continue
-            name = f"{user.get('NAME') or ''} {user.get('LAST_NAME') or ''}".strip()
-            employees.append(
-                {
-                    "id": uid,
-                    "name": name,
-                    "email": user.get("EMAIL"),
-                    "active": True,
-                }
-            )
         employees.sort(key=lambda row: row["id"])
         return employees
 
     async def list_b2c_ops_employees(self) -> list[dict[str, Any]]:
-        raw_id = (self.settings.bitrix_b2c_ops_department_id or "").strip()
-        dept_id: int | None = None
-        if raw_id:
-            try:
-                dept_id = int(raw_id)
-            except ValueError:
-                dept_id = None
-        if dept_id is None:
+        dept_ids = self._b2c_ops_department_ids()
+        if not dept_ids:
             name = (self.settings.bitrix_b2c_ops_department_name or "").strip()
             if name:
-                dept_id = await self.find_department_id_by_name(name)
-        if not dept_id:
+                found = await self.find_department_id_by_name(name)
+                if found:
+                    dept_ids = [found]
+        if not dept_ids:
             logger.warning(
                 "B2C Ops department not found | name=%r id=%r "
                 "action=set_BITRIX_B2C_OPS_DEPARTMENT_NAME_or_ID",
@@ -3154,13 +3734,45 @@ class RealBitrixClient:
                 self.settings.bitrix_b2c_ops_department_id,
             )
             return []
-        employees = await self.list_department_employees(dept_id)
+        merged: dict[int, dict[str, Any]] = {}
+        for dept_id in dept_ids:
+            for emp in await self.list_department_employees(dept_id):
+                merged[int(emp["id"])] = emp
+        employees = [merged[i] for i in sorted(merged)]
         logger.info(
-            "Loaded %s B2C Ops employee(s) from department %s",
+            "Loaded %s B2C Ops employee(s) from department(s) %s "
+            "(with_handling=%s)",
             len(employees),
-            dept_id,
+            dept_ids,
+            sum(1 for e in employees if e.get("handling_department") is not None),
         )
         return employees
+
+    def _b2c_ops_department_ids(self) -> list[int]:
+        raw = (self.settings.bitrix_b2c_ops_department_id or "").strip()
+        if not raw:
+            return []
+        out: list[int] = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                out.append(int(part))
+            except ValueError:
+                continue
+        return out
+
+    async def find_user_id_by_handling_department(
+        self, handling_dept_enum_id: int
+    ) -> int | None:
+        """Active B2C - Student Support user with matching Handiling Department."""
+        employees = await self.list_b2c_ops_employees()
+        target = int(handling_dept_enum_id)
+        for emp in employees:
+            if emp.get("handling_department") == target:
+                return int(emp["id"])
+        return None
 
     async def send_mail(
         self,

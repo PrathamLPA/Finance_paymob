@@ -327,6 +327,62 @@ def test_build_deal_payment_fields_copies_lead_and_fills_context_gaps():
         bitrix_field_installment_1="UF_I1",
         bitrix_field_installment_2="UF_I2",
         bitrix_field_installment_2_due_date="UF_I2_DUE",
+        bitrix_field_installment_2_due_date_legacy="",
+        # Disable live deal UF defaults so this unit test uses lead codes.
+        bitrix_field_deal_total_amount="",
+        bitrix_field_deal_amount_paid="",
+        bitrix_field_deal_remaining_balance="",
+        bitrix_field_deal_installment_count="",
+        bitrix_field_deal_installment_1="",
+        bitrix_field_deal_installment_2="",
+        bitrix_field_deal_installment_3="",
+        bitrix_field_deal_installment_4="",
+        bitrix_field_deal_installment_1_date="",
+        bitrix_field_deal_installment_2_due_date="",
+        bitrix_field_deal_installment_3_due_date="",
+        bitrix_field_deal_installment_4_due_date="",
+        bitrix_field_deal_payment_1_mode="",
+        bitrix_field_deal_payment_2_mode="",
+        bitrix_field_deal_payment_3_mode="",
+        bitrix_field_deal_payment_4_mode="",
+        bitrix_field_deal_payment_link="",
+        bitrix_field_deal_lead_id="",
+        bitrix_field_deal_student_name="",
+        bitrix_field_deal_student_mail="",
+        bitrix_field_deal_student_contact="",
+        bitrix_field_deal_enrollment_date="",
+        bitrix_field_deal_ops_notes="",
+        bitrix_field_deal_comment="",
+        bitrix_field_deal_schedule_finalized="",
+        bitrix_field_deal_trainer_shared="",
+        bitrix_field_deal_student_type="",
+        bitrix_field_deal_batch_type="",
+        bitrix_field_deal_training_mode="",
+        bitrix_field_deal_course_duration="",
+        bitrix_field_deal_class_timing="",
+        bitrix_field_deal_study_materials="",
+        bitrix_field_deal_certificates_promised="",
+        bitrix_field_deal_company_website="",
+        bitrix_field_deal_designation="",
+        bitrix_field_deal_industry_domain="",
+        bitrix_field_deal_department_training="",
+        bitrix_field_deal_payment_proof="",
+        bitrix_field_deal_invoice_file="",
+        bitrix_field_original_deal_id="",
+        bitrix_field_deal_paid_status="",
+        bitrix_deal_installment_count_enum_map="",
+        bitrix_deal_payment_1_mode_enum_map="",
+        bitrix_deal_payment_2_mode_enum_map="",
+        bitrix_deal_payment_3_mode_enum_map="",
+        bitrix_deal_payment_4_mode_enum_map="",
+        bitrix_deal_paid_status_enum_map="",
+        bitrix_deal_schedule_finalized_enum_map="",
+        bitrix_deal_trainer_shared_enum_map="",
+        bitrix_deal_student_type_enum_map="",
+        bitrix_deal_batch_type_enum_map="",
+        bitrix_deal_training_mode_enum_map="",
+        bitrix_deal_department_training_enum_map="",
+        bitrix_deal_industry_domain_enum_map="",
     )
     lead = {
         "OPPORTUNITY": "2.10",
@@ -346,3 +402,80 @@ def test_build_deal_payment_fields_copies_lead_and_fills_context_gaps():
     assert fields["UF_PAID"] == "1.00"
     assert fields["UF_TOTAL_"] == "2.10|AED" or fields["UF_TOTAL"] == "2.10|AED"
     assert fields["OPPORTUNITY"] == "2.10"
+
+
+def test_build_deal_payment_fields_remaps_to_deal_uf_and_enums():
+    from app.integrations.bitrix import build_deal_payment_fields_from_lead
+
+    settings = Settings()
+    lead = {
+        "ID": "594896",
+        "OPPORTUNITY": "4.20",
+        "CURRENCY_ID": "AED",
+        "UF_CRM_1684374599490": "4.2|AED",
+        "UF_CRM_1684373846380": "2.1|AED",
+        "UF_CRM_1684373986749": "2026-09-24T03:00:00+03:00",
+        "UF_CRM_1684380172": "2.1|AED",
+        "UF_CRM_1684374142163": "2026-09-25T03:00:00+03:00",
+        "UF_CRM_1684374566210": "5828",
+        "UF_CRM_1684373954405": "5774",
+        "UF_CRM_1684374103659": "5794",
+        "UF_CRM_1771500781458": "2.10",
+    }
+    fields = build_deal_payment_fields_from_lead(
+        settings, lead, {"amount_paid": "2.10", "total_amount": "4.20"}
+    )
+    assert fields["UF_CRM_1684376313437"] == "2.1|AED"
+    assert fields["UF_CRM_1684376450460"] == "2.1|AED"
+    assert fields["UF_CRM_1684376591204"] == "2026-09-25T03:00:00+03:00"
+    assert fields["UF_CRM_6465989F6E0EB"] == "6004"  # 2 installments
+    assert fields["UF_CRM_1684376413205"] == "5856"  # Cash
+    assert fields["UF_CRM_1684376704268"] == "5890"  # Tabby
+    assert fields["UF_CRM_1684376291062"] == "4.2|AED"
+    assert fields["UF_CRM_1789218342102"] == "594896"
+    assert fields["UF_CRM_1789629158792"] == "19698"  # Partially paid
+
+
+def test_build_deal_fields_copies_complete_ops_and_remaps_enums():
+    from app.integrations.bitrix import build_deal_payment_fields_from_lead
+
+    settings = Settings()
+    lead = {
+        "ID": "1",
+        "OPPORTUNITY": "4.20",
+        "CURRENCY_ID": "AED",
+        "UF_CRM_1771503330575": "abinand",
+        "UF_CRM_1789714405705": "a@test.com",
+        "UF_CRM_1789714441645": "9072438903",
+        "UF_CRM_1771503410009": "2026-09-24T03:00:00+03:00",
+        "UF_CRM_1771501226065": "ops note",
+        "UF_CRM_1684372587728": "comment",
+        "UF_CRM_1771500430277": "12912",
+        "UF_CRM_1771501047627": "12916",
+        "UF_CRM_1772454738552": "13198",
+        "UF_CRM_1772455024093": "13200",
+        "UF_CRM_1684372786609": "5768",
+        "UF_CRM_1771238558828": "To be confirmed by Ops",
+        "UF_CRM_1771238691110": "To be confirmed by Ops",
+        "UF_CRM_1771240157159": "To be confirmed by Ops",
+        "UF_CRM_1771240323579": "To be confirmed by Ops",
+        "UF_CRM_1684388099787": "To be confirmed by Ops",
+        "UF_CRM_1716456659309": "it",
+        "UF_CRM_1749464475095": "11826",
+        "UF_CRM_1749464873149": "11758",
+        "UF_CRM_1789557091401": "19700",
+    }
+    fields = build_deal_payment_fields_from_lead(settings, lead, {})
+    assert fields["UF_CRM_6997027A88DD2"] == "abinand"
+    assert fields["UF_CRM_6AAD1A163697E"] == "a@test.com"
+    assert fields["UF_CRM_6AAD1A168101E"] == "9072438903"
+    assert fields["UF_CRM_6996F9D3B4024"] == "12940"  # No
+    assert fields["UF_CRM_6996F9DD75A95"] == "12944"  # No
+    assert fields["UF_CRM_69A587F843B6B"] == "13214"  # B2C
+    assert fields["UF_CRM_69A5880225A00"] == "13216"  # Public Batch
+    assert fields["UF_CRM_6465989E12E11"] == "5996"  # Online
+    assert fields["UF_CRM_6846B9D4E1528"] == "11890"  # Retail
+    assert fields["UF_CRM_6846B9D5047AA"] == "11786"  # Operations
+    assert fields["UF_CRM_1789629158792"] == "19698"
+    assert fields["UF_CRM_6992F5AE7DBBD"] == "To be confirmed by Ops"
+    assert fields["UF_CRM_664F1583D7579"] == "it"

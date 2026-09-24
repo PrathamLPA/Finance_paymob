@@ -62,10 +62,21 @@ class Settings(BaseSettings):
     bitrix_backend_b2c_ops_split: bool = True
     # Department used to resolve B2C Ops assignees (exact Bitrix department NAME).
     bitrix_b2c_ops_department_name: str = "B2C - Student Support"
-    # Optional department ID override (skips name lookup when set).
-    bitrix_b2c_ops_department_id: str = ""
+    # Bitrix department ID(s) for Ops assignees (comma-separated).
+    # SPOCs currently live under 286; UI label "B2C - Student Support" is 108.
+    # Include both until all SPOCs are only in 108.
+    bitrix_b2c_ops_department_id: str = "108,286"
     # When true, new B2C Ops cards are assigned round-robin to that department.
+    # Ignored when bitrix_b2c_ops_assign_by_course_handling_dept is true.
     bitrix_b2c_ops_assign_from_department: bool = True
+    # true = for each Ops card, pick from configured Ops dept users whose
+    # Handiling Department (UF_USR_…) matches the course. Discovers SPOCs live
+    # from Bitrix (no hardcoded names). Falls back to department RR if unset.
+    bitrix_b2c_ops_assign_by_course_handling_dept: bool = True
+    # Bitrix user field "Handiling Department" (enum on employee card).
+    bitrix_field_user_handling_department: str = "UF_USR_1790154777183"
+    # Enum ID for "Human Resources & People Development" (CIPD / Melona = 19722).
+    bitrix_handling_dept_hr_people_development_enum: str = "19722"
     # When true: also create Finance from the API (usually leave false).
     # Finance normally comes from Bitrix tunnel/copy.
     bitrix_create_extra_deals_on_payment: bool = False
@@ -77,6 +88,78 @@ class Settings(BaseSettings):
     bitrix_field_total_amount: str = "UF_CRM_TOTAL_AMOUNT"
     # Lead Payment Section / Complete-lead "Total Amount_" money field
     bitrix_field_lead_total_amount: str = "UF_CRM_1684374599490"
+    # Deal Payment Info — different UF codes than lead (Bitrix entity-specific fields)
+    bitrix_field_deal_total_amount: str = "UF_CRM_1684376291062"
+    bitrix_field_deal_amount_paid: str = "UF_CRM_1648473806515"
+    bitrix_field_deal_remaining_balance: str = "UF_CRM_1649495611849"
+    bitrix_field_deal_installment_count: str = "UF_CRM_6465989F6E0EB"
+    bitrix_field_deal_installment_1: str = "UF_CRM_1684376313437"
+    bitrix_field_deal_installment_2: str = "UF_CRM_1684376450460"
+    bitrix_field_deal_installment_3: str = "UF_CRM_1684379232"
+    bitrix_field_deal_installment_4: str = "UF_CRM_1684376820955"
+    bitrix_field_deal_installment_1_date: str = "UF_CRM_1684376335077"
+    bitrix_field_deal_installment_2_due_date: str = "UF_CRM_1684376591204"
+    bitrix_field_deal_installment_3_due_date: str = "UF_CRM_1684376475940"
+    bitrix_field_deal_installment_4_due_date: str = "UF_CRM_1684376877789"
+    bitrix_field_deal_payment_1_mode: str = "UF_CRM_1684376413205"
+    bitrix_field_deal_payment_2_mode: str = "UF_CRM_1684376704268"
+    bitrix_field_deal_payment_3_mode: str = "UF_CRM_1684376551228"
+    bitrix_field_deal_payment_4_mode: str = "UF_CRM_1684376963627"
+    bitrix_field_deal_payment_link: str = "UF_CRM_1783502165006"
+    bitrix_field_deal_lead_id: str = "UF_CRM_1789218342102"
+    # Deal Complete / Ops / identity fields (separate UF codes from lead)
+    bitrix_field_deal_student_name: str = "UF_CRM_6997027A88DD2"
+    bitrix_field_deal_student_mail: str = "UF_CRM_6AAD1A163697E"
+    bitrix_field_deal_student_contact: str = "UF_CRM_6AAD1A168101E"
+    bitrix_field_deal_enrollment_date: str = "UF_CRM_699706DDD23F9"
+    bitrix_field_deal_ops_notes: str = "UF_CRM_6996F9E7155EE"
+    bitrix_field_deal_comment: str = "UF_CRM_6465989D87575"
+    bitrix_field_deal_schedule_finalized: str = "UF_CRM_6996F9D3B4024"
+    bitrix_field_deal_trainer_shared: str = "UF_CRM_6996F9DD75A95"
+    bitrix_field_deal_student_type: str = "UF_CRM_69A587F843B6B"
+    bitrix_field_deal_batch_type: str = "UF_CRM_69A5880225A00"
+    bitrix_field_deal_training_mode: str = "UF_CRM_6465989E12E11"
+    bitrix_field_deal_course_duration: str = "UF_CRM_6992F5AE7DBBD"
+    bitrix_field_deal_class_timing: str = "UF_CRM_6992F5B7D10ED"
+    bitrix_field_deal_study_materials: str = "UF_CRM_699304CBA481B"
+    bitrix_field_deal_certificates_promised: str = "UF_CRM_699304D4C53F6"
+    bitrix_field_deal_company_website: str = "UF_CRM_6465C2AB0E1CC"
+    bitrix_field_deal_designation: str = "UF_CRM_664F1583D7579"
+    bitrix_field_deal_industry_domain: str = "UF_CRM_6846B9D4E1528"
+    bitrix_field_deal_department_training: str = "UF_CRM_6846B9D5047AA"
+    bitrix_field_deal_payment_proof: str = "UF_CRM_69D39E301706D"
+    bitrix_field_deal_invoice_file: str = "UF_CRM_6AA53B07592D7"
+    # Lead enum ID → Deal enum ID (same labels, different list IDs per entity)
+    bitrix_deal_installment_count_enum_map: str = "5826:6002,5828:6004,5830:6006,5832:6008"
+    bitrix_deal_payment_1_mode_enum_map: str = (
+        "5774:5856,5776:5858,13178:13184,13156:13166,5778:5860,"
+        "5780:5862,5782:5864,5784:5866,13234:13152,13146:13168"
+    )
+    bitrix_deal_payment_2_mode_enum_map: str = (
+        "5786:5882,5788:5884,5790:5886,5792:5888,5794:5890,5796:5892"
+    )
+    bitrix_deal_payment_3_mode_enum_map: str = (
+        "5798:5868,5800:5870,5802:5872,5804:5874,5806:5876,5808:5878,5810:5880"
+    )
+    bitrix_deal_payment_4_mode_enum_map: str = (
+        "5812:5894,5814:5896,5816:5898,5818:5900,5820:5902,5822:5904,5824:5906"
+    )
+    bitrix_deal_paid_status_enum_map: str = "19692:19696,19700:19698"
+    bitrix_deal_schedule_finalized_enum_map: str = "12910:12938,12912:12940"
+    bitrix_deal_trainer_shared_enum_map: str = "12914:12942,12916:12944"
+    bitrix_deal_student_type_enum_map: str = "13196:13212,13198:13214"
+    bitrix_deal_batch_type_enum_map: str = "13200:13216,13202:13218"
+    bitrix_deal_training_mode_enum_map: str = "5768:5996,5770:5998,5772:6000,14500:14506"
+    bitrix_deal_department_training_enum_map: str = (
+        "11754:11782,11756:11784,11758:11786,11760:11788,11762:11790,11764:11792,"
+        "11920:11944,11922:11946,11924:11948,11926:11950,11928:11952,12724:12730,"
+        "11930:11954,12732:12744,12734:12746"
+    )
+    bitrix_deal_industry_domain_enum_map: str = (
+        "11752:11780,11824:11888,11826:11890,11828:11892,11830:11894,11832:11896,"
+        "11834:11898,11836:11900,11838:11902,11840:11904,11842:11906,11844:11908,"
+        "11846:11910,11848:11912,11850:11914,11852:11916,11854:11918"
+    )
     bitrix_field_payment_link: str = "UF_CRM_PAYMENT_LINK"
     # Finance deal UF "Original Deal ID" → Sales deal id (Copy deal bridge)
     bitrix_field_original_deal_id: str = "UF_CRM_64461C4D5CF41"
