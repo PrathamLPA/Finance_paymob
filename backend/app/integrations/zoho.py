@@ -220,8 +220,7 @@ class MockZohoBooksClient:
                 "rate": float(rate),
                 "quantity": float(quantity),
             }
-            if self.settings.zoho_default_item_id:
-                item["item_id"] = self.settings.zoho_default_item_id
+            self._apply_zoho_line_defaults(item)
             items.append(item)
 
         if items:
@@ -233,9 +232,21 @@ class MockZohoBooksClient:
             "rate": float(total_amount),
             "quantity": 1,
         }
+        self._apply_zoho_line_defaults(item)
+        return [item]
+
+    def _apply_zoho_line_defaults(self, item: dict[str, Any]) -> None:
         if self.settings.zoho_default_item_id:
             item["item_id"] = self.settings.zoho_default_item_id
-        return [item]
+        tax_id = (self.settings.zoho_default_tax_id or "").strip()
+        if tax_id:
+            item["tax_id"] = tax_id
+
+    def _invoice_tax_flags(self) -> dict[str, Any]:
+        """Bitrix amounts are gross/final — tell Zoho not to add tax on top."""
+        return {
+            "is_inclusive_tax": bool(self.settings.zoho_invoice_is_inclusive_tax),
+        }
 
 
 class RealZohoBooksClient(MockZohoBooksClient):
@@ -678,14 +689,17 @@ class RealZohoBooksClient(MockZohoBooksClient):
             "line_items": line_items,
             "reference_number": f"WF-{workflow_id}-{transaction_id}"[:50],
             "notes": f"Learners Point finance workflow {workflow_id}",
+            **self._invoice_tax_flags(),
         }
         logger.info(
-            "Zoho create invoice | workflow_id=%s customer_id=%s total=%s paid=%s %s lines=%s",
+            "Zoho create invoice | workflow_id=%s customer_id=%s total=%s paid=%s %s "
+            "inclusive_tax=%s lines=%s",
             workflow_id,
             customer_id,
             total_amount,
             amount_paid,
             currency,
+            payload.get("is_inclusive_tax"),
             [item.get("name") for item in line_items],
         )
         response = await self._request("POST", "/invoices", json=payload)

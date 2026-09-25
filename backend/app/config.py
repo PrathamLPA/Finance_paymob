@@ -344,6 +344,12 @@ class Settings(BaseSettings):
     )
     # Optional catalog item; if empty, invoices use ad-hoc line items
     zoho_default_item_id: str = ""
+    # Bitrix/workflow totals are final payable (VAT already in the price). Zoho must
+    # treat line rates as tax-inclusive or it adds another 5% (e.g. 4.20 → 4.41).
+    zoho_invoice_is_inclusive_tax: bool = True
+    # Optional UAE VAT (etc.) tax_id from Zoho Settings → Taxes. When set, applied
+    # on each line with inclusive rates so the PDF still shows VAT breakdown.
+    zoho_default_tax_id: str = ""
 
     # Email
     sendgrid_api_key: str = ""
