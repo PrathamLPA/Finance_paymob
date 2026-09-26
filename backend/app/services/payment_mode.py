@@ -10,9 +10,27 @@ from app.config import Settings
 logger = logging.getLogger(__name__)
 
 
+# Built-in Learners Point enums — used when Railway map omits Tabby/Tamara IDs.
+# Configured BITRIX_PAYMENT_MODE_ENUM_MAP always wins on conflict.
+_DEFAULT_MODE_ENUM_MAP: dict[str, str] = {
+    "5774": "cash",
+    "5786": "cash",
+    "5776": "website_payment",
+    "13234": "website_payment",
+    "13156": "card",
+    "5788": "online",
+    "5778": "bank_transfer",
+    "5790": "bank_transfer",
+    "5782": "tabby",
+    "5784": "tamara",
+}
+
+
 def _parse_mode_enum_map(settings: Settings) -> dict[str, str]:
+    # Start from known defaults so a truncated Railway map cannot silently
+    # demote Tabby/Tamara (5782/5784) to card via unknown-enum fallthrough.
+    out: dict[str, str] = dict(_DEFAULT_MODE_ENUM_MAP)
     raw = (getattr(settings, "bitrix_payment_mode_enum_map", None) or "").strip()
-    out: dict[str, str] = {}
     for part in raw.split(","):
         part = part.strip()
         if not part or ":" not in part:
@@ -414,12 +432,24 @@ def resolve_paymob_payment_method_ids(
     effective = (label or mapped or "").strip().lower()
 
     methods: list[int] = []
-    if _label_means_tabby(effective) or mapped == "tabby":
-        if tabby_id > 0:
-            methods = [tabby_id]
-    elif _label_means_tamara(effective) or mapped == "tamara":
-        if tamara_id > 0:
-            methods = [tamara_id]
+    wants_tabby = _label_means_tabby(effective) or mapped == "tabby"
+    wants_tamara = _label_means_tamara(effective) or mapped == "tamara"
+    if wants_tabby:
+        if tabby_id <= 0:
+            raise ValueError(
+                "Bitrix Payment Mode is Tabby but PAYMOB_INTEGRATION_ID_TABBY "
+                "is not configured (or is 0). Set the Paymob Tabby integration ID, "
+                "or use direct Tabby checkout (TABBY_SECRET_KEY)."
+            )
+        methods = [tabby_id]
+    elif wants_tamara:
+        if tamara_id <= 0:
+            raise ValueError(
+                "Bitrix Payment Mode is Tamara but PAYMOB_INTEGRATION_ID_TAMARA "
+                "is not configured (or is 0). Set the Paymob Tamara integration ID, "
+                "or use direct Tamara checkout (TAMARA_API_TOKEN)."
+            )
+        methods = [tamara_id]
     elif _label_means_website_payment(effective) or mapped in (
         "website_payment",
         "website payment",
@@ -435,7 +465,8 @@ def resolve_paymob_payment_method_ids(
         if card_id > 0:
             methods = [card_id]
 
-    if not methods and card_id > 0:
+    # Card fallback only for unknown / card / website — never for exclusive BNPL.
+    if not methods and card_id > 0 and not wants_tabby and not wants_tamara:
         methods = [card_id]
 
     logger.info(
@@ -507,6 +538,174 @@ async def resolve_is_bank_transfer_payment_mode(
         bitrix=bitrix,
     )
     return is_bank_transfer_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_labels or None,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
+    )
+
+
+def is_tabby_payment_mode(
+    lead: dict[str, Any] | None,
+    *,
+    installment_number: int,
+    settings: Settings,
+    bitrix_enum_labels: dict[str, str] | None = None,
+    allow_cross_installment_fallback: bool = True,
+) -> bool:
+    """True when Bitrix Payment Mode is Tabby (direct Tabby API, not Paymob)."""
+    if is_cash_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_enum_labels,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
+    ) or is_bank_transfer_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_enum_labels,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
+    ):
+        return False
+
+    enum_id = payment_mode_enum_id(
+        lead, installment_number=installment_number, settings=settings
+    )
+    configured_map = _parse_mode_enum_map(settings)
+    label = payment_mode_label(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_enum_labels,
+    )
+    mapped = (configured_map.get(enum_id) or "").strip().lower() if enum_id else ""
+    effective = (label or mapped or "").strip().lower()
+
+    if not enum_id and lead and allow_cross_installment_fallback:
+        for n in (1, 2, 3, 4):
+            if n == installment_number:
+                continue
+            alt = payment_mode_enum_id(lead, installment_number=n, settings=settings)
+            if not alt:
+                continue
+            alt_label = payment_mode_label(
+                lead,
+                installment_number=n,
+                settings=settings,
+                bitrix_enum_labels=bitrix_enum_labels,
+            )
+            alt_mapped = (configured_map.get(alt) or "").strip().lower()
+            if _label_means_tabby(alt_label) or alt_mapped == "tabby":
+                return True
+        return False
+
+    return _label_means_tabby(effective) or mapped == "tabby"
+
+
+async def resolve_is_tabby_payment_mode(
+    lead: dict[str, Any] | None,
+    *,
+    installment_number: int,
+    settings: Settings,
+    bitrix: Any,
+    allow_cross_installment_fallback: bool = True,
+) -> bool:
+    """Tabby check with live Bitrix enumeration labels."""
+    bitrix_labels = await _load_payment_mode_bitrix_labels(
+        installment_number=installment_number,
+        settings=settings,
+        bitrix=bitrix,
+    )
+    return is_tabby_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_labels or None,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
+    )
+
+
+def is_tamara_payment_mode(
+    lead: dict[str, Any] | None,
+    *,
+    installment_number: int,
+    settings: Settings,
+    bitrix_enum_labels: dict[str, str] | None = None,
+    allow_cross_installment_fallback: bool = True,
+) -> bool:
+    """True when Bitrix Payment Mode is Tamara (direct Tamara API, not Paymob)."""
+    if is_cash_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_enum_labels,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
+    ) or is_bank_transfer_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_enum_labels,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
+    ) or is_tabby_payment_mode(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_enum_labels,
+        allow_cross_installment_fallback=allow_cross_installment_fallback,
+    ):
+        return False
+
+    enum_id = payment_mode_enum_id(
+        lead, installment_number=installment_number, settings=settings
+    )
+    configured_map = _parse_mode_enum_map(settings)
+    label = payment_mode_label(
+        lead,
+        installment_number=installment_number,
+        settings=settings,
+        bitrix_enum_labels=bitrix_enum_labels,
+    )
+    mapped = (configured_map.get(enum_id) or "").strip().lower() if enum_id else ""
+    effective = (label or mapped or "").strip().lower()
+
+    if not enum_id and lead and allow_cross_installment_fallback:
+        for n in (1, 2, 3, 4):
+            if n == installment_number:
+                continue
+            alt = payment_mode_enum_id(lead, installment_number=n, settings=settings)
+            if not alt:
+                continue
+            alt_label = payment_mode_label(
+                lead,
+                installment_number=n,
+                settings=settings,
+                bitrix_enum_labels=bitrix_enum_labels,
+            )
+            alt_mapped = (configured_map.get(alt) or "").strip().lower()
+            if _label_means_tamara(alt_label) or alt_mapped == "tamara":
+                return True
+        return False
+
+    return _label_means_tamara(effective) or mapped == "tamara"
+
+
+async def resolve_is_tamara_payment_mode(
+    lead: dict[str, Any] | None,
+    *,
+    installment_number: int,
+    settings: Settings,
+    bitrix: Any,
+    allow_cross_installment_fallback: bool = True,
+) -> bool:
+    """Tamara check with live Bitrix enumeration labels."""
+    bitrix_labels = await _load_payment_mode_bitrix_labels(
+        installment_number=installment_number,
+        settings=settings,
+        bitrix=bitrix,
+    )
+    return is_tamara_payment_mode(
         lead,
         installment_number=installment_number,
         settings=settings,
@@ -659,11 +858,17 @@ def paymob_methods_for_customer_mode(mode: str, settings: Settings) -> list[int]
 
     methods: list[int] = []
     if normalized == "tabby":
-        if tabby_id > 0:
-            methods = [tabby_id]
+        if tabby_id <= 0:
+            raise ValueError(
+                "Customer chose Tabby but PAYMOB_INTEGRATION_ID_TABBY is not configured"
+            )
+        methods = [tabby_id]
     elif normalized == "tamara":
-        if tamara_id > 0:
-            methods = [tamara_id]
+        if tamara_id <= 0:
+            raise ValueError(
+                "Customer chose Tamara but PAYMOB_INTEGRATION_ID_TAMARA is not configured"
+            )
+        methods = [tamara_id]
     elif normalized == "website_payment":
         for mid in (card_id, tabby_id, tamara_id):
             if mid > 0 and mid not in methods:
@@ -675,12 +880,8 @@ def paymob_methods_for_customer_mode(mode: str, settings: Settings) -> list[int]
         # bank_transfer / cash — not Paymob
         return []
 
-    if not methods and card_id > 0 and normalized in (
-        "card",
-        "tabby",
-        "tamara",
-        "website_payment",
-    ):
+    # Card fallback for card/website only — never silently swap Tabby/Tamara → card.
+    if not methods and card_id > 0 and normalized in ("card", "website_payment"):
         methods = [card_id]
 
     logger.info(

@@ -729,7 +729,7 @@ class CashCollectionService:
         stmt = stmt.limit(max(1, min(limit, 5000)))
         rows = list(self.db.scalars(stmt).unique().all())
 
-        # Map desk txn → collector via CASH-{id}- or POS-{id}-
+        # Map desk txn → collector via CASH-{id} / POS-{id} (legacy: CASH-{id}-{hex})
         collection_ids: list[int] = []
         for txn in rows:
             prefix_ok = txn.transaction_id.startswith("CASH-") or txn.transaction_id.startswith(
@@ -877,8 +877,9 @@ class CashCollectionService:
 
     @staticmethod
     def new_cash_transaction_id(collection_id: int) -> str:
-        return f"CASH-{collection_id}-{uuid.uuid4().hex[:12]}"
+        # Deterministic: unique key blocks double-collect even if status check races.
+        return f"CASH-{collection_id}"
 
     @staticmethod
     def new_pos_transaction_id(collection_id: int) -> str:
-        return f"POS-{collection_id}-{uuid.uuid4().hex[:12]}"
+        return f"POS-{collection_id}"

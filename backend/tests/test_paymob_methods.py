@@ -6,6 +6,7 @@ from app.config import Settings
 from app.services.payment_mode import (
     bitrix_enum_id_for_customer_mode,
     channel_for_customer_payment_mode,
+    is_tabby_payment_mode,
     paymob_methods_for_customer_mode,
     resolve_paymob_payment_method_ids,
     validate_customer_payment_mode,
@@ -34,6 +35,12 @@ def test_tabby_mode_uses_tabby_integration_only():
         bitrix_enum_labels={"5782": "tabby"},
     )
     assert methods == [52169]
+    assert is_tabby_payment_mode(
+        lead,
+        installment_number=1,
+        settings=_settings(),
+        bitrix_enum_labels={"5782": "tabby"},
+    )
 
 
 def test_tamara_mode_uses_tamara_integration_only():

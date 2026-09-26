@@ -12,7 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
-from app.integrations.factory import get_paymob_client
+from app.integrations.factory import (
+    get_bitrix_client,
+    get_paymob_client,
+    get_tabby_client,
+    get_tamara_client,
+)
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import (
     CHANNEL_BANK_TRANSFER,
@@ -45,6 +50,8 @@ class PaymentSessionService:
         self.db = db
         self.settings = settings or get_settings()
         self.paymob = get_paymob_client(self.settings)
+        self.tabby = get_tabby_client(self.settings)
+        self.tamara = get_tamara_client(self.settings)
 
     async def _create_paymob_session(
         self,
@@ -117,6 +124,84 @@ class PaymentSessionService:
             installment_number=number,
             settings=self.settings,
             bitrix=bitrix,
+        )
+
+    async def _is_tabby_mode(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        installment_number: int | None,
+        allow_cross_installment_fallback: bool = True,
+    ) -> bool:
+        from app.services.payment_mode import (
+            payment_mode_field_for_installment,
+            resolve_is_tabby_payment_mode,
+        )
+
+        bitrix = get_bitrix_client(self.settings)
+        snapshot = workflow.bitrix_lead_payload or {}
+        lead: dict = dict(snapshot) if isinstance(snapshot, dict) else {}
+        if workflow.bitrix_lead_id:
+            try:
+                fetched = await bitrix.get_lead(workflow.bitrix_lead_id)
+                if isinstance(fetched, dict) and fetched:
+                    # Prefer live lead, but keep payment-mode UFs from snapshot when
+                    # the fetch omits them (common in mocks / partial CRM responses).
+                    merged = dict(fetched)
+                    for n in (1, 2, 3, 4):
+                        field = payment_mode_field_for_installment(self.settings, n)
+                        if field and not merged.get(field) and lead.get(field):
+                            merged[field] = lead[field]
+                    lead = merged
+            except Exception:
+                logger.exception(
+                    "Could not refresh Bitrix lead %s for Tabby mode check",
+                    workflow.bitrix_lead_id,
+                )
+        return await resolve_is_tabby_payment_mode(
+            lead if isinstance(lead, dict) else {},
+            installment_number=installment_number or 1,
+            settings=self.settings,
+            bitrix=bitrix,
+            allow_cross_installment_fallback=allow_cross_installment_fallback,
+        )
+
+    async def _is_tamara_mode(
+        self,
+        workflow: CustomerWorkflow,
+        *,
+        installment_number: int | None,
+        allow_cross_installment_fallback: bool = True,
+    ) -> bool:
+        from app.services.payment_mode import (
+            payment_mode_field_for_installment,
+            resolve_is_tamara_payment_mode,
+        )
+
+        bitrix = get_bitrix_client(self.settings)
+        snapshot = workflow.bitrix_lead_payload or {}
+        lead: dict = dict(snapshot) if isinstance(snapshot, dict) else {}
+        if workflow.bitrix_lead_id:
+            try:
+                fetched = await bitrix.get_lead(workflow.bitrix_lead_id)
+                if isinstance(fetched, dict) and fetched:
+                    merged = dict(fetched)
+                    for n in (1, 2, 3, 4):
+                        field = payment_mode_field_for_installment(self.settings, n)
+                        if field and not merged.get(field) and lead.get(field):
+                            merged[field] = lead[field]
+                    lead = merged
+            except Exception:
+                logger.exception(
+                    "Could not refresh Bitrix lead %s for Tamara mode check",
+                    workflow.bitrix_lead_id,
+                )
+        return await resolve_is_tamara_payment_mode(
+            lead if isinstance(lead, dict) else {},
+            installment_number=installment_number or 1,
+            settings=self.settings,
+            bitrix=bitrix,
+            allow_cross_installment_fallback=allow_cross_installment_fallback,
         )
 
     def get_session_by_token(self, token: str) -> PaymentSession | None:
@@ -277,17 +362,42 @@ class PaymentSessionService:
         merchant_reference = f"WF-{workflow.id}-{uuid.uuid4().hex[:8]}"
         paymob_session_id = None
         paymob_checkout_url = None
+        # Online Card/website → Paymob Intention now.
+        # Tabby / Tamara skip Paymob; checkout is created on terms accept via their APIs.
         if channel not in (CHANNEL_BANK_TRANSFER, CHANNEL_CASH):
-            paymob_session = await self._create_paymob_session(
+            allow_fb = (installment_number or 1) <= 1
+            use_tabby = await self._is_tabby_mode(
                 workflow,
-                amount=amount,
-                currency=workflow.currency,
-                merchant_reference=merchant_reference,
-                trigger="new payment session",
                 installment_number=installment_number,
+                allow_cross_installment_fallback=allow_fb,
             )
-            paymob_session_id = paymob_session.session_id
-            paymob_checkout_url = paymob_session.checkout_url
+            use_tamara = (
+                False
+                if use_tabby
+                else await self._is_tamara_mode(
+                    workflow,
+                    installment_number=installment_number,
+                    allow_cross_installment_fallback=allow_fb,
+                )
+            )
+            if use_tabby or use_tamara:
+                logger.info(
+                    "Skipping Paymob Intention for %s mode | workflow=%s installment=%s",
+                    "Tabby" if use_tabby else "Tamara",
+                    workflow.id,
+                    installment_number or 1,
+                )
+            else:
+                paymob_session = await self._create_paymob_session(
+                    workflow,
+                    amount=amount,
+                    currency=workflow.currency,
+                    merchant_reference=merchant_reference,
+                    trigger="new payment session",
+                    installment_number=installment_number,
+                )
+                paymob_session_id = paymob_session.session_id
+                paymob_checkout_url = paymob_session.checkout_url
 
         token = secrets.token_urlsafe(32)
         session = PaymentSession(
@@ -340,9 +450,153 @@ class PaymentSessionService:
         session.merchant_reference = new_reference
         session.paymob_session_id = paymob_session.session_id
         session.paymob_checkout_url = paymob_session.checkout_url
+        session.tabby_payment_id = None
+        session.tamara_order_id = None
         self.db.commit()
         self.db.refresh(session)
         return session.paymob_checkout_url
+
+    async def refresh_tabby_checkout(
+        self,
+        session: PaymentSession,
+        *,
+        amount: Decimal | None = None,
+    ) -> str:
+        """Create a Tabby HPP session and store payment id + web_url."""
+        channel = (getattr(session, "channel", None) or CHANNEL_ONLINE).strip().lower()
+        if channel in (CHANNEL_BANK_TRANSFER, CHANNEL_CASH):
+            raise ValueError(f"{channel} sessions do not use Tabby checkout")
+        workflow = session.workflow
+        if amount is not None:
+            session.charge_amount = amount
+        new_reference = f"WF-{workflow.id}-{uuid.uuid4().hex[:8]}"
+        item_title = "Course payment"
+        pricing = workflow.pricing_snapshot or {}
+        lines = pricing.get("lines") if isinstance(pricing, dict) else None
+        if isinstance(lines, list) and lines:
+            first = lines[0] if isinstance(lines[0], dict) else {}
+            name = (first.get("name") or first.get("product_name") or "").strip()
+            if name:
+                item_title = name
+        try:
+            tabby_session = await self.tabby.create_checkout_session(
+                amount=session.charge_amount,
+                currency=session.currency or workflow.currency or "AED",
+                merchant_reference=new_reference,
+                customer_email=workflow.customer_email,
+                customer_name=workflow.customer_name,
+                customer_phone=workflow.customer_phone,
+                item_title=item_title,
+            )
+        except ValueError as exc:
+            msg = str(exc)
+            if "Tabby" in msg:
+                from app.services.workflow_orchestrator import WorkflowOrchestrator
+
+                orchestrator = WorkflowOrchestrator(self.db, self.settings)
+                try:
+                    await orchestrator.notify_paymob_link_failure(
+                        workflow,
+                        reason=msg,
+                        trigger="Tabby checkout",
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to notify Bitrix about Tabby error for lead %s",
+                        workflow.bitrix_lead_id,
+                    )
+            raise
+
+        session.merchant_reference = new_reference
+        session.tabby_payment_id = tabby_session.payment_id
+        session.tamara_order_id = None
+        session.paymob_session_id = tabby_session.session_id or tabby_session.payment_id
+        session.paymob_checkout_url = tabby_session.checkout_url
+        try:
+            self.db.commit()
+        except Exception as exc:
+            self.db.rollback()
+            self._reraise_if_bnpl_schema_missing(exc)
+            raise
+        self.db.refresh(session)
+        return session.paymob_checkout_url
+
+    async def refresh_tamara_checkout(
+        self,
+        session: PaymentSession,
+        *,
+        amount: Decimal | None = None,
+    ) -> str:
+        """Create a Tamara HPP session and store order id + checkout_url."""
+        channel = (getattr(session, "channel", None) or CHANNEL_ONLINE).strip().lower()
+        if channel in (CHANNEL_BANK_TRANSFER, CHANNEL_CASH):
+            raise ValueError(f"{channel} sessions do not use Tamara checkout")
+        workflow = session.workflow
+        if amount is not None:
+            session.charge_amount = amount
+        new_reference = f"WF-{workflow.id}-{uuid.uuid4().hex[:8]}"
+        item_title = "Course payment"
+        pricing = workflow.pricing_snapshot or {}
+        lines = pricing.get("lines") if isinstance(pricing, dict) else None
+        if isinstance(lines, list) and lines:
+            first = lines[0] if isinstance(lines[0], dict) else {}
+            name = (first.get("name") or first.get("product_name") or "").strip()
+            if name:
+                item_title = name
+        try:
+            tamara_session = await self.tamara.create_checkout_session(
+                amount=session.charge_amount,
+                currency=session.currency or workflow.currency or "AED",
+                merchant_reference=new_reference,
+                customer_email=workflow.customer_email,
+                customer_name=workflow.customer_name,
+                customer_phone=workflow.customer_phone,
+                item_title=item_title,
+            )
+        except ValueError as exc:
+            msg = str(exc)
+            if "Tamara" in msg:
+                from app.services.workflow_orchestrator import WorkflowOrchestrator
+
+                orchestrator = WorkflowOrchestrator(self.db, self.settings)
+                try:
+                    await orchestrator.notify_paymob_link_failure(
+                        workflow,
+                        reason=msg,
+                        trigger="Tamara checkout",
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to notify Bitrix about Tamara error for lead %s",
+                        workflow.bitrix_lead_id,
+                    )
+            raise
+
+        session.merchant_reference = new_reference
+        session.tamara_order_id = tamara_session.order_id
+        session.tabby_payment_id = None
+        session.paymob_session_id = (
+            tamara_session.checkout_id or tamara_session.order_id
+        )
+        session.paymob_checkout_url = tamara_session.checkout_url
+        try:
+            self.db.commit()
+        except Exception as exc:
+            self.db.rollback()
+            self._reraise_if_bnpl_schema_missing(exc)
+            raise
+        self.db.refresh(session)
+        return session.paymob_checkout_url
+
+    @staticmethod
+    def _reraise_if_bnpl_schema_missing(exc: Exception) -> None:
+        """Turn missing Alembic 024/025 columns into a clear operator error."""
+        text = str(exc).lower()
+        if "tabby_payment_id" in text or "tamara_order_id" in text:
+            raise ValueError(
+                "Database is missing BNPL columns (tabby_payment_id / tamara_order_id). "
+                "Deploy must run Alembic migrations 024+025: alembic upgrade head"
+            ) from exc
 
     def build_receipt_upload_url(self, token: str) -> str:
         base = self.settings.payment_frontend_base_url or self.settings.public_base_url

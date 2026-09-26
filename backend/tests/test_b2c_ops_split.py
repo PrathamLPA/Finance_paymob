@@ -1,4 +1,4 @@
-"""B2C Ops cards: one deal per course bundle (main + Lab/Exam/materials)."""
+"""B2C Ops cards: one deal per Course (+ Lab / Study Material via Associated course)."""
 
 from __future__ import annotations
 
@@ -6,46 +6,176 @@ import asyncio
 from decimal import Decimal
 
 from app.integrations.bitrix import (
+    CATALOG_ASSOCIATED_IDS_KEY,
+    CATALOG_PRODUCT_KIND_KEY,
     MockBitrixClient,
-    course_base_key,
+    PRODUCT_KIND_COURSE,
+    PRODUCT_KIND_LAB,
+    PRODUCT_KIND_STUDY,
+    PRODUCT_KIND_UNSET,
+    _product_row_name,
+    classify_product_kind,
     expand_course_bundle_units,
     expand_product_units,
     group_course_product_bundles,
+    parse_associated_product_ids,
+    parse_product_type_enum_id,
 )
 from app.integrations.factory import get_bitrix_client
 from app.models.customer_workflow import CustomerWorkflow
 from tests.conftest import SAMPLE_REGISTRANT
 
 
-def test_course_base_key_strips_lab_exam_materials():
-    assert course_base_key("CHRP") == "chrp"
-    assert course_base_key("CHRP Lab") == "chrp"
-    assert course_base_key("chrp lab") == "chrp"  # case-insensitive
-    assert course_base_key("CHRP Exam") == "chrp"
-    assert course_base_key("CHRP STUDY MATERIALS") == "chrp"
-    assert course_base_key("CHRP study material") == "chrp"
-    assert course_base_key("CHRP laboratory") == "chrp"
+def test_parse_product_type_and_associated_ids():
+    assert parse_product_type_enum_id({"value": "496"}) == "496"
+    assert parse_product_type_enum_id("494") == "494"
+    assert parse_associated_product_ids([10, "20", {"value": 30}]) == [10, 20, 30]
+    assert classify_product_kind("494") == PRODUCT_KIND_COURSE
+    assert classify_product_kind("496") == PRODUCT_KIND_LAB
+    assert classify_product_kind("498") == PRODUCT_KIND_STUDY
+    assert classify_product_kind(None) == PRODUCT_KIND_UNSET
 
 
-def test_group_chrp_bundle_is_one_course():
+def test_group_by_product_type_and_associated_course():
+    """Course + Lab/Study Material linked via Associated course → one Ops card."""
     rows = [
-        {"productId": 1, "productName": "CHRP", "price": "1000", "quantity": 1},
-        {"productId": 2, "productName": "CHRP Lab", "price": "200", "quantity": 1},
-        {"productId": 3, "productName": "CHRP Exam", "price": "150", "quantity": 1},
         {
-            "productId": 4,
+            "productId": 11,
+            "productName": "CHRP",
+            "price": "1000",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_COURSE,
+            CATALOG_ASSOCIATED_IDS_KEY: [12, 14],
+        },
+        {
+            "productId": 12,
+            "productName": "CHRP Lab",
+            "price": "200",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_LAB,
+            CATALOG_ASSOCIATED_IDS_KEY: [11],
+        },
+        {
+            "productId": 14,
             "productName": "CHRP study materials",
             "price": "50",
             "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_STUDY,
+            CATALOG_ASSOCIATED_IDS_KEY: [11],
+        },
+        {
+            "productId": 22,
+            "productName": "Course B",
+            "price": "2000",
+            "quantity": 2,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_COURSE,
+            CATALOG_ASSOCIATED_IDS_KEY: [],
         },
     ]
     bundles = group_course_product_bundles(rows)
-    assert len(bundles) == 1
-    assert bundles[0]["key"] == "chrp"
-    assert len(bundles[0]["products"]) == 4
+    assert len(bundles) == 2
+    chrp = next(b for b in bundles if b["title"] == "CHRP")
+    assert len(chrp["products"]) == 3
+    assert chrp["quantity"] == 1
+    course_b = next(b for b in bundles if b["title"] == "Course B")
+    assert course_b["quantity"] == 2
     units = expand_course_bundle_units(rows)
-    assert len(units) == 1
-    assert len(units[0]) == 4
+    assert len(units) == 3  # CHRP x1 + Course B x2
+
+
+def test_unset_product_type_is_course_anchor():
+    rows = [
+        {
+            "productId": 1,
+            "productName": "ACCA",
+            "price": "4.20",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_UNSET,
+            CATALOG_ASSOCIATED_IDS_KEY: [],
+        }
+    ]
+    bundles = group_course_product_bundles(rows)
+    assert len(bundles) == 1
+    assert bundles[0]["title"] == "ACCA"
+
+
+def test_lab_without_associated_course_is_own_card():
+    rows = [
+        {
+            "productId": 99,
+            "productName": "Orphan Lab",
+            "price": "100",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_LAB,
+            CATALOG_ASSOCIATED_IDS_KEY: [],
+        }
+    ]
+    bundles = group_course_product_bundles(rows)
+    assert len(bundles) == 1
+    assert bundles[0]["title"] == "Orphan Lab"
+
+
+def test_lab_linked_to_multiple_courses_appears_on_each_card():
+    """One Lab can list several Associated courses → copy onto each matching Ops card."""
+    rows = [
+        {
+            "productId": 11,
+            "productName": "Course A",
+            "price": "1000",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_COURSE,
+            CATALOG_ASSOCIATED_IDS_KEY: [],
+        },
+        {
+            "productId": 22,
+            "productName": "Course B",
+            "price": "2000",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_COURSE,
+            CATALOG_ASSOCIATED_IDS_KEY: [],
+        },
+        {
+            "productId": 33,
+            "productName": "Shared Lab",
+            "price": "100",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_LAB,
+            CATALOG_ASSOCIATED_IDS_KEY: [11, 22],
+        },
+    ]
+    bundles = group_course_product_bundles(rows)
+    assert len(bundles) == 2
+    for title in ("Course A", "Course B"):
+        bundle = next(b for b in bundles if b["title"] == title)
+        names = {_product_row_name(p) for p in bundle["products"]}
+        assert "Shared Lab" in names
+        assert title in names
+
+
+def test_lab_assoc_not_on_deal_becomes_separate_card():
+    """Lab associated to a course that was not purchased → own Ops card."""
+    rows = [
+        {
+            "productId": 11,
+            "productName": "Bought Course",
+            "price": "1000",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_COURSE,
+            CATALOG_ASSOCIATED_IDS_KEY: [],
+        },
+        {
+            "productId": 99,
+            "productName": "Lab For Other Course",
+            "price": "100",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: PRODUCT_KIND_LAB,
+            CATALOG_ASSOCIATED_IDS_KEY: [55],  # not on deal
+        },
+    ]
+    bundles = group_course_product_bundles(rows)
+    assert len(bundles) == 2
+    titles = {b["title"] for b in bundles}
+    assert titles == {"Bought Course", "Lab For Other Course"}
 
 
 def test_expand_product_units_by_quantity():
@@ -61,17 +191,32 @@ def test_expand_product_units_by_quantity():
     assert names.count("B") == 2
 
 
-def test_create_b2c_ops_deals_groups_related_products():
+def test_create_b2c_ops_deals_groups_via_catalog_properties():
     bitrix = MockBitrixClient()
     bitrix.settings.bitrix_b2c_pipeline_id = "42"
     bitrix.settings.bitrix_field_original_deal_id = "UF_CRM_ORIGINAL_DEAL_ID"
     bitrix.seed_lead(501, email="ops@test.com", name="Ops Student", amount=Decimal("5000"))
+    bitrix.seed_catalog_product(
+        11, name="CHRP", price=Decimal("1000"), product_type_enum="494", associated_course_ids=[12, 14]
+    )
+    bitrix.seed_catalog_product(
+        12, name="CHRP Lab", price=Decimal("200"), product_type_enum="496", associated_course_ids=[11]
+    )
+    bitrix.seed_catalog_product(
+        14,
+        name="CHRP study materials",
+        price=Decimal("50"),
+        product_type_enum="498",
+        associated_course_ids=[11],
+    )
+    bitrix.seed_catalog_product(
+        22, name="Course B", price=Decimal("2000"), product_type_enum="494"
+    )
     bitrix.seed_lead_products(
         501,
         [
             {"productId": 11, "productName": "CHRP", "price": "1000", "quantity": 1},
             {"productId": 12, "productName": "CHRP Lab", "price": "200", "quantity": 1},
-            {"productId": 13, "productName": "CHRP Exam", "price": "100", "quantity": 1},
             {
                 "productId": 14,
                 "productName": "CHRP study materials",
@@ -103,27 +248,21 @@ def test_create_b2c_ops_deals_groups_related_products():
         names = [r.get("productName") or r.get("PRODUCT_NAME") for r in rows]
         if any(n == "CHRP" for n in names):
             chrp_deal = deal_id
-            assert len(rows) == 4
-            assert set(names) == {
-                "CHRP",
-                "CHRP Lab",
-                "CHRP Exam",
-                "CHRP study materials",
-            }
-            assert deal["OPPORTUNITY"] == "1350.00"
+            assert len(rows) == 3
+            assert set(names) == {"CHRP", "CHRP Lab", "CHRP study materials"}
+            assert deal["OPPORTUNITY"] == "1250.00"
         else:
             assert len(rows) == 1
             assert names == ["Course B"]
     assert chrp_deal is not None
     titles = [bitrix._mock_deals[i]["TITLE"] for i in ids]
-    assert sum("CHRP" in t and "Lab" not in t.split("—")[-1] for t in titles) >= 1
     assert sum("Course B" in t for t in titles) == 2
 
 
 def test_create_b2c_ops_skipped_without_pipeline():
     bitrix = MockBitrixClient()
     bitrix.settings.bitrix_b2c_pipeline_id = ""
-    bitrix.seed_lead(502, email="nopipe@test.com", name="No Pipe", amount=Decimal("1000"))
+    bitrix.seed_lead(502, email="a@b.com", name="A", amount=Decimal("100"))
     sales_id = asyncio.run(bitrix.convert_lead_to_sales_deal(502, {}))
     ids = asyncio.run(
         bitrix.create_b2c_ops_deals_from_sales(
@@ -146,6 +285,19 @@ def test_first_payment_creates_b2c_ops_per_bundle(client, seed_lead, db_session)
     bitrix.settings.bitrix_b2c_pipeline_id = "99"
     bitrix.settings.bitrix_invoice_sent_trigger_url = (
         "https://bitrix.test/rest/crm.automation.trigger/?target=LEAD_{{ID}}&code=test"
+    )
+    bitrix.seed_catalog_product(
+        1, name="Python", price=Decimal("4000"), product_type_enum="494", associated_course_ids=[2]
+    )
+    bitrix.seed_catalog_product(
+        2,
+        name="Python Lab",
+        price=Decimal("500"),
+        product_type_enum="496",
+        associated_course_ids=[1],
+    )
+    bitrix.seed_catalog_product(
+        3, name="Excel", price=Decimal("3000"), product_type_enum="494"
     )
     bitrix.seed_lead_products(
         503,

@@ -14,6 +14,22 @@ class PaymobSession:
 
 
 @dataclass
+class TabbyCheckoutSession:
+    payment_id: str
+    checkout_url: str
+    status: str
+    session_id: str | None = None
+
+
+@dataclass
+class TamaraCheckoutSession:
+    order_id: str
+    checkout_url: str
+    status: str
+    checkout_id: str | None = None
+
+
+@dataclass
 class PaymentWebhookData:
     transaction_id: str
     amount: Decimal
@@ -172,6 +188,10 @@ class BitrixIntegration(Protocol):
 
     async def list_product_rows(self, *, owner_type: str, owner_id: int) -> list[dict[str, Any]]: ...
 
+    async def enrich_product_rows_with_catalog(
+        self, rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]: ...
+
     async def get_catalog_min_price(self, product_id: int) -> Decimal | None: ...
 
     async def create_estimate(
@@ -224,6 +244,10 @@ class BitrixIntegration(Protocol):
     ) -> list[dict[str, Any]]: ...
 
     async def list_b2c_ops_employees(self) -> list[dict[str, Any]]: ...
+
+    async def find_user_id_by_handling_department(
+        self, handling_dept_enum_id: int
+    ) -> int | None: ...
 
     async def send_mail(
         self,

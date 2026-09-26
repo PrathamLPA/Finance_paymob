@@ -27,16 +27,18 @@ Do **not** point Bitrix at the frontend URL.
 - `BITRIX24_WEBHOOK_URL`, `BITRIX_WEBHOOK_SECRET`
 - `BITRIX_FINANCE_GENERATE_LINK_STAGE_ID`, `BITRIX_FIELD_PAYMENT_LINK`, …
 - Paymob keys (`PAYMOB_*`)
-- `USE_MOCK_INTEGRATIONS=false` in production
+- `USE_MOCK_INTEGRATIONS=false` in production (code default is also `false`; `APP_ENV=production` forces mocks off)
+- `TAMARA_BASE_URL=https://api.tamara.co` for live Tamara (sandbox only on staging)
 
 Migrations run automatically on every deploy via `backend/start.sh` (`alembic upgrade head` before uvicorn).
+That includes BNPL columns from Alembic **024** (`tabby_payment_id`) and **025** (`tamara_order_id`) — without them Tabby/Tamara accept crashes.
 
 Verify production:
 
 ```text
 GET https://<backend>/          → API info JSON (not a web page)
 GET https://<backend>/health    → {"status":"ok"}
-GET https://<backend>/ready     → database check (must show database: ok)
+GET https://<backend>/ready     → database + schema: ok; bitrix_webhook_secret: set
 GET https://<frontend>/health   → finance-payment-frontend
 ```
 

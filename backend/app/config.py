@@ -38,7 +38,9 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://finance:finance@localhost:5432/finance_automation"
 
-    use_mock_integrations: bool = True
+    # Default off so missing Railway env never silently uses mocks.
+    # Local/tests: set USE_MOCK_INTEGRATIONS=true (see .env.example / conftest).
+    use_mock_integrations: bool = False
 
     # Bitrix24
     bitrix24_webhook_url: str = ""
@@ -77,6 +79,13 @@ class Settings(BaseSettings):
     bitrix_field_user_handling_department: str = "UF_USR_1790154777183"
     # Enum ID for "Human Resources & People Development" (CIPD / Melona = 19722).
     bitrix_handling_dept_hr_people_development_enum: str = "19722"
+    # crm.product — Product Type (Course / Lab / Study Material) + Associated course.
+    # Used to group Sales products onto one B2C Ops card (replaces name-suffix logic).
+    bitrix_product_property_type: str = "PROPERTY_400"
+    bitrix_product_property_associated_course: str = "PROPERTY_414"
+    bitrix_product_type_course_enum: str = "494"
+    bitrix_product_type_lab_enum: str = "496"
+    bitrix_product_type_study_material_enum: str = "498"
     # When true: also create Finance from the API (usually leave false).
     # Finance normally comes from Bitrix tunnel/copy.
     bitrix_create_extra_deals_on_payment: bool = False
@@ -327,6 +336,27 @@ class Settings(BaseSettings):
     paymob_base_url: str = "https://accept.paymob.com"
     paymob_checkout_base_url: str = "https://accept.paymob.com/unifiedcheckout/"
 
+    # Tabby direct API (UAE). Used when Bitrix Payment Mode is Tabby (not via Paymob).
+    # Docs: https://docs.tabby.ai/pay-in-4-custom-integration/quick-start
+    tabby_secret_key: str = ""
+    tabby_public_key: str = ""
+    tabby_merchant_code: str = ""
+    tabby_base_url: str = "https://api.tabby.ai"
+    # Custom header registered with Tabby webhooks (title + shared secret value).
+    tabby_webhook_auth_header: str = "X-Tabby-Auth"
+    tabby_webhook_auth_value: str = ""
+
+    # Tamara direct API (UAE). Used when Bitrix Payment Mode is Tamara (not via Paymob).
+    # Docs: https://docs.tamara.co/docs/direct-online-checkout
+    tamara_api_token: str = ""
+    tamara_notification_token: str = ""
+    tamara_public_key: str = ""
+    # Live by default; set api-sandbox.tamara.co only for staging/sandbox keys.
+    tamara_base_url: str = "https://api.tamara.co"
+    tamara_country_code: str = "AE"
+    tamara_payment_type: str = "PAY_BY_INSTALMENTS"
+    tamara_instalments: int = 3
+
     # Zoho Books (https://www.zoho.com/books/api/v3/oauth/)
     zoho_client_id: str = ""
     zoho_client_secret: str = ""
@@ -392,6 +422,20 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def resolve_supabase_database_url(self) -> "Settings":
         self.database_url = resolve_supabase_url(self.database_url)
+        return self
+
+    @model_validator(mode="after")
+    def enforce_production_integration_safety(self) -> "Settings":
+        """Never silently mock gateways in production, even if env is mis-set."""
+        env = (self.app_env or "").strip().lower()
+        if env in {"production", "prod"} and self.use_mock_integrations:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "APP_ENV=%s but USE_MOCK_INTEGRATIONS=true — forcing mocks off",
+                self.app_env,
+            )
+            self.use_mock_integrations = False
         return self
 
 

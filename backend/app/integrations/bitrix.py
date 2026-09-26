@@ -393,43 +393,96 @@ def build_complete_lead_autofill_fields(
     return {k: v for k, v in fields.items() if v is not None}
 
 
-# Addon suffixes stripped to find the parent course name (longest first).
-# Matching is case-insensitive. Add more suffixes later if inventory needs them.
-_COURSE_ADDON_SUFFIXES: tuple[str, ...] = (
-    "study materials",
-    "study material",
-    "exam",
-    "lab",
-    "laboratory",
-)
+# Catalog enrichment keys stamped onto deal/lead product rows before bundling.
+CATALOG_PRODUCT_KIND_KEY = "_catalog_product_kind"
+CATALOG_ASSOCIATED_IDS_KEY = "_catalog_associated_ids"
+
+PRODUCT_KIND_COURSE = "course"
+PRODUCT_KIND_LAB = "lab"
+PRODUCT_KIND_STUDY = "study_material"
+PRODUCT_KIND_UNSET = "unset"
 
 
-def _normalize_product_label(name: str) -> str:
-    text = re.sub(r"[\s_\-]+", " ", str(name or "").strip())
-    return text.casefold()
+def _product_row_id(row: dict[str, Any]) -> int | None:
+    raw = row.get("productId") if "productId" in row else row.get("PRODUCT_ID")
+    if raw in (None, "", 0, "0"):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
-def course_base_key(name: str) -> str:
-    """Parent course key: 'CHRP Lab' / 'CHRP Exam' → 'chrp'."""
-    label = _normalize_product_label(name)
-    if not label:
-        return "course"
-    for suffix in _COURSE_ADDON_SUFFIXES:
-        for sep in (" ", "-", " – ", " — "):
-            token = f"{sep}{suffix}"
-            if label.endswith(token):
-                base = label[: -len(token)].strip(" -–—")
-                return base or label
-        if label == suffix:
-            return label
-    return label
+def parse_product_type_enum_id(raw: Any) -> str | None:
+    """Extract Product Type list enum id (e.g. 494/496/498) from crm.product field."""
+    if raw in (None, "", [], {}):
+        return None
+    if isinstance(raw, dict):
+        for key in ("value", "VALUE", "id", "ID"):
+            if raw.get(key) not in (None, ""):
+                return str(raw.get(key)).strip() or None
+        return None
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            parsed = parse_product_type_enum_id(item)
+            if parsed:
+                return parsed
+        return None
+    return str(raw).strip() or None
 
 
-def is_course_addon_name(name: str) -> bool:
-    """True when the name looks like Lab / Exam / study materials for a parent course."""
-    label = _normalize_product_label(name)
-    base = course_base_key(name)
-    return bool(label) and base != label
+def parse_associated_product_ids(raw: Any) -> list[int]:
+    """Extract Associated course product ids from PROPERTY_414 (element / multi)."""
+    if raw in (None, "", [], {}):
+        return []
+    out: list[int] = []
+
+    def add(value: Any) -> None:
+        if value in (None, "", [], {}):
+            return
+        if isinstance(value, dict):
+            for key in ("value", "VALUE", "id", "ID", "PRODUCT_ID"):
+                if value.get(key) not in (None, ""):
+                    add(value.get(key))
+                    return
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                add(item)
+            return
+        try:
+            pid = int(str(value).strip())
+        except (TypeError, ValueError):
+            return
+        if pid > 0 and pid not in out:
+            out.append(pid)
+
+    add(raw)
+    return out
+
+
+def classify_product_kind(
+    type_enum_id: str | None,
+    *,
+    course_enum: str = "494",
+    lab_enum: str = "496",
+    study_enum: str = "498",
+) -> str:
+    """Map Product Type enum → course / lab / study_material / unset."""
+    eid = (type_enum_id or "").strip()
+    if not eid:
+        return PRODUCT_KIND_UNSET
+    if eid == str(course_enum).strip():
+        return PRODUCT_KIND_COURSE
+    if eid == str(lab_enum).strip():
+        return PRODUCT_KIND_LAB
+    if eid == str(study_enum).strip():
+        return PRODUCT_KIND_STUDY
+    return PRODUCT_KIND_UNSET
+
+
+def is_catalog_addon_kind(kind: str | None) -> bool:
+    return kind in (PRODUCT_KIND_LAB, PRODUCT_KIND_STUDY)
 
 
 def _product_row_qty(row: dict[str, Any]) -> int:
@@ -462,43 +515,123 @@ def expand_product_units(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def group_course_product_bundles(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group main course + Lab/Exam/materials into one bundle per parent course.
+    """Group Sales products into one Ops card per Course (+ Lab / Study Material).
 
-    Example: CHRP, CHRP Lab, CHRP Exam, CHRP study materials → one bundle.
-    Bundle quantity follows the primary (non-addon) product qty, else max qty in group.
+    Uses crm.product fields stamped on rows:
+      - Product Type (Course / Lab / Study Material / unset)
+      - Associated course (links Lab/Material ↔ Course)
+
+    Rules:
+      - Course or unset Product Type → bundle anchor (own card).
+      - Lab / Study Material → join every Associated course that is also on the deal
+        (one lab may link to multiple courses → appears on each matching Ops card).
+      - If a Lab/Material has no Associated course on the deal → own card.
+      - Course Associated course links also pull those products onto the course card.
     """
-    bundles: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
+    if not rows:
+        return []
+
+    deal_product_ids: set[int] = set()
+    row_kind: dict[int, str] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
-        name = _product_row_name(row)
-        key = course_base_key(name)
-        if key not in bundles:
-            bundles[key] = {
-                "key": key,
-                "title": name,
+        pid = _product_row_id(row)
+        if pid is None:
+            continue
+        deal_product_ids.add(pid)
+        row_kind[pid] = str(row.get(CATALOG_PRODUCT_KIND_KEY) or PRODUCT_KIND_UNSET)
+
+    def is_anchor(pid: int) -> bool:
+        return not is_catalog_addon_kind(row_kind.get(pid, PRODUCT_KIND_UNSET))
+
+    # product_id → set of bundle root ids (anchors) it belongs to on this deal
+    membership: dict[int, set[int]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        pid = _product_row_id(row)
+        if pid is None:
+            continue
+        kind = str(row.get(CATALOG_PRODUCT_KIND_KEY) or PRODUCT_KIND_UNSET)
+        assoc = [
+            int(x)
+            for x in (row.get(CATALOG_ASSOCIATED_IDS_KEY) or [])
+            if str(x).strip().isdigit() and int(x) > 0
+        ]
+        roots = membership.setdefault(pid, set())
+        if is_catalog_addon_kind(kind):
+            parents_on_deal = [p for p in assoc if p in deal_product_ids and is_anchor(p)]
+            if parents_on_deal:
+                roots.update(parents_on_deal)
+            else:
+                # No matching course on this Sales deal → separate Ops card
+                roots.add(pid)
+        else:
+            roots.add(pid)
+            for linked in assoc:
+                if linked in deal_product_ids:
+                    membership.setdefault(linked, set()).add(pid)
+
+    bundles: dict[int, dict[str, Any]] = {}
+    order: list[int] = []
+
+    def ensure_bundle(root: int, seed_row: dict[str, Any]) -> dict[str, Any]:
+        if root not in bundles:
+            bundles[root] = {
+                "key": str(root),
+                "title": _product_row_name(seed_row),
                 "products": [],
                 "primary_qty": 0,
                 "max_qty": 1,
+                "_seen_pids": set(),
             }
-            order.append(key)
-        bucket = bundles[key]
-        bucket["products"].append(dict(row))
+            order.append(root)
+        return bundles[root]
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        pid = _product_row_id(row)
+        if pid is None:
+            # Keep unnamed rows as their own card
+            root = id(row)
+            bucket = ensure_bundle(root, row)
+            bucket["products"].append(dict(row))
+            continue
+
+        roots = membership.get(pid) or {pid}
+        kind = str(row.get(CATALOG_PRODUCT_KIND_KEY) or PRODUCT_KIND_UNSET)
         qty = _product_row_qty(row)
-        bucket["max_qty"] = max(int(bucket["max_qty"]), qty)
-        if not is_course_addon_name(name):
-            bucket["primary_qty"] = max(int(bucket["primary_qty"]), qty)
-            # Prefer a non-addon name for the Ops card title.
-            bucket["title"] = name
+
+        for root in sorted(roots):
+            bucket = ensure_bundle(root, row)
+            # Avoid duplicating the same product line onto one card
+            seen = bucket["_seen_pids"]
+            if pid in seen:
+                continue
+            seen.add(pid)
+            bucket["products"].append(dict(row))
+            bucket["max_qty"] = max(int(bucket["max_qty"]), qty)
+            if not is_catalog_addon_kind(kind):
+                bucket["primary_qty"] = max(int(bucket["primary_qty"]), qty)
+                bucket["title"] = _product_row_name(row)
+
     out: list[dict[str, Any]] = []
-    for key in order:
-        bucket = bundles[key]
+    for root in order:
+        bucket = bundles[root]
+        if not any(
+            not is_catalog_addon_kind(
+                str(p.get(CATALOG_PRODUCT_KIND_KEY) or PRODUCT_KIND_UNSET)
+            )
+            for p in bucket["products"]
+        ):
+            bucket["title"] = _product_row_name(bucket["products"][0])
         qty = int(bucket["primary_qty"] or bucket["max_qty"] or 1)
         out.append(
             {
-                "key": key,
-                "title": str(bucket["title"] or key),
+                "key": str(bucket["key"]),
+                "title": str(bucket["title"] or bucket["key"]),
                 "products": list(bucket["products"]),
                 "quantity": max(1, qty),
             }
@@ -524,9 +657,9 @@ def _bundle_display_name(products: list[dict[str, Any]] | None) -> str:
     if not products:
         return "Course"
     for row in products:
-        name = _product_row_name(row)
-        if not is_course_addon_name(name):
-            return name
+        kind = str(row.get(CATALOG_PRODUCT_KIND_KEY) or PRODUCT_KIND_UNSET)
+        if not is_catalog_addon_kind(kind):
+            return _product_row_name(row)
     return _product_row_name(products[0])
 
 
@@ -1112,9 +1245,66 @@ class MockBitrixClient:
             "ASSIGNED_BY_ID": 101,
         }
 
-    def seed_catalog_product(self, product_id: int, *, name: str, price: Decimal) -> None:
+    def seed_catalog_product(
+        self,
+        product_id: int,
+        *,
+        name: str,
+        price: Decimal,
+        product_type_enum: str | int | None = None,
+        associated_course_ids: list[int] | None = None,
+    ) -> None:
         self._mock_catalog_prices[product_id] = Decimal(str(price))
         setattr(self, f"_catalog_name_{product_id}", name)
+        catalog = getattr(self, "_mock_product_catalog", None)
+        if not isinstance(catalog, dict):
+            catalog = {}
+            self._mock_product_catalog = catalog
+        type_code = (self.settings.bitrix_product_property_type or "PROPERTY_400").strip()
+        assoc_code = (
+            self.settings.bitrix_product_property_associated_course or "PROPERTY_414"
+        ).strip()
+        entry: dict[str, Any] = {"ID": product_id, "NAME": name}
+        if product_type_enum not in (None, ""):
+            entry[type_code] = {"value": str(product_type_enum)}
+        if associated_course_ids:
+            entry[assoc_code] = list(associated_course_ids)
+        catalog[int(product_id)] = entry
+
+    async def enrich_product_rows_with_catalog(
+        self, rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        catalog = getattr(self, "_mock_product_catalog", {}) or {}
+        type_code = (self.settings.bitrix_product_property_type or "PROPERTY_400").strip()
+        assoc_code = (
+            self.settings.bitrix_product_property_associated_course or "PROPERTY_414"
+        ).strip()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            enriched = dict(row)
+            if CATALOG_PRODUCT_KIND_KEY in enriched:
+                out.append(enriched)
+                continue
+            pid = _product_row_id(enriched)
+            meta = catalog.get(int(pid)) if pid is not None else None
+            if isinstance(meta, dict):
+                enum_id = parse_product_type_enum_id(meta.get(type_code))
+                enriched[CATALOG_PRODUCT_KIND_KEY] = classify_product_kind(
+                    enum_id,
+                    course_enum=self.settings.bitrix_product_type_course_enum,
+                    lab_enum=self.settings.bitrix_product_type_lab_enum,
+                    study_enum=self.settings.bitrix_product_type_study_material_enum,
+                )
+                enriched[CATALOG_ASSOCIATED_IDS_KEY] = parse_associated_product_ids(
+                    meta.get(assoc_code)
+                )
+            else:
+                enriched[CATALOG_PRODUCT_KIND_KEY] = PRODUCT_KIND_UNSET
+                enriched[CATALOG_ASSOCIATED_IDS_KEY] = []
+            out.append(enriched)
+        return out
 
     def seed_lead_products(self, lead_id: int, rows: list[dict[str, Any]]) -> None:
         self._mock_product_rows[("L", lead_id)] = [dict(row) for row in rows]
@@ -1350,6 +1540,7 @@ class MockBitrixClient:
         rows = await self.list_product_rows(owner_type="D", owner_id=sales_deal_id)
         if not rows:
             rows = await self.list_product_rows(owner_type="L", owner_id=lead_id)
+        rows = await self.enrich_product_rows_with_catalog(rows)
         units = expand_course_bundle_units(rows)
         if not units:
             units = [[]]  # one card with no products
@@ -2836,6 +3027,15 @@ class RealBitrixClient:
                 )
                 rows = []
 
+        try:
+            rows = await self.enrich_product_rows_with_catalog(rows)
+        except Exception:
+            logger.exception(
+                "Could not enrich Sales products with Product Type / Associated course "
+                "| sales=%s",
+                sales_deal_id,
+            )
+
         units = expand_course_bundle_units(rows)
         if not units:
             units = [[]]
@@ -3259,6 +3459,72 @@ class RealBitrixClient:
         if isinstance(rows, dict):
             rows = rows.get("productRows") or []
         return list(rows) if isinstance(rows, list) else []
+
+    async def enrich_product_rows_with_catalog(
+        self, rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Load Product Type + Associated course from crm.product for B2C Ops bundling."""
+        type_code = (self.settings.bitrix_product_property_type or "PROPERTY_400").strip()
+        assoc_code = (
+            self.settings.bitrix_product_property_associated_course or "PROPERTY_414"
+        ).strip()
+        cache: dict[int, dict[str, Any]] = getattr(
+            self, "_product_catalog_cache", None
+        ) or {}
+        self._product_catalog_cache = cache
+
+        needed: list[int] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if CATALOG_PRODUCT_KIND_KEY in row:
+                continue
+            pid = _product_row_id(row)
+            if pid is None or pid in cache:
+                continue
+            needed.append(pid)
+
+        for pid in needed:
+            try:
+                product = await self._call(
+                    "crm.product.get",
+                    {
+                        "id": pid,
+                    },
+                )
+            except Exception:
+                logger.exception("crm.product.get failed for product %s", pid)
+                product = {}
+            if not isinstance(product, dict):
+                product = {}
+            cache[pid] = product
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            enriched = dict(row)
+            if CATALOG_PRODUCT_KIND_KEY in enriched:
+                out.append(enriched)
+                continue
+            pid = _product_row_id(enriched)
+            meta = cache.get(int(pid)) if pid is not None else None
+            if isinstance(meta, dict) and meta:
+                enum_id = parse_product_type_enum_id(meta.get(type_code))
+                enriched[CATALOG_PRODUCT_KIND_KEY] = classify_product_kind(
+                    enum_id,
+                    course_enum=self.settings.bitrix_product_type_course_enum,
+                    lab_enum=self.settings.bitrix_product_type_lab_enum,
+                    study_enum=self.settings.bitrix_product_type_study_material_enum,
+                )
+                enriched[CATALOG_ASSOCIATED_IDS_KEY] = parse_associated_product_ids(
+                    meta.get(assoc_code)
+                )
+            else:
+                enriched[CATALOG_PRODUCT_KIND_KEY] = PRODUCT_KIND_UNSET
+                enriched[CATALOG_ASSOCIATED_IDS_KEY] = []
+            out.append(enriched)
+        return out
 
     async def get_catalog_min_price(self, product_id: int) -> Decimal | None:
         """Resolve catalog floor from the MIN_PRICE type (not retail/BASE)."""

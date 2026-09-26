@@ -40,6 +40,31 @@ async def ready(db: Session = Depends(get_db)) -> dict:
     except Exception as exc:
         checks["database"] = f"error: {exc.__class__.__name__}"
 
+    # BNPL columns from Alembic 024/025 — missing → Tabby/Tamara accept crashes.
+    try:
+        from sqlalchemy import inspect as sa_inspect
+
+        insp = sa_inspect(db.get_bind())
+        cols = {c["name"] for c in insp.get_columns("payment_sessions")}
+        required = {"tabby_payment_id", "tamara_order_id"}
+        missing = sorted(required - cols)
+        if missing:
+            checks["schema"] = (
+                f"missing payment_sessions columns {missing} — run: alembic upgrade head"
+            )
+        else:
+            checks["schema"] = "ok"
+    except Exception as exc:
+        checks["schema"] = f"error: {exc.__class__.__name__}"
+
+    env = (settings.app_env or "").strip().lower()
+    if env in {"production", "prod"} and not (settings.bitrix_webhook_secret or "").strip():
+        checks["bitrix_webhook_secret"] = "missing"
+    else:
+        checks["bitrix_webhook_secret"] = (
+            "set" if (settings.bitrix_webhook_secret or "").strip() else "unset_ok_non_prod"
+        )
+
     if settings.use_mock_integrations:
         checks["integrations"] = "mock"
     elif settings.paymob_secret_key and settings.bitrix24_webhook_url:
@@ -56,5 +81,9 @@ async def ready(db: Session = Depends(get_db)) -> dict:
     else:
         checks["zoho"] = "mock_or_unset"
 
-    ok = checks.get("database") == "ok"
+    ok = (
+        checks.get("database") == "ok"
+        and checks.get("schema") == "ok"
+        and checks.get("bitrix_webhook_secret") != "missing"
+    )
     return {"status": "ready" if ok else "degraded", "checks": checks}

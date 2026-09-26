@@ -16,6 +16,20 @@ from app.services.workflow_orchestrator import WorkflowOrchestrator
 router = APIRouter(prefix="/api/dev", tags=["dev"])
 
 
+def _require_non_production_dev_tools() -> None:
+    """Block payment-simulation helpers when APP_ENV is production."""
+    settings = get_settings()
+    env = (settings.app_env or "").strip().lower()
+    if env in ("production", "prod"):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Dev payment tools are disabled when APP_ENV=production. "
+                "Use real Paymob/Tabby/Tamara webhooks instead."
+            ),
+        )
+
+
 class SendPaymentLinkRequest(BaseModel):
     lead_id: int | None = None
     finance_deal_id: int | None = None
@@ -35,6 +49,7 @@ async def send_payment_link(
     body: SendPaymentLinkRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    _require_non_production_dev_tools()
     orchestrator = WorkflowOrchestrator(db)
 
     if body.lead_id:
@@ -86,6 +101,7 @@ async def simulate_paymob_webhook(
     body: SimulatePaymobRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    _require_non_production_dev_tools()
     if not body.token and not body.merchant_reference:
         raise HTTPException(status_code=400, detail="Provide token or merchant_reference")
 
@@ -128,6 +144,7 @@ async def process_reminders(db: Session = Depends(get_db)) -> dict[str, Any]:
 @router.post("/seed-mock-data")
 async def seed_mock_customers(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Seed mock customers with Paymob-shaped payment data for Supabase visualization."""
+    _require_non_production_dev_tools()
     return seed_mock_data(db)
 
 

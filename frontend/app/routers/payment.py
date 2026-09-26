@@ -8,8 +8,10 @@ import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from typing import Any
+
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from app.api_client import (
@@ -24,6 +26,28 @@ from app.api_client import (
 router = APIRouter(prefix="/payment", tags=["payment-ui"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
 logger = logging.getLogger("frontend.payment")
+
+
+@router.get("/status/{merchant_reference}")
+async def payment_status_lookup(merchant_reference: str) -> JSONResponse:
+    """Browser poll target: proxies backend lookup (payment_confirmed / LMS)."""
+    try:
+        data: dict[str, Any] = await lookup_payment_by_reference(merchant_reference)
+    except BackendApiError as exc:
+        return JSONResponse(
+            {"payment_confirmed": False, "detail": exc.detail},
+            status_code=exc.status_code if exc.status_code != 404 else 404,
+        )
+    return JSONResponse(
+        {
+            "merchant_reference": data.get("merchant_reference"),
+            "payment_confirmed": bool(data.get("payment_confirmed")),
+            "session_status": data.get("session_status"),
+            "show_lms": bool(data.get("show_lms")),
+            "lms_url": data.get("lms_url"),
+            "course_for": data.get("course_for"),
+        }
+    )
 
 
 def _amount(data: dict, key: str) -> Decimal:
@@ -120,6 +144,7 @@ def _form_context(
         "participants_json": json.dumps(participants or []),
         "error": error,
         "channel": (data.get("channel") or "online"),
+        "checkout_provider": (data.get("checkout_provider") or "paymob"),
         "payment_mode": payment_mode or "",
         "is_subsequent_payment": is_subsequent_payment,
     }
@@ -190,18 +215,46 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
             },
         )
 
+    provider = (params.get("provider") or "").strip().lower()
+    bnpl_status = (params.get("status") or "").strip().lower()
+
     success_raw = (params.get("success") or params.get("txn_response_code") or "").lower()
     success = success_raw in ("true", "1", "approved", "00")
     failed = success_raw in ("false", "0") or (params.get("error_occured") or "").lower() in (
         "true",
         "1",
     )
+    if provider in ("tabby", "tamara"):
+        if bnpl_status in ("failure", "failed", "reject", "rejected", "declined"):
+            failed = True
+            success = False
+        elif bnpl_status in (
+            "success",
+            "authorized",
+            "authorised",
+            "closed",
+            "approved",
+            "captured",
+        ):
+            success = True
+            failed = False
+        elif bnpl_status in ("cancel", "cancelled", "canceled", "expired"):
+            failed = True
+            success = False
 
     amount_cents = params.get("amount_cents") or params.get("amount")
     currency = (params.get("currency") or "AED").upper()
     amount_display = None
     if amount_cents and str(amount_cents).isdigit():
         amount_display = f"{int(amount_cents) / 100:.2f} {currency}"
+    elif amount_cents and provider in ("tabby", "tamara"):
+        # BNPL providers may pass decimal amount strings
+        try:
+            from decimal import Decimal, InvalidOperation
+
+            amount_display = f"{Decimal(str(amount_cents)):.2f} {currency}"
+        except (InvalidOperation, ValueError):
+            amount_display = None
 
     merchant_order_id = (
         params.get("merchant_order_id")
@@ -222,44 +275,65 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
     show_lms = False
     lms_url = None
     course_for = None
+    payment_confirmed = False
     if lookup_ref and not failed:
         try:
             lookup = await lookup_payment_by_reference(str(lookup_ref))
             course_for = lookup.get("course_for")
-            show_lms = bool(lookup.get("show_lms")) and (success or not failed)
-            lms_url = lookup.get("lms_url")
+            payment_confirmed = bool(lookup.get("payment_confirmed"))
+            # LMS only after backend confirms payment (webhook / desk), never from redirect alone.
+            show_lms = bool(lookup.get("show_lms")) and payment_confirmed
+            lms_url = lookup.get("lms_url") if show_lms else None
         except BackendApiError:
             show_lms = False
+            payment_confirmed = False
 
+    gateway_name = (
+        "Tabby"
+        if provider == "tabby"
+        else "Tamara"
+        if provider == "tamara"
+        else "Paymob"
+    )
     if failed:
         heading = "Payment not completed"
         message = (
-            "Paymob reported that this payment did not succeed. "
+            f"{gateway_name} reported that this payment did not succeed. "
             "You can close this window and try again from your payment link."
         )
         page_title = "Payment Failed"
         footnote = "No amount was recorded in our system for a failed attempt."
         variant = "failed"
+    elif payment_confirmed:
+        heading = "Payment successful"
+        message = "Your payment has been confirmed. Thank you."
+        page_title = "Payment Successful"
+        footnote = "Your sales contact will follow up if anything else is needed."
+        variant = "success"
     elif success:
         heading = "Payment submitted"
         message = (
-            "Your card payment was submitted. We are confirming it with Paymob now - "
-            "this usually takes a few seconds."
+            f"Your payment was submitted. We are confirming it with {gateway_name} now — "
+            "this usually takes a few seconds. This page will update automatically."
         )
-        page_title = "Payment Submitted"
+        page_title = "Confirming payment"
         footnote = (
-            "Confirmation appears as a comment on your Bitrix lead once the Paymob webhook arrives."
+            f"Final confirmation comes from the {gateway_name} webhook, not the redirect alone."
         )
-        variant = "success"
+        variant = "confirming"
     else:
-        heading = "Returning from Paymob"
+        heading = f"Returning from {gateway_name}"
         message = (
             "If you completed payment, we are confirming it now. "
             "If you cancelled, no charge was made."
         )
         page_title = "Payment Status"
-        footnote = "Final status comes from the Paymob webhook, not this page."
+        footnote = f"Final status comes from the {gateway_name} webhook, not this page."
         variant = "neutral"
+
+    poll_status_url = (
+        f"/payment/status/{lookup_ref}" if lookup_ref and not failed and not payment_confirmed else ""
+    )
 
     return templates.TemplateResponse(
         "thank_you.html",
@@ -274,8 +348,10 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
             "show_lms": show_lms,
             "lms_url": lms_url,
             "course_for": course_for,
-            "auto_redirect_seconds": 5 if show_lms and success else 0,
+            "auto_redirect_seconds": 5 if show_lms and payment_confirmed else 0,
             "variant": variant,
+            "poll_status_url": poll_status_url,
+            "payment_confirmed": payment_confirmed,
         },
     )
 

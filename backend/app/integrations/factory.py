@@ -4,10 +4,14 @@ from app.config import Settings, get_settings
 from app.integrations.bitrix import MockBitrixClient, RealBitrixClient
 from app.integrations.email import MockEmailClient, RealEmailClient
 from app.integrations.paymob import MockPaymobClient, RealPaymobClient
+from app.integrations.tabby import MockTabbyClient, RealTabbyClient
+from app.integrations.tamara import MockTamaraClient, RealTamaraClient
 from app.integrations.zoho import MockZohoBooksClient, RealZohoBooksClient
 
 _mock_bitrix_singleton: MockBitrixClient | None = None
 _mock_email_singleton: MockEmailClient | None = None
+_mock_tabby_singleton: MockTabbyClient | None = None
+_mock_tamara_singleton: MockTamaraClient | None = None
 
 
 def get_bitrix_client(settings: Settings | None = None):
@@ -25,6 +29,26 @@ def get_paymob_client(settings: Settings | None = None):
     if settings.use_mock_integrations or not settings.paymob_secret_key:
         return MockPaymobClient(settings)
     return RealPaymobClient(settings)
+
+
+def get_tabby_client(settings: Settings | None = None):
+    global _mock_tabby_singleton
+    settings = settings or get_settings()
+    if settings.use_mock_integrations or not settings.tabby_secret_key:
+        if _mock_tabby_singleton is None:
+            _mock_tabby_singleton = MockTabbyClient(settings)
+        return _mock_tabby_singleton
+    return RealTabbyClient(settings)
+
+
+def get_tamara_client(settings: Settings | None = None):
+    global _mock_tamara_singleton
+    settings = settings or get_settings()
+    if settings.use_mock_integrations or not settings.tamara_api_token:
+        if _mock_tamara_singleton is None:
+            _mock_tamara_singleton = MockTamaraClient(settings)
+        return _mock_tamara_singleton
+    return RealTamaraClient(settings)
 
 
 def get_zoho_client(settings: Settings | None = None):

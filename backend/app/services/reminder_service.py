@@ -400,6 +400,7 @@ class ReminderService:
             )
 
         orchestrator = WorkflowOrchestrator(self.db, self.settings)
+
         if workflow.finance_deal_id:
             try:
                 await self.bitrix.set_deal_payment_link(workflow.finance_deal_id, payment_url)

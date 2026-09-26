@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import get_settings
 from app.db.session import get_db
 from app.integrations.factory import get_bitrix_client
-from app.models.payment_session import CHANNEL_BANK_TRANSFER, PaymentSession, SESSION_TERMS_ACCEPTED
+from app.models.payment_session import (
+    CHANNEL_BANK_TRANSFER,
+    CHANNEL_CASH,
+    PaymentSession,
+    SESSION_TERMS_ACCEPTED,
+)
 from app.models.terms_acceptance import TermsAcceptance
 from app.services.bank_transfer_service import BankTransferService
 from app.services.course_seats import load_lead_courses, total_seats
@@ -45,7 +50,10 @@ async def lookup_payment_by_reference(
     merchant_reference: str,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Public thank-you helper: who the course is for + LMS link when self."""
+    """Public thank-you helper: LMS only after webhook-confirmed payment."""
+    from app.models.payment_session import SESSION_COMPLETED
+    from app.models.payment_transaction import PaymentTransaction
+
     ref = (merchant_reference or "").strip()
     if not ref:
         raise HTTPException(status_code=404, detail="Payment reference not found.")
@@ -62,10 +70,22 @@ async def lookup_payment_by_reference(
     course_for = None
     if session.terms_acceptance:
         course_for = session.terms_acceptance.course_for
-    show_lms = course_for == "self"
+
+    success_txn = db.scalar(
+        select(PaymentTransaction.id).where(
+            PaymentTransaction.payment_session_id == session.id,
+            PaymentTransaction.success.is_(True),
+            PaymentTransaction.status == "success",
+        )
+    )
+    payment_confirmed = session.status == SESSION_COMPLETED or success_txn is not None
+    # Never expose LMS until money is recorded via webhook (or desk approve).
+    show_lms = course_for == "self" and payment_confirmed
     return {
         "merchant_reference": session.merchant_reference,
         "course_for": course_for,
+        "session_status": session.status,
+        "payment_confirmed": payment_confirmed,
         "show_lms": show_lms,
         "lms_url": settings.lms_login_url if show_lms else None,
     }
@@ -137,10 +157,62 @@ async def get_payment_session(token: str, db: Session = Depends(get_db)) -> dict
 
     bitrix = get_bitrix_client(session_service.settings)
     courses = await load_lead_courses(bitrix, workflow.bitrix_lead_id)
+
+    checkout_provider = "paymob"
+    if channel == CHANNEL_BANK_TRANSFER:
+        checkout_provider = "bank_transfer"
+    elif channel == CHANNEL_CASH:
+        checkout_provider = "cash"
+    elif getattr(session, "tabby_payment_id", None):
+        checkout_provider = "tabby"
+    elif getattr(session, "tamara_order_id", None):
+        checkout_provider = "tamara"
+    else:
+        from app.services.payment_mode import (
+            payment_mode_field_for_installment,
+            resolve_is_tabby_payment_mode,
+            resolve_is_tamara_payment_mode,
+        )
+
+        number = installment_number or 1
+        snapshot = workflow.bitrix_lead_payload or {}
+        lead_dict: dict = dict(snapshot) if isinstance(snapshot, dict) else {}
+        if workflow.bitrix_lead_id:
+            try:
+                fetched = await bitrix.get_lead(workflow.bitrix_lead_id)
+                if isinstance(fetched, dict) and fetched:
+                    merged = dict(fetched)
+                    for n in (1, 2, 3, 4):
+                        field = payment_mode_field_for_installment(
+                            session_service.settings, n
+                        )
+                        if field and not merged.get(field) and lead_dict.get(field):
+                            merged[field] = lead_dict[field]
+                    lead_dict = merged
+            except Exception:
+                pass
+        if await resolve_is_tabby_payment_mode(
+            lead_dict,
+            installment_number=number,
+            settings=session_service.settings,
+            bitrix=bitrix,
+            allow_cross_installment_fallback=number <= 1,
+        ):
+            checkout_provider = "tabby"
+        elif await resolve_is_tamara_payment_mode(
+            lead_dict,
+            installment_number=number,
+            settings=session_service.settings,
+            bitrix=bitrix,
+            allow_cross_installment_fallback=number <= 1,
+        ):
+            checkout_provider = "tamara"
+
     return {
         "token": token,
         "status": session.status,
         "channel": channel,
+        "checkout_provider": checkout_provider,
         "bank_transfer": bank_transfer,
         "terms_version": context["terms_version"],
         "terms_html": context["terms_html"],

@@ -479,6 +479,7 @@
         const courses = {{ courses | tojson }};
         const totalSeats = {{ total_seats }};
         const paymentChannel = {{ (channel or 'online') | tojson }};
+        const checkoutProvider = {{ (checkout_provider or 'paymob') | tojson }};
         const isSubsequentPayment = {{ 'true' if is_subsequent_payment else 'false' }};
         const participantsInput = document.getElementById('participants-json');
         const participantsSection = document.getElementById('participants-section');
@@ -609,6 +610,14 @@
                 consentExtra = 'I understand I will upload my bank transfer receipt on the next step.';
                 buttonLabel = 'Continue to upload receipt';
                 footerHint = 'Next you will upload a clear photo or PDF of your transfer receipt.';
+            } else if (checkoutProvider === 'tabby') {
+                consentExtra = 'I understand I will be redirected to Tabby to complete payment securely.';
+                buttonLabel = 'Continue to Tabby';
+                footerHint = "You'll be redirected to Tabby's secure checkout to complete your payment.";
+            } else if (checkoutProvider === 'tamara') {
+                consentExtra = 'I understand I will be redirected to Tamara to complete payment securely.';
+                buttonLabel = 'Continue to Tamara';
+                footerHint = "You'll be redirected to Tamara's secure checkout to complete your payment.";
             } else {
                 consentExtra = 'I understand I will be redirected to Paymob to complete payment securely.';
                 buttonLabel = 'Continue to Paymob';

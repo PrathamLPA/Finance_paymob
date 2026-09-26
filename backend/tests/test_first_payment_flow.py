@@ -59,8 +59,10 @@ def test_first_payment_invoices_and_converts_to_sales_deal(client, seed_lead, db
     lookup = client.get(f"/api/payment/lookup/{merchant_reference}")
     assert lookup.status_code == 200
     assert lookup.json()["course_for"] == "self"
-    assert lookup.json()["show_lms"] is True
-    assert "learn.learnerspoint.org" in (lookup.json()["lms_url"] or "")
+    # Before webhook: no LMS — redirect alone must not unlock classroom.
+    assert lookup.json()["payment_confirmed"] is False
+    assert lookup.json()["show_lms"] is False
+    assert lookup.json()["lms_url"] is None
 
     payment = client.post(
         "/api/dev/simulate-paymob-webhook",
@@ -69,6 +71,12 @@ def test_first_payment_invoices_and_converts_to_sales_deal(client, seed_lead, db
     assert payment.status_code == 200
     data = payment.json()
     assert data["status"] == "ok"
+
+    lookup_after = client.get(f"/api/payment/lookup/{merchant_reference}")
+    assert lookup_after.status_code == 200
+    assert lookup_after.json()["payment_confirmed"] is True
+    assert lookup_after.json()["show_lms"] is True
+    assert "learn.learnerspoint.org" in (lookup_after.json()["lms_url"] or "")
     # Backend converts Lead → Sales when BITRIX_BACKEND_CONVERT_LEAD_TO_SALES=true.
     expected_sales = bitrix.MOCK_SALES_DEAL_BASE + 202
     assert data["sales_deal_id"] == expected_sales

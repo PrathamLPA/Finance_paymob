@@ -691,14 +691,23 @@ class RealPaymobClient(MockPaymobClient):
                 or int(self.settings.paymob_integration_id or 0)
             ]
             card_only = [m for m in card_only if m > 0]
-            # Fallback when any BNPL/extra integration ID is unknown to Paymob —
-            # including Tabby-only / Tamara-only (previously only multi-method lists).
+            # Fallback only for multi-method website lists (card+BNPL). Never
+            # silently swap exclusive Tabby/Tamara → card.
+            exclusive_bnpl = len(methods) == 1 and methods != card_only
             can_fallback = (
                 intention_resp.status_code == 404
                 and "integration" in detail_text.lower()
                 and card_only
                 and methods != card_only
+                and len(methods) > 1
+                and not exclusive_bnpl
             )
+            if exclusive_bnpl and intention_resp.status_code == 404:
+                raise ValueError(
+                    f"Paymob rejected exclusive payment_methods={methods}: {detail_text[:300]}. "
+                    "Fix PAYMOB_INTEGRATION_ID_TABBY / TAMARA (or use direct Tabby/Tamara APIs). "
+                    "Refusing silent card fallback."
+                )
             if can_fallback:
                 logger.warning(
                     "Paymob intention failed with methods=%s (%s): %s - "

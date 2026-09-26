@@ -153,10 +153,27 @@ def _authorize(request: Request, payload: dict[str, Any]) -> None:
 
     Business Process Outbound webhook often cannot set custom headers, so the
     Handler URL may include ``?token=<BITRIX_WEBHOOK_SECRET>``.
+
+    Empty secret is allowed only outside production (local/tests). In production
+    an empty secret rejects all Bitrix webhooks instead of skipping auth.
     """
     settings = get_settings()
-    expected = settings.bitrix_webhook_secret
+    expected = (settings.bitrix_webhook_secret or "").strip()
     if not expected:
+        env = (settings.app_env or "").strip().lower()
+        if env in {"production", "prod"}:
+            logger.error(
+                "BITRIX_WEBHOOK_SECRET is empty while APP_ENV=%s — rejecting webhook",
+                settings.app_env,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="BITRIX_WEBHOOK_SECRET is not configured",
+            )
+        logger.warning(
+            "BITRIX_WEBHOOK_SECRET empty — Bitrix webhook auth skipped (APP_ENV=%s)",
+            settings.app_env or "development",
+        )
         return
 
     auth = payload.get("auth") or {}
@@ -872,3 +889,190 @@ async def paymob_webhook(
 @router.get("/paymob")
 async def paymob_webhook_get() -> dict[str, str]:
     return {"status": "ok", "message": "Paymob webhook endpoint is active"}
+
+
+@router.post("/tabby")
+async def tabby_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Tabby payment status webhooks (authorized → capture → Bitrix/Zoho)."""
+    request_id = uuid4().hex[:12]
+    settings = get_settings()
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body) if raw_body else {}
+    except ValueError:
+        logger.warning(
+            "Tabby webhook ignored | request_id=%s reason=invalid_json",
+            request_id,
+        )
+        return {"status": "ignored", "reason": "invalid_json"}
+
+    if not isinstance(payload, dict) or not payload:
+        return {"status": "ignored", "reason": "empty_body"}
+
+    header_name = (settings.tabby_webhook_auth_header or "X-Tabby-Auth").strip()
+    auth_header = request.headers.get(header_name) or request.headers.get(
+        header_name.lower()
+    )
+
+    payment_id = str(payload.get("id") or "-")
+    status = str(payload.get("status") or "-")
+    order = payload.get("order") if isinstance(payload.get("order"), dict) else {}
+    ref = str(order.get("reference_id") or "-")
+    logger.info(
+        "Tabby webhook received | request_id=%s payment=%s status=%s ref=%s",
+        request_id,
+        payment_id,
+        status,
+        ref,
+    )
+
+    orchestrator = WorkflowOrchestrator(db)
+    try:
+        workflow = await orchestrator.handle_tabby_webhook(
+            payload, auth_header=auth_header
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Tabby webhook rejected | request_id=%s payment=%s reason=%s",
+            request_id,
+            payment_id,
+            exc,
+        )
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except LookupError as exc:
+        logger.warning(
+            "Tabby webhook session missing | request_id=%s payment=%s reason=%s",
+            request_id,
+            payment_id,
+            exc,
+        )
+        # Non-200 so Tabby retries until our session row is visible.
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception:
+        logger.exception(
+            "Tabby webhook processing failed | request_id=%s payment=%s ref=%s",
+            request_id,
+            payment_id,
+            ref,
+        )
+        raise
+
+    if workflow is None:
+        return {"status": "ignored", "reason": "no_action_or_duplicate"}
+
+    logger.info(
+        "OK Tabby payment | request_id=%s payment=%s lead_id=%s paid=%s status=%s",
+        request_id,
+        payment_id,
+        workflow.bitrix_lead_id,
+        workflow.amount_paid,
+        workflow.payment_status,
+    )
+    return {
+        "status": "processed",
+        "workflow_id": workflow.id,
+        "amount_paid": str(workflow.amount_paid),
+        "remaining_balance": str(workflow.remaining_balance),
+        "payment_status": workflow.payment_status,
+    }
+
+
+@router.get("/tabby")
+async def tabby_webhook_get() -> dict[str, str]:
+    return {"status": "ok", "message": "Tabby webhook endpoint is active"}
+
+
+@router.post("/tamara")
+async def tamara_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Tamara order status webhooks (approved → authorise → capture → Bitrix/Zoho)."""
+    request_id = uuid4().hex[:12]
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body) if raw_body else {}
+    except ValueError:
+        logger.warning(
+            "Tamara webhook ignored | request_id=%s reason=invalid_json",
+            request_id,
+        )
+        return {"status": "ignored", "reason": "invalid_json"}
+
+    if not isinstance(payload, dict) or not payload:
+        return {"status": "ignored", "reason": "empty_body"}
+
+    # Tamara sends JWT as ?tamaraToken=… and Authorization: Bearer …
+    auth_token = request.query_params.get("tamaraToken")
+    if not auth_token:
+        auth_header = request.headers.get("Authorization") or ""
+        if auth_header.lower().startswith("bearer "):
+            auth_token = auth_header[7:].strip()
+
+    order_id = str(payload.get("order_id") or "-")
+    event = str(payload.get("event_type") or "-")
+    ref = str(payload.get("order_reference_id") or "-")
+    logger.info(
+        "Tamara webhook received | request_id=%s order=%s event=%s ref=%s",
+        request_id,
+        order_id,
+        event,
+        ref,
+    )
+
+    orchestrator = WorkflowOrchestrator(db)
+    try:
+        workflow = await orchestrator.handle_tamara_webhook(
+            payload, auth_token=auth_token
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Tamara webhook rejected | request_id=%s order=%s reason=%s",
+            request_id,
+            order_id,
+            exc,
+        )
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except LookupError as exc:
+        logger.warning(
+            "Tamara webhook session missing | request_id=%s order=%s reason=%s",
+            request_id,
+            order_id,
+            exc,
+        )
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception:
+        logger.exception(
+            "Tamara webhook processing failed | request_id=%s order=%s ref=%s",
+            request_id,
+            order_id,
+            ref,
+        )
+        raise
+
+    if workflow is None:
+        return {"status": "ignored", "reason": "no_action_or_duplicate"}
+
+    logger.info(
+        "OK Tamara payment | request_id=%s order=%s lead_id=%s paid=%s status=%s",
+        request_id,
+        order_id,
+        workflow.bitrix_lead_id,
+        workflow.amount_paid,
+        workflow.payment_status,
+    )
+    return {
+        "status": "processed",
+        "workflow_id": workflow.id,
+        "amount_paid": str(workflow.amount_paid),
+        "remaining_balance": str(workflow.remaining_balance),
+        "payment_status": workflow.payment_status,
+    }
+
+
+@router.get("/tamara")
+async def tamara_webhook_get() -> dict[str, str]:
+    return {"status": "ok", "message": "Tamara webhook endpoint is active"}

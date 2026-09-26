@@ -34,12 +34,29 @@ logger = logging.getLogger(__name__)
 
 
 class TermsService:
+    # Tabby HPP expires ~20 min; reuse only while still likely valid.
+    BNPL_CHECKOUT_REUSE_MINUTES = 15
+
     def __init__(self, db: Session, settings: Settings | None = None):
         self.db = db
         self.settings = settings or get_settings()
         self.session_service = PaymentSessionService(db, self.settings)
         self.email = get_email_client(self.settings)
         self.terms_path = Path(__file__).parent.parent / "content" / "terms_and_conditions.md"
+
+    @staticmethod
+    def _bnpl_checkout_stale(session: PaymentSession) -> bool:
+        """True when terms were accepted long enough ago that Tabby/Tamara HPP may have expired."""
+        from datetime import datetime, timedelta, timezone
+
+        acceptance = getattr(session, "terms_acceptance", None)
+        accepted_at = getattr(acceptance, "accepted_at", None) if acceptance else None
+        if accepted_at is None:
+            return True
+        if accepted_at.tzinfo is None:
+            accepted_at = accepted_at.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - accepted_at.astimezone(timezone.utc)
+        return age > timedelta(minutes=TermsService.BNPL_CHECKOUT_REUSE_MINUTES)
 
     def load_terms_markdown(self) -> str:
         return self.terms_path.read_text(encoding="utf-8")
@@ -651,21 +668,84 @@ class TermsService:
             BankTransferService(self.db, self.settings).enqueue_for_session(session)
             return self.session_service.build_receipt_upload_url(session.token)
 
+        from app.services.payment_mode import (
+            resolve_is_tabby_payment_mode,
+            resolve_is_tamara_payment_mode,
+        )
+
+        is_tabby = await resolve_is_tabby_payment_mode(
+            lead if isinstance(lead, dict) else {},
+            installment_number=number,
+            settings=self.settings,
+            bitrix=bitrix,
+            allow_cross_installment_fallback=allow_fallback,
+        )
+        is_tamara = False
+        if not is_tabby:
+            is_tamara = await resolve_is_tamara_payment_mode(
+                lead if isinstance(lead, dict) else {},
+                installment_number=number,
+                settings=self.settings,
+                bitrix=bitrix,
+                allow_cross_installment_fallback=allow_fallback,
+            )
+
         try:
-            # First accept always refreshes so Paymob gets registrant details.
-            # Re-submit reuses checkout unless amount/URL require a new intention
+            # First accept always refreshes so gateway gets registrant details.
+            # Re-submit reuses checkout unless amount/URL require a new session
             # (avoids rotating merchant_reference on double-click).
-            if (
+            needs_refresh = (
                 first_accept_this_request
                 or amount != session.charge_amount
                 or not session.paymob_checkout_url
-            ):
+            )
+            # Tabby/Tamara HPP expires ~20 minutes. Reuse only a fresh checkout so we
+            # do not orphan a payment the customer already started on an older HPP.
+            if is_tabby:
+                if (
+                    needs_refresh
+                    or not getattr(session, "tabby_payment_id", None)
+                    or self._bnpl_checkout_stale(session)
+                ):
+                    return await self.session_service.refresh_tabby_checkout(
+                        session, amount=amount
+                    )
+                return session.paymob_checkout_url
+            if is_tamara:
+                if (
+                    needs_refresh
+                    or not getattr(session, "tamara_order_id", None)
+                    or self._bnpl_checkout_stale(session)
+                ):
+                    return await self.session_service.refresh_tamara_checkout(
+                        session, amount=amount
+                    )
+                return session.paymob_checkout_url
+            if needs_refresh:
                 return await self.session_service.refresh_paymob_checkout(
                     session, amount=amount
                 )
             return session.paymob_checkout_url
         except ValueError as exc:
             message = str(exc)
+            if is_tabby:
+                if "not eligible" in message.lower() or "rejected" in message.lower():
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Tabby could not approve this payment. "
+                            "Try another payment mode or contact your sales agent."
+                        ),
+                    ) from exc
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not start Tabby checkout. Please try again or ask for a new payment link.",
+                ) from exc
+            if is_tamara:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not start Tamara checkout. Please try again or ask for a new payment link.",
+                ) from exc
             if "valid email" in message.lower() or "billing_data" in message.lower():
                 raise HTTPException(
                     status_code=400,

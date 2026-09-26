@@ -14,9 +14,20 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.integrations.base import PaymentWebhookData
-from app.integrations.factory import get_bitrix_client, get_email_client, get_paymob_client
+from app.integrations.factory import (
+    get_bitrix_client,
+    get_email_client,
+    get_paymob_client,
+    get_tabby_client,
+    get_tamara_client,
+)
 from app.models.customer_workflow import CustomerWorkflow
-from app.models.payment_session import SOURCE_FINANCE_DEAL, SOURCE_LEAD, PaymentSession
+from app.models.payment_session import (
+    SESSION_COMPLETED,
+    SOURCE_FINANCE_DEAL,
+    SOURCE_LEAD,
+    PaymentSession,
+)
 from app.models.payment_transaction import PaymentTransaction
 from app.services.email_validation import invalid_email_comment, is_valid_email
 from app.services.estimate_price_gate import (
@@ -87,6 +98,8 @@ class WorkflowOrchestrator:
         self.settings = settings or get_settings()
         self.bitrix = get_bitrix_client(self.settings)
         self.paymob = get_paymob_client(self.settings)
+        self.tabby = get_tabby_client(self.settings)
+        self.tamara = get_tamara_client(self.settings)
         self.email = get_email_client(self.settings)
         self.session_service = PaymentSessionService(db, self.settings)
         self.invoice_service = InvoiceService(db, self.settings)
@@ -523,7 +536,11 @@ class WorkflowOrchestrator:
     def _apply_deal_payment_overlay(
         self, workflow: CustomerWorkflow, deal: dict
     ) -> None:
-        """Refresh totals from the live Finance deal card when those UFs are set."""
+        """Refresh totals from the live Finance deal card when those UFs are set.
+
+        Never lower ``amount_paid`` from Bitrix — a stale/empty UF would wipe
+        payments already recorded from Paymob/Tabby/Tamara/cash/bank webhooks.
+        """
         from app.integrations.bitrix import extract_amount
 
         total = extract_amount(
@@ -542,8 +559,17 @@ class WorkflowOrchestrator:
                 from decimal import Decimal
 
                 paid = Decimal(str(paid_raw).replace(",", "").split("|")[0].strip())
-                if paid >= 0:
+                if paid > workflow.amount_paid:
                     workflow.amount_paid = paid
+                elif paid < workflow.amount_paid:
+                    logger.warning(
+                        "Ignoring Bitrix amount_paid overlay (%s) below DB paid (%s) "
+                        "| workflow=%s deal=%s",
+                        paid,
+                        workflow.amount_paid,
+                        workflow.id,
+                        deal.get("ID") or deal.get("id") or "-",
+                    )
             except Exception:
                 pass
 
@@ -1039,6 +1065,19 @@ class WorkflowOrchestrator:
             workflow.customer_name = customer_name
             workflow.total_amount = total_amount
             workflow.currency = self.settings.default_currency
+            # Still pull phone from Bitrix when missing.
+            if not workflow.customer_phone:
+                try:
+                    lead_for_phone = lead_data or await self.bitrix.get_lead(lead_id)
+                    phones = (lead_for_phone or {}).get("PHONE") or []
+                    if isinstance(phones, list) and phones:
+                        workflow.customer_phone = phones[0].get("VALUE")
+                    elif isinstance(phones, str):
+                        workflow.customer_phone = phones
+                except Exception:
+                    logger.exception(
+                        "Could not load phone for lead %s during payment init", lead_id
+                    )
             self.db.commit()
             self.db.refresh(workflow)
         else:
@@ -2119,6 +2158,21 @@ class WorkflowOrchestrator:
                         "Sales deal lookup failed after Bitrix-owned convert path | lead=%s",
                         workflow.bitrix_lead_id,
                     )
+        elif (
+            not skip_deals
+            and not dev_simulate
+            and self.settings.bitrix_backend_convert_lead_to_sales
+            and not workflow.sales_deal_id
+            and workflow.first_payment_at is not None
+        ):
+            # Webhook retry: money + first_payment_at landed, but Sales convert failed earlier.
+            try:
+                await self._convert_lead_to_sales_after_first_payment(workflow)
+            except Exception:
+                logger.exception(
+                    "Lead→Sales convert retry failed for lead %s",
+                    workflow.bitrix_lead_id,
+                )
 
         # Optional Bitrix stage trigger (Deal Won robots / Finance tunnel). Safe if
         # the lead is already CONVERTED — Bitrix may no-op; payment is already done.
@@ -2262,7 +2316,64 @@ class WorkflowOrchestrator:
             return
         try:
             assignee_user_ids: list[int] | None = None
-            if self.settings.bitrix_b2c_ops_assign_from_department:
+            # Prefer course → Handiling Department among B2C - Student Support users.
+            if self.settings.bitrix_b2c_ops_assign_by_course_handling_dept:
+                try:
+                    rows = await self.bitrix.list_product_rows(
+                        owner_type="D", owner_id=sales_id
+                    )
+                except Exception:
+                    rows = []
+                if not rows:
+                    try:
+                        rows = await self.bitrix.list_product_rows(
+                            owner_type="L", owner_id=workflow.bitrix_lead_id
+                        )
+                    except Exception:
+                        rows = []
+                from app.integrations.bitrix import (
+                    _bundle_display_name,
+                    expand_course_bundle_units,
+                )
+                from app.services.b2c_ops_course_assignment import (
+                    assignees_for_course_units,
+                )
+
+                rows = await self.bitrix.enrich_product_rows_with_catalog(rows)
+                units = expand_course_bundle_units(rows) or [[]]
+                course_names = [_bundle_display_name(u) for u in units]
+                resolved = await assignees_for_course_units(
+                    self.bitrix, course_names, db=self.db
+                )
+                # Fill gaps with Sales assignee so cards still get an owner.
+                sales_deal = await self.bitrix.get_deal(sales_id)
+                fallback = sales_deal.get("ASSIGNED_BY_ID")
+                try:
+                    fallback_id = int(fallback) if fallback not in (None, "", "0") else None
+                except (TypeError, ValueError):
+                    fallback_id = None
+                assignee_user_ids = [
+                    int(uid) if uid is not None else fallback_id for uid in resolved
+                ]
+                logger.info(
+                    "B2C Ops assignees from B2C - Student Support × Handiling Department | "
+                    "lead=%s courses=%s assigned=%s",
+                    workflow.bitrix_lead_id,
+                    course_names,
+                    assignee_user_ids,
+                )
+                if not any(a not in (None, 0) for a in assignee_user_ids):
+                    assignee_user_ids = None
+                    logger.warning(
+                        "B2C Ops course Handiling Department mapping empty — "
+                        "falling back | lead=%s",
+                        workflow.bitrix_lead_id,
+                    )
+
+            if (
+                assignee_user_ids is None
+                and self.settings.bitrix_b2c_ops_assign_from_department
+            ):
                 from app.models.assignment_cursor import (
                     B2C_OPS_CURSOR_KEY,
                     claim_round_robin_ids,
@@ -2287,6 +2398,7 @@ class WorkflowOrchestrator:
                             rows = []
                     from app.integrations.bitrix import expand_course_bundle_units
 
+                    rows = await self.bitrix.enrich_product_rows_with_catalog(rows)
                     unit_count = max(1, len(expand_course_bundle_units(rows)))
                     assignee_user_ids = claim_round_robin_ids(
                         self.db,
@@ -2339,6 +2451,8 @@ class WorkflowOrchestrator:
         amount: Decimal | None = None,
         collect_method: str = "cash",
     ) -> CustomerWorkflow:
+        from sqlalchemy.exc import IntegrityError
+
         from app.models.cash_collection import (
             COLLECT_METHOD_CASH,
             COLLECT_METHOD_POS,
@@ -2348,13 +2462,19 @@ class WorkflowOrchestrator:
             CashCollection,
         )
         from app.models.staff_user import StaffUser
-        from app.services.cash_collection_service import CashCollectionService
+        from app.services.cash_collection_service import (
+            CashCollectionService,
+            course_title_from_workflow,
+        )
 
         method = (collect_method or COLLECT_METHOD_CASH).strip().lower()
         if method not in {COLLECT_METHOD_CASH, COLLECT_METHOD_POS}:
             raise ValueError("collect_method must be 'cash' or 'pos'")
 
-        row = self.db.get(CashCollection, collection_id)
+        # Lock the collection row so concurrent Collect clicks serialize.
+        row = self.db.scalar(
+            select(CashCollection).where(CashCollection.id == collection_id).with_for_update()
+        )
         if not row:
             raise ValueError("Cash collection not found")
         if row.status == STATUS_COLLECTED:
@@ -2386,7 +2506,11 @@ class WorkflowOrchestrator:
         if collect_amount > row.due_amount:
             raise ValueError(f"Cannot collect more than due amount {row.due_amount}")
 
-        workflow = self.db.get(CustomerWorkflow, row.workflow_id)
+        workflow = self.db.scalar(
+            select(CustomerWorkflow)
+            .where(CustomerWorkflow.id == row.workflow_id)
+            .with_for_update()
+        )
         if not workflow:
             raise ValueError("Workflow not found")
 
@@ -2401,7 +2525,7 @@ class WorkflowOrchestrator:
             select(PaymentTransaction).where(PaymentTransaction.transaction_id == txn_id)
         )
         if existing:
-            raise ValueError("Duplicate payment transaction")
+            raise ValueError("Already collected")
 
         workflow.amount_paid += collect_amount
         remaining = workflow.remaining_balance
@@ -2425,9 +2549,13 @@ class WorkflowOrchestrator:
         row.status = STATUS_COLLECTED
         row.collected_by_id = staff_id
         row.collected_at = datetime.now(timezone.utc)
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ValueError("Already collected") from exc
 
-        course = row.course_title or CashCollectionService.course_title_from_workflow(workflow)
+        course = row.course_title or course_title_from_workflow(workflow)
         proof_note = (
             f"Proof on file: {row.proof_original_name}"
             if row.proof_original_name
@@ -2474,6 +2602,65 @@ class WorkflowOrchestrator:
             comment_prefix=comment_prefix,
         )
 
+    async def _promote_failed_paymob_to_success(
+        self,
+        existing: PaymentTransaction,
+        data: PaymentWebhookData,
+        *,
+        dev_simulate: bool = False,
+    ) -> CustomerWorkflow | None:
+        """Upgrade a prior failed Paymob txn (same transaction_id) to a real credit.
+
+        Fail webhooks persist the Paymob id with status=failed. A later success
+        must not be treated as a duplicate — otherwise the customer never pays.
+        """
+        workflow = existing.workflow
+        if workflow is None:
+            return None
+        session = None
+        if existing.payment_session_id:
+            session = self.db.get(PaymentSession, existing.payment_session_id)
+        if session is None and data.merchant_reference:
+            session = self.db.scalar(
+                select(PaymentSession).where(
+                    PaymentSession.merchant_reference == data.merchant_reference
+                )
+            )
+
+        logger.warning(
+            "Promoting failed Paymob txn %s to success | workflow=%s",
+            data.transaction_id,
+            workflow.id,
+        )
+        # Failed path never increments amount_paid — safe to credit once here.
+        workflow.amount_paid += data.amount
+        existing.status = "success"
+        existing.success = True
+        existing.pending = False
+        existing.error_occured = False
+        existing.amount = data.amount
+        existing.currency = data.currency
+        existing.order_id = data.order_id
+        existing.remaining_balance = workflow.remaining_balance
+        existing.raw_payload = data.raw_payload
+        if session and existing.payment_session_id != session.id:
+            existing.payment_session_id = session.id
+        apply_paymob_fields(existing, data)
+        if session and session.status != SESSION_COMPLETED:
+            session.status = SESSION_COMPLETED
+            session.completed_at = datetime.now(timezone.utc)
+        self.db.flush()
+        return await self.apply_recorded_payment(
+            workflow,
+            existing,
+            amount=data.amount,
+            currency=data.currency,
+            comment_prefix="Payment successful",
+            skip_zoho=False,
+            skip_deals=False,
+            dev_simulate=dev_simulate,
+        )
+
     async def handle_paymob_webhook(
         self, data: PaymentWebhookData, *, dev_simulate: bool = False
     ) -> CustomerWorkflow | None:
@@ -2483,7 +2670,30 @@ class WorkflowOrchestrator:
             select(PaymentTransaction).where(PaymentTransaction.transaction_id == data.transaction_id)
         )
         if existing:
-            logger.info("Duplicate transaction ignored: %s", data.transaction_id)
+            logger.info("Duplicate transaction seen: %s status=%s", data.transaction_id, existing.status)
+            if (existing.status or "").lower() == "failed" or existing.success is False:
+                return await self._promote_failed_paymob_to_success(
+                    existing, data, dev_simulate=dev_simulate
+                )
+            # Money already recorded; re-run CRM/Zoho if that step failed earlier.
+            if existing.status == "success" and self._payment_side_effects_incomplete(
+                existing.workflow
+            ):
+                logger.warning(
+                    "Retrying post-payment side effects for txn %s workflow %s",
+                    data.transaction_id,
+                    existing.workflow_id,
+                )
+                return await self.apply_recorded_payment(
+                    existing.workflow,
+                    existing,
+                    amount=existing.amount,
+                    currency=existing.currency or data.currency,
+                    comment_prefix="Payment successful",
+                    skip_zoho=False,
+                    skip_deals=False,
+                    dev_simulate=dev_simulate,
+                )
             return None
 
         session = self.db.scalar(
@@ -2509,7 +2719,10 @@ class WorkflowOrchestrator:
         )
         apply_paymob_fields(transaction, data)
         self.db.add(transaction)
-        self.session_service.mark_completed(session)
+        # Do not commit here — flush only so a unique-constraint race can roll back
+        # before CRM/Zoho side effects. apply_recorded_payment commits once.
+        session.status = SESSION_COMPLETED
+        session.completed_at = datetime.now(timezone.utc)
         try:
             self.db.flush()
         except IntegrityError:
@@ -2517,6 +2730,30 @@ class WorkflowOrchestrator:
             logger.info(
                 "Duplicate transaction ignored after race: %s", data.transaction_id
             )
+            raced = self.db.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.transaction_id == data.transaction_id
+                )
+            )
+            if raced is None:
+                return None
+            if (raced.status or "").lower() == "failed" or raced.success is False:
+                return await self._promote_failed_paymob_to_success(
+                    raced, data, dev_simulate=dev_simulate
+                )
+            if raced.status == "success" and self._payment_side_effects_incomplete(
+                raced.workflow
+            ):
+                return await self.apply_recorded_payment(
+                    raced.workflow,
+                    raced,
+                    amount=raced.amount,
+                    currency=raced.currency or data.currency,
+                    comment_prefix="Payment successful",
+                    skip_zoho=False,
+                    skip_deals=False,
+                    dev_simulate=dev_simulate,
+                )
             return None
 
         return await self.apply_recorded_payment(
@@ -2529,6 +2766,29 @@ class WorkflowOrchestrator:
             skip_deals=False,
             dev_simulate=dev_simulate,
         )
+
+    def _payment_side_effects_incomplete(self, workflow: CustomerWorkflow | None) -> bool:
+        """True when money is in DB but Bitrix/Zoho first-payment work may still be missing."""
+        if workflow is None:
+            return False
+        if workflow.amount_paid <= 0:
+            return False
+        # First payment recorded in DB but first-payment Bitrix path never finished.
+        if workflow.first_payment_at is None:
+            return True
+        if (
+            self.settings.bitrix_backend_convert_lead_to_sales
+            and not workflow.sales_deal_id
+        ):
+            return True
+        zoho_live = (
+            not self.settings.use_mock_integrations
+            and bool((self.settings.zoho_refresh_token or "").strip())
+            and bool((self.settings.zoho_organization_id or "").strip())
+        )
+        if zoho_live and not (workflow.zoho_invoice_id or "").strip():
+            return True
+        return False
 
     def _payment_success_message(
         self,
@@ -2828,6 +3088,227 @@ class WorkflowOrchestrator:
         if not data.success:
             return await self.handle_failed_payment(data)
 
+        return await self.handle_paymob_webhook(data)
+
+    async def handle_tabby_webhook(
+        self, payload: dict[str, Any], *, auth_header: str | None
+    ) -> CustomerWorkflow | None:
+        """Verify Tabby webhook, capture AUTHORIZED payments, credit workflow."""
+        if not self.tabby.verify_webhook_auth(auth_header):
+            raise ValueError("Invalid Tabby webhook auth")
+
+        data = self.tabby.parse_webhook_payload(payload)
+        if not data:
+            return None
+
+        payment_id = data.transaction_id
+        status = (data.source_sub_type or "").strip().lower()
+        merchant_reference = (data.merchant_reference or "").strip()
+
+        session = None
+        if merchant_reference:
+            session = self.db.scalar(
+                select(PaymentSession).where(
+                    PaymentSession.merchant_reference == merchant_reference
+                )
+            )
+        if not session and payment_id:
+            session = self.db.scalar(
+                select(PaymentSession).where(
+                    PaymentSession.tabby_payment_id == payment_id
+                )
+            )
+        if not session:
+            # Tabby retries on non-200 — session may not be committed yet.
+            raise LookupError(
+                f"No payment session for Tabby payment {payment_id} ref={merchant_reference or '-'}"
+            )
+
+        if not data.merchant_reference:
+            data.merchant_reference = session.merchant_reference
+
+        if status in ("rejected", "expired"):
+            data.success = False
+            if data.amount <= 0:
+                data.amount = Decimal(session.charge_amount).quantize(Decimal("0.01"))
+            return await self.handle_failed_payment(data)
+
+        if status not in ("authorized", "closed"):
+            logger.info(
+                "Tabby webhook ignored status=%s payment_id=%s",
+                status or "-",
+                payment_id,
+            )
+            return None
+
+        # Idempotent: closed can arrive before/after authorized — credit once.
+        existing = self.db.scalar(
+            select(PaymentTransaction).where(
+                PaymentTransaction.transaction_id == payment_id
+            )
+        )
+        if existing:
+            logger.info("Duplicate Tabby transaction ignored: %s", payment_id)
+            return None
+
+        captures = payload.get("captures") if isinstance(payload.get("captures"), list) else []
+        # Only capture on authorized with empty captures. Never capture again on closed
+        # (payment already settled) or when a late authorized arrives after closed.
+        needs_capture = status == "authorized" and not captures
+
+        if needs_capture:
+            # Confirm server-side before capture (do not trust redirect/webhook alone).
+            try:
+                verified = await self.tabby.get_payment(payment_id)
+            except Exception:
+                logger.exception("Tabby get_payment failed payment_id=%s", payment_id)
+                raise
+            verified_status = str(verified.get("status") or "").strip().upper()
+            if verified_status == "CLOSED":
+                needs_capture = False
+            elif verified_status != "AUTHORIZED":
+                logger.info(
+                    "Tabby payment not AUTHORIZED yet payment_id=%s status=%s",
+                    payment_id,
+                    verified_status,
+                )
+                return None
+            else:
+                capture_amount = data.amount
+                if capture_amount <= 0:
+                    capture_amount = Decimal(session.charge_amount).quantize(
+                        Decimal("0.01")
+                    )
+                    data.amount = capture_amount
+                await self.tabby.capture_payment(
+                    payment_id,
+                    amount=capture_amount,
+                    reference_id=f"capture-{session.merchant_reference}",
+                )
+
+        if data.amount <= 0:
+            data.amount = Decimal(session.charge_amount).quantize(Decimal("0.01"))
+
+        data.success = True
+        return await self.handle_paymob_webhook(data)
+
+    async def handle_tamara_webhook(
+        self, payload: dict[str, Any], *, auth_token: str | None
+    ) -> CustomerWorkflow | None:
+        """Verify Tamara webhook, authorise+capture on approved, credit workflow."""
+        if not self.tamara.verify_webhook_token(auth_token):
+            raise ValueError("Invalid Tamara webhook token")
+
+        data = self.tamara.parse_webhook_payload(payload)
+        if not data:
+            return None
+
+        order_id = data.transaction_id
+        event = (data.source_sub_type or "").strip().lower()
+        merchant_reference = (data.merchant_reference or "").strip()
+
+        session = None
+        if merchant_reference:
+            session = self.db.scalar(
+                select(PaymentSession).where(
+                    PaymentSession.merchant_reference == merchant_reference
+                )
+            )
+        if not session and order_id:
+            session = self.db.scalar(
+                select(PaymentSession).where(
+                    PaymentSession.tamara_order_id == order_id
+                )
+            )
+        if not session:
+            raise LookupError(
+                f"No payment session for Tamara order {order_id} ref={merchant_reference or '-'}"
+            )
+
+        if not data.merchant_reference:
+            data.merchant_reference = session.merchant_reference
+
+        if event in (
+            "order_declined",
+            "order_canceled",
+            "order_cancelled",
+            "order_expired",
+        ):
+            data.success = False
+            if data.amount <= 0:
+                data.amount = Decimal(session.charge_amount).quantize(Decimal("0.01"))
+            return await self.handle_failed_payment(data)
+
+        if event not in (
+            "order_approved",
+            "order_authorised",
+            "order_authorized",
+            "order_captured",
+            "order_fully_captured",
+        ):
+            logger.info(
+                "Tamara webhook ignored event=%s order_id=%s",
+                event or "-",
+                order_id,
+            )
+            return None
+
+        # Already credited (idempotent)
+        existing = self.db.scalar(
+            select(PaymentTransaction).where(
+                PaymentTransaction.transaction_id == order_id
+            )
+        )
+        if existing:
+            logger.info("Duplicate Tamara transaction ignored: %s", order_id)
+            return None
+
+        item_title = "Course payment"
+        pricing = session.workflow.pricing_snapshot or {}
+        lines = pricing.get("lines") if isinstance(pricing, dict) else None
+        if isinstance(lines, list) and lines:
+            first = lines[0] if isinstance(lines[0], dict) else {}
+            name = (first.get("name") or first.get("product_name") or "").strip()
+            if name:
+                item_title = name
+
+        charge = Decimal(session.charge_amount).quantize(Decimal("0.01"))
+        currency = session.currency or session.workflow.currency or "AED"
+
+        if event == "order_approved":
+            auth = await self.tamara.authorise_order(order_id)
+            auth_status = str(auth.get("status") or "").strip().lower()
+            auto_captured = bool(auth.get("auto_captured"))
+            if not auto_captured and auth_status not in (
+                "fully_captured",
+                "partially_captured",
+            ):
+                await self.tamara.capture_order(
+                    order_id,
+                    amount=charge,
+                    currency=currency,
+                    item_title=item_title,
+                )
+        elif event in ("order_authorised", "order_authorized"):
+            # Authorised webhook: capture if not already
+            try:
+                order = await self.tamara.get_order(order_id)
+                status = str(order.get("status") or "").strip().lower()
+            except Exception:
+                status = ""
+            if status not in ("fully_captured", "partially_captured"):
+                await self.tamara.capture_order(
+                    order_id,
+                    amount=charge,
+                    currency=currency,
+                    item_title=item_title,
+                )
+        # order_captured / fully_captured: just credit
+
+        if data.amount <= 0:
+            data.amount = charge
+        data.currency = currency
+        data.success = True
         return await self.handle_paymob_webhook(data)
 
     async def simulate_payment(

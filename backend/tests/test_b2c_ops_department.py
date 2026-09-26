@@ -56,7 +56,9 @@ def test_b2c_ops_cards_assigned_round_robin_from_department(db_session):
     bitrix = MockBitrixClient()
     bitrix.settings.bitrix_b2c_pipeline_id = "42"
     bitrix.settings.bitrix_b2c_ops_department_name = "B2C - Student Support"
+    bitrix.settings.bitrix_b2c_ops_department_id = "55"
     bitrix.settings.bitrix_b2c_ops_assign_from_department = True
+    bitrix.settings.bitrix_b2c_ops_assign_by_course_handling_dept = False
     bitrix.seed_department(55, name="B2C - Student Support")
     bitrix.seed_user(601, email="a@test.com", name="A", department_ids=[55])
     bitrix.seed_user(602, email="b@test.com", name="B", department_ids=[55])

@@ -42,10 +42,14 @@ def reset_singletons():
 
     factory._mock_bitrix_singleton = None
     factory._mock_email_singleton = None
+    factory._mock_tabby_singleton = None
+    factory._mock_tamara_singleton = None
     get_settings.cache_clear()
     yield
     factory._mock_bitrix_singleton = None
     factory._mock_email_singleton = None
+    factory._mock_tabby_singleton = None
+    factory._mock_tamara_singleton = None
     get_settings.cache_clear()
 
 

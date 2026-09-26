@@ -1,4 +1,4 @@
-﻿"""Bank transfer: payment-session enqueue, receipt upload, finance approve/reject."""
+"""Bank transfer: payment-session enqueue, receipt upload, finance approve/reject."""
 
 from __future__ import annotations
 
@@ -359,7 +359,8 @@ class BankTransferService:
 
     @staticmethod
     def new_transaction_id(submission_id: int) -> str:
-        return f"BT-{submission_id}-{uuid.uuid4().hex[:12]}"
+        # Deterministic: unique key blocks double-approve even if status check races.
+        return f"BT-{submission_id}"
 
     async def approve(
         self,
@@ -369,9 +370,16 @@ class BankTransferService:
         note: str | None = None,
         amount: Decimal | None = None,
     ) -> BankTransferSubmission:
+        from sqlalchemy.exc import IntegrityError
+
         from app.services.workflow_orchestrator import WorkflowOrchestrator
 
-        row = self.db.get(BankTransferSubmission, submission_id)
+        # Lock the submission row so concurrent Approve clicks serialize.
+        row = self.db.scalar(
+            select(BankTransferSubmission)
+            .where(BankTransferSubmission.id == submission_id)
+            .with_for_update()
+        )
         if not row:
             raise ValueError("Bank transfer submission not found")
         if row.status == STATUS_APPROVED:
@@ -389,7 +397,11 @@ class BankTransferService:
         if approve_amount > row.due_amount:
             raise ValueError(f"Cannot approve more than due amount {row.due_amount}")
 
-        workflow = self.db.get(CustomerWorkflow, row.workflow_id)
+        workflow = self.db.scalar(
+            select(CustomerWorkflow)
+            .where(CustomerWorkflow.id == row.workflow_id)
+            .with_for_update()
+        )
         if not workflow:
             raise ValueError("Workflow not found")
 
@@ -398,7 +410,7 @@ class BankTransferService:
             select(PaymentTransaction).where(PaymentTransaction.transaction_id == txn_id)
         )
         if existing:
-            raise ValueError("Duplicate bank transfer transaction")
+            raise ValueError("Already approved")
 
         workflow.amount_paid += approve_amount
         remaining = workflow.remaining_balance
@@ -428,7 +440,11 @@ class BankTransferService:
                 session.status = SESSION_COMPLETED
                 session.completed_at = datetime.now(timezone.utc)
 
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ValueError("Already approved") from exc
 
         course = row.course_title or course_title_from_workflow(workflow)
         comment_prefix = (

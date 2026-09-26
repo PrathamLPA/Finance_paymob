@@ -48,11 +48,16 @@
 
     <main class="main-content thank-you-main">
         <article class="terms-card thank-you-card animate-rise">
-            <div class="thank-you-icon {% if variant == 'failed' %}is-failed{% else %}is-success{% endif %}" aria-hidden="true">
+            <div class="thank-you-icon {% if variant == 'failed' %}is-failed{% elif variant == 'confirming' or variant == 'neutral' %}is-pending{% else %}is-success{% endif %}" aria-hidden="true">
                 {% if variant == 'failed' %}
                 <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
                     <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"/>
                     <path d="M15 9l-6 6M9 9l6 6" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+                </svg>
+                {% elif variant == 'confirming' or variant == 'neutral' %}
+                <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"/>
+                    <path d="M12 7v5l3 2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
                 {% else %}
                 <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
@@ -157,6 +162,30 @@
                     window.location.href = url;
                 }
             }, 1000);
+        })();
+    </script>
+    {% endif %}
+
+    {% if poll_status_url %}
+    <script>
+        (function () {
+            var url = {{ poll_status_url | tojson }};
+            var tries = 0;
+            var maxTries = 40; // ~2 minutes at 3s
+            var timer = setInterval(function () {
+                tries += 1;
+                fetch(url, { credentials: "same-origin", headers: { "Accept": "application/json" } })
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .then(function (data) {
+                        if (data && data.payment_confirmed) {
+                            clearInterval(timer);
+                            // Reload so LMS / success UI renders from confirmed state.
+                            window.location.reload();
+                        }
+                    })
+                    .catch(function () { /* keep polling */ });
+                if (tries >= maxTries) clearInterval(timer);
+            }, 3000);
         })();
     </script>
     {% endif %}
