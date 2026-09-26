@@ -29,6 +29,7 @@ Do **not** point Bitrix at the frontend URL.
 - Paymob keys (`PAYMOB_*`)
 - `USE_MOCK_INTEGRATIONS=false` in production (code default is also `false`; `APP_ENV=production` forces mocks off)
 - `TAMARA_BASE_URL=https://api.tamara.co` for live Tamara (sandbox only on staging)
+- Bitrix-owned Lead→Sales: `BITRIX_BACKEND_CONVERT_LEAD_TO_SALES=false`, `BITRIX_BACKEND_B2C_OPS_SPLIT=true`, set `BITRIX_B2C_PIPELINE_ID`, and add a **Sales pipeline** outbound webhook (first stage) to `{PUBLIC_BASE_URL}/webhooks/bitrix24?token=…` so the API creates per-course B2C Ops cards (with payment proof / invoice). Keep Finance → Generate Payment Link outbound as today.
 
 Migrations run automatically on every deploy via `backend/start.sh` (`alembic upgrade head` before uvicorn).
 That includes BNPL columns from Alembic **024** (`tabby_payment_id`) and **025** (`tamara_order_id`) — without them Tabby/Tamara accept crashes.

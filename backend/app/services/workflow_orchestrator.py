@@ -393,12 +393,24 @@ class WorkflowOrchestrator:
         if original_sales_id and workflow.sales_deal_id != original_sales_id:
             workflow.sales_deal_id = original_sales_id
             dirty = True
-        # Stamp finance only when this deal is not already known as sales/b2c.
-        if (
+
+        sales_pipeline = str(self.settings.bitrix_sales_pipeline_id or "").strip()
+        category = str(deal.get("CATEGORY_ID") or "").strip()
+        is_sales_pipeline = bool(sales_pipeline) and category == sales_pipeline
+        if is_sales_pipeline:
+            # Bitrix-created Sales deal — never stamp as finance_deal_id.
+            if workflow.sales_deal_id != deal_id:
+                workflow.sales_deal_id = deal_id
+                dirty = True
+            if workflow.finance_deal_id == deal_id:
+                workflow.finance_deal_id = None
+                dirty = True
+        elif (
             workflow.finance_deal_id != deal_id
             and workflow.sales_deal_id != deal_id
             and workflow.b2c_deal_id != deal_id
         ):
+            # Stamp finance only when this deal is not already known as sales/b2c.
             workflow.finance_deal_id = deal_id
             dirty = True
         elif (
@@ -2297,7 +2309,101 @@ class WorkflowOrchestrator:
                 self.settings.bitrix_sales_pipeline_id or "16",
             )
 
-        # One B2C Ops card per Sales course unit (qty expands). Fail-soft.
+        await self._split_b2c_ops_for_sales(workflow, sales_id, context=context)
+
+    async def ensure_b2c_ops_from_sales_deal(self, sales_deal_id: int) -> dict[str, Any]:
+        """Bitrix-owned Lead→Sales: Sales outbound webhook creates B2C Ops cards.
+
+        Called when a deal in BITRIX_SALES_PIPELINE_ID hits /webhooks/bitrix24
+        (typically first Sales stage). Does not convert the lead.
+        """
+        if not self.settings.bitrix_backend_b2c_ops_split:
+            return {
+                "status": "ignored",
+                "reason": "b2c_ops_split_disabled",
+                "sales_deal_id": sales_deal_id,
+            }
+
+        sales = await self.bitrix.get_deal(sales_deal_id)
+        sales_pipeline = str(self.settings.bitrix_sales_pipeline_id or "16").strip()
+        category = str(sales.get("CATEGORY_ID") or "").strip()
+        if sales_pipeline and category != sales_pipeline:
+            return {
+                "status": "ignored",
+                "reason": "not_sales_pipeline",
+                "sales_deal_id": sales_deal_id,
+                "category_id": category,
+                "expected_category_id": sales_pipeline,
+            }
+
+        required_stage = (self.settings.bitrix_sales_b2c_split_stage_id or "").strip()
+        stage = str(sales.get("STAGE_ID") or "").strip()
+        if required_stage and stage != required_stage:
+            return {
+                "status": "ignored",
+                "reason": "not_sales_b2c_split_stage",
+                "sales_deal_id": sales_deal_id,
+                "stage_id": stage,
+                "expected_stage_id": required_stage,
+            }
+
+        workflow, _ = await self.resolve_workflow_for_bitrix_deal(sales_deal_id)
+        if workflow.sales_deal_id != sales_deal_id:
+            workflow.sales_deal_id = sales_deal_id
+            self.db.commit()
+            self.db.refresh(workflow)
+
+        if workflow.amount_paid <= 0 and workflow.first_payment_at is None:
+            logger.warning(
+                "B2C Ops split deferred — no payment on workflow yet | "
+                "sales=%s lead=%s",
+                sales_deal_id,
+                workflow.bitrix_lead_id,
+            )
+            return {
+                "status": "ignored",
+                "reason": "no_payment_yet",
+                "sales_deal_id": sales_deal_id,
+                "lead_id": workflow.bitrix_lead_id,
+            }
+
+        if workflow.b2c_deal_ids or workflow.b2c_deal_id:
+            return {
+                "status": "ignored",
+                "reason": "b2c_already_split",
+                "sales_deal_id": sales_deal_id,
+                "b2c_deal_ids": workflow.b2c_deal_ids or [workflow.b2c_deal_id],
+            }
+
+        context = self._student_context_from_workflow(workflow)
+        if workflow.first_payment_at:
+            context["installment_1_date"] = workflow.first_payment_at.date().isoformat()
+
+        await self._split_b2c_ops_for_sales(workflow, sales_deal_id, context=context)
+        self.db.refresh(workflow)
+        if not (workflow.b2c_deal_ids or workflow.b2c_deal_id):
+            return {
+                "status": "error",
+                "reason": "b2c_split_produced_no_deals",
+                "sales_deal_id": sales_deal_id,
+                "lead_id": workflow.bitrix_lead_id,
+            }
+        return {
+            "status": "processed",
+            "source": "sales_b2c_ops_split",
+            "sales_deal_id": sales_deal_id,
+            "lead_id": workflow.bitrix_lead_id,
+            "b2c_deal_ids": workflow.b2c_deal_ids or [workflow.b2c_deal_id],
+        }
+
+    async def _split_b2c_ops_for_sales(
+        self,
+        workflow: CustomerWorkflow,
+        sales_id: int,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        """One B2C Ops card per Sales course unit (qty expands). Fail-soft."""
         if not self.settings.bitrix_backend_b2c_ops_split:
             logger.info(
                 "Backend B2C Ops split disabled "
@@ -2314,6 +2420,8 @@ class WorkflowOrchestrator:
                 workflow.b2c_deal_ids,
             )
             return
+
+        context = context or self._student_context_from_workflow(workflow)
         try:
             assignee_user_ids: list[int] | None = None
             # Prefer course → Handiling Department among B2C - Student Support users.
@@ -2382,7 +2490,6 @@ class WorkflowOrchestrator:
                 employees = await self.bitrix.list_b2c_ops_employees()
                 pool = [int(e["id"]) for e in employees if e.get("id")]
                 if pool:
-                    # Match unit count: product rows expanded (or 1 empty card).
                     try:
                         rows = await self.bitrix.list_product_rows(
                             owner_type="D", owner_id=sales_id

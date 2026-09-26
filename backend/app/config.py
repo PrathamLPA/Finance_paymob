@@ -56,12 +56,17 @@ class Settings(BaseSettings):
     # B2C Ops pipeline Category ID — one Ops card per Sales course unit after convert.
     bitrix_b2c_pipeline_id: str = ""
     # true = backend converts Lead→Sales after first payment.
-    # false = leave convert to Bitrix "Create using source" / Deal Won robots;
-    #         backend still autofills Complete-lead and fires the invoice-sent trigger.
+    # false = Bitrix robots convert Lead→Sales; backend autofills Complete-lead +
+    #         invoice-sent trigger. For B2C course split with Bitrix-owned convert,
+    #         add Sales-pipeline outbound → /webhooks/bitrix24 (see sales_b2c_split_stage).
     bitrix_backend_convert_lead_to_sales: bool = True
-    # true = after Sales deal exists, create one B2C Ops card per course unit.
-    # Requires bitrix_b2c_pipeline_id. false = skip (Bitrix tunnel/copy can own B2C).
+    # true = create one B2C Ops card per Sales course unit.
+    # Requires bitrix_b2c_pipeline_id. Runs after backend convert OR when Sales
+    # outbound hits us (Bitrix-owned convert). false = Bitrix tunnel/copy owns B2C.
     bitrix_backend_b2c_ops_split: bool = True
+    # Sales pipeline STAGE_ID that triggers B2C Ops split via outbound webhook.
+    # Empty = any stage in BITRIX_SALES_PIPELINE_ID (use when robot is only on first stage).
+    bitrix_sales_b2c_split_stage_id: str = ""
     # Department used to resolve B2C Ops assignees (exact Bitrix department NAME).
     bitrix_b2c_ops_department_name: str = "B2C - Student Support"
     # Bitrix department ID(s) for Ops assignees (comma-separated).

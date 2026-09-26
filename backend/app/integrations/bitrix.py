@@ -2780,6 +2780,45 @@ class RealBitrixClient:
             out[deal_code] = payloads if multiple else payloads[0]
         return out
 
+    async def _file_payloads_for_b2c_from_sales_or_lead(
+        self,
+        sales: dict[str, Any],
+        lead: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Payment Proof + Invoice for new B2C cards: Sales deal files, else lead."""
+        import base64
+
+        out: dict[str, Any] = {}
+        for deal_code, multiple in (
+            (self.settings.bitrix_field_deal_payment_proof, False),
+            (self.settings.bitrix_field_deal_invoice_file, True),
+        ):
+            deal_code = (deal_code or "").strip()
+            if not deal_code:
+                continue
+            raw = sales.get(deal_code) if sales else None
+            if _is_blank(raw):
+                continue
+            payloads: list[dict[str, list[str]]] = []
+            for entry in self._iter_crm_file_entries(raw):
+                downloaded = await self._download_bitrix_file_bytes(entry)
+                if not downloaded:
+                    continue
+                filename, content = downloaded
+                payloads.append(
+                    {
+                        "fileData": [
+                            filename,
+                            base64.b64encode(content).decode("ascii"),
+                        ]
+                    }
+                )
+            if payloads:
+                out[deal_code] = payloads if multiple else payloads[0]
+        if out:
+            return out
+        return await self._file_payloads_for_deal_from_lead(lead or {})
+
     async def _propagate_sales_fields_to_cloned_deals(
         self,
         sales_deal_id: int,
@@ -3040,6 +3079,16 @@ class RealBitrixClient:
         if not units:
             units = [[]]
 
+        try:
+            lead = await self.get_lead(lead_id)
+        except Exception:
+            lead = {}
+        payment_source = lead if lead else sales
+        payment_fields = build_deal_payment_fields_from_lead(
+            self.settings, payment_source, context
+        )
+        file_fields = await self._file_payloads_for_b2c_from_sales_or_lead(sales, lead)
+
         created: list[int] = []
         base_title = str(sales.get("TITLE") or f"Sales {sales_deal_id}")
         for index, products in enumerate(units):
@@ -3064,7 +3113,9 @@ class RealBitrixClient:
             company_id = sales.get("COMPANY_ID")
             if company_id not in (None, "", "0", 0):
                 fields["COMPANY_ID"] = company_id
-            fields.update(build_deal_payment_fields_from_lead(self.settings, sales, context))
+            # Payment UFs + invoice/proof files from lead (post-payment) or Sales.
+            fields.update(payment_fields)
+            fields.update(file_fields)
             if unit_price:
                 fields["OPPORTUNITY"] = unit_price
             orig = (self.settings.bitrix_field_original_deal_id or "").strip()

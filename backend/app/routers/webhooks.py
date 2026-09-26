@@ -648,6 +648,39 @@ async def bitrix24_webhook(
         elif not deal:
             deal = {}
 
+        # Bitrix-owned Lead→Sales: Sales pipeline outbound → create B2C Ops cards.
+        sales_pipeline = str(settings.bitrix_sales_pipeline_id or "").strip()
+        deal_category = str((deal or {}).get("CATEGORY_ID") or "").strip()
+        if (
+            settings.bitrix_backend_b2c_ops_split
+            and sales_pipeline
+            and deal_category == sales_pipeline
+        ):
+            try:
+                db.commit()
+                result = await orchestrator.ensure_b2c_ops_from_sales_deal(deal_id)
+            except Exception as exc:
+                logger.exception(
+                    "Sales→B2C Ops split failed | request_id=%s deal_id=%s",
+                    request_id,
+                    deal_id,
+                )
+                return {
+                    "status": "error",
+                    "reason": str(exc),
+                    "deal_id": deal_id,
+                    "request_id": request_id,
+                }
+            logger.info(
+                "Sales→B2C Ops webhook | request_id=%s deal_id=%s status=%s reason=%s",
+                request_id,
+                deal_id,
+                result.get("status"),
+                result.get("reason") or "-",
+            )
+            result["request_id"] = request_id
+            return result
+
         if stage_id != settings.bitrix_finance_generate_link_stage_id:
             logger.debug(
                 "SKIP payment link | deal_id=%s stage=%s payload_stage=%s (need %s) | reason=wrong_stage",
