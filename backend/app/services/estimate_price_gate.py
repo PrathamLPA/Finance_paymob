@@ -218,7 +218,13 @@ def evaluate_price_gate(
         total += line_payable
         subtotal += line_subtotal
         vat_total += line_vat
-        if not line.tax_included and line.tax_rate > 0:
+        # Bitrix `price` is already the final amount (priceBrutto). taxIncluded=N
+        # still means "do not add VAT again". Only add taxValue when there is no gross.
+        if (
+            line.unit_gross is None
+            and not line.tax_included
+            and line.tax_rate > 0
+        ):
             tax_added += line_vat
 
         if line.product_id <= 0:

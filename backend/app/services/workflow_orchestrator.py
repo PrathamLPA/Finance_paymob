@@ -1350,15 +1350,19 @@ class WorkflowOrchestrator:
         product_lines: list[ProductLine] = []
         for row in lines_raw:
             catalog = row.get("catalog_min_price")
+            # selling_price on the approval payload is Bitrix final/gross (compare price).
+            gross = Decimal(str(row.get("selling_price") or "0"))
+            ex_vat = row.get("selling_price_ex_vat")
             product_lines.append(
                 ProductLine(
                     product_id=int(row.get("product_id") or 0),
                     product_name=str(row.get("product_name") or "Course"),
                     quantity=Decimal(str(row.get("quantity") or "1")),
-                    selling_price=Decimal(str(row.get("selling_price") or "0")),
+                    selling_price=Decimal(str(ex_vat if ex_vat not in (None, "") else gross)),
                     tax_rate=Decimal(str(row.get("tax_rate") or "0")),
-                    tax_included=bool(row.get("tax_included")),
+                    tax_included=True,
                     catalog_min_price=Decimal(str(catalog)) if catalog is not None else None,
+                    unit_gross=gross if gross > 0 else None,
                 )
             )
 
@@ -1411,13 +1415,9 @@ class WorkflowOrchestrator:
                 approved=True,
             )
 
+        # Prices on approval lines are already VAT-inclusive (Bitrix price/brutto).
+        # Do not send taxValue on top or the estimate/invoice becomes 4.20 → 4.41.
         tax_total = Decimal("0.00")
-        for line in product_lines:
-            if line.tax_included or line.tax_rate <= 0:
-                continue
-            qty = line.quantity if line.quantity > 0 else Decimal("1")
-            base = (line.selling_price * qty).quantize(Decimal("0.01"))
-            tax_total += (base * line.tax_rate / Decimal("100")).quantize(Decimal("0.01"))
 
         comment = (
             f"Manager-approved payment\n"
@@ -1553,15 +1553,18 @@ class WorkflowOrchestrator:
             selling = line_price_map.get(line_index) or price_map.get(product_id)
             if selling is None:
                 selling = Decimal(str(row.get("selling_price") or "0"))
+            selling = selling.quantize(Decimal("0.01"))
+            ex_vat = row.get("selling_price_ex_vat")
             lines.append(
                 ProductLine(
                     product_id=product_id,
                     product_name=str(row.get("product_name") or "Course"),
                     quantity=Decimal(str(row.get("quantity") or "1")),
-                    selling_price=selling.quantize(Decimal("0.01")),
+                    selling_price=Decimal(str(ex_vat if ex_vat not in (None, "") else selling)),
                     tax_rate=Decimal(str(row.get("tax_rate") or "0")),
-                    tax_included=bool(row.get("tax_included")),
+                    tax_included=True,
                     catalog_min_price=Decimal(str(catalog)) if catalog is not None else None,
+                    unit_gross=selling if selling > 0 else None,
                 )
             )
         return lines
