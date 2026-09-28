@@ -485,6 +485,118 @@ def is_catalog_addon_kind(kind: str | None) -> bool:
     return kind in (PRODUCT_KIND_LAB, PRODUCT_KIND_STUDY)
 
 
+def _property_code_keys(code: str) -> list[str]:
+    """crm.product uses PROPERTY_400; catalog.product uses property400."""
+    raw = (code or "").strip()
+    keys: list[str] = []
+    if raw:
+        keys.append(raw)
+    upper = raw.upper()
+    if upper.startswith("PROPERTY_"):
+        number = upper.split("_", 1)[1]
+        keys.extend([f"property{number}", f"PROPERTY_{number}"])
+    out: list[str] = []
+    for key in keys:
+        if key not in out:
+            out.append(key)
+    return out
+
+
+def catalog_property(product: dict[str, Any] | None, code: str) -> Any:
+    if not isinstance(product, dict):
+        return None
+    for key in _property_code_keys(code):
+        value = product.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def catalog_parent_id(product: dict[str, Any] | None) -> int | None:
+    if not isinstance(product, dict):
+        return None
+    raw = product.get("parentId")
+    if raw in (None, "", 0, "0"):
+        raw = product.get("PARENT_ID")
+    if isinstance(raw, dict):
+        raw = raw.get("value") or raw.get("VALUE") or raw.get("id") or raw.get("ID")
+    try:
+        pid = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def is_catalog_offer(product: dict[str, Any] | None) -> bool:
+    """Bitrix catalog type 4 is an SKU/offer. Type and Associated course live on the parent."""
+    if not isinstance(product, dict):
+        return False
+    raw = product.get("type") if "type" in product else product.get("TYPE")
+    try:
+        return int(raw) == 4
+    except (TypeError, ValueError):
+        return False
+
+
+def prefer_parent_catalog_fields(
+    child: dict[str, Any] | None,
+    parent: dict[str, Any] | None,
+    *codes: str,
+) -> dict[str, Any]:
+    """Copy Product Type / Associated course from the parent when the offer has none."""
+    merged = dict(child or {})
+    if not isinstance(parent, dict) or not parent:
+        return merged
+    child_has_all = all(catalog_property(child, code) is not None for code in codes)
+    if not is_catalog_offer(child) and child_has_all:
+        return merged
+    for code in codes:
+        if catalog_property(merged, code) is not None:
+            continue
+        value = catalog_property(parent, code)
+        if value is None:
+            continue
+        for key in _property_code_keys(code):
+            merged[key] = value
+    return merged
+
+
+def bitrix_webhook_auth_token(webhook_url: str) -> str:
+    """Incoming webhook code from .../rest/{user}/{token}/."""
+    parts = [part for part in (webhook_url or "").strip().rstrip("/").split("/") if part]
+    try:
+        index = parts.index("rest")
+    except ValueError:
+        return ""
+    if index + 2 < len(parts):
+        return parts[index + 2]
+    return ""
+
+
+def bitrix_file_url_with_auth(url: str, token: str) -> str:
+    """CRM show_file links come back with an empty auth= and otherwise return the login page."""
+    import re
+
+    cleaned = (url or "").strip()
+    secret = (token or "").strip()
+    if not cleaned or not secret:
+        return cleaned
+    if re.search(r"(?:^|[?&])auth=(?:&|$)", cleaned):
+        return re.sub(r"([?&]auth=)(?=&|$)", rf"\g<1>{secret}", cleaned, count=1)
+    if re.search(r"(?:^|[?&])auth=[^&]+", cleaned):
+        return cleaned
+    separator = "&" if "?" in cleaned else "?"
+    return f"{cleaned}{separator}auth={secret}"
+
+
+def bitrix_download_is_login_html(content: bytes, content_type: str = "") -> bool:
+    ctype = (content_type or "").lower()
+    if "text/html" in ctype:
+        return True
+    head = content[:300].lstrip().lower()
+    return head.startswith(b"<!doctype") or head.startswith(b"<html")
+
+
 def _product_row_qty(row: dict[str, Any]) -> int:
     raw_qty = row.get("quantity") if "quantity" in row else row.get("QUANTITY") or 1
     try:
@@ -3511,6 +3623,62 @@ class RealBitrixClient:
             rows = rows.get("productRows") or []
         return list(rows) if isinstance(rows, list) else []
 
+    async def _load_product_catalog_record(
+        self,
+        product_id: int,
+        *,
+        type_code: str,
+        assoc_code: str,
+    ) -> dict[str, Any]:
+        """Product Type and Associated course, including catalog offers.
+
+        Deal rows often store the SKU id. crm.product.get cannot see those offers.
+        catalog.product.get can, and the Course/Lab fields are on the parent.
+        """
+        record: dict[str, Any] = {}
+        try:
+            crm = await self._call("crm.product.get", {"id": product_id})
+            if isinstance(crm, dict) and (
+                crm.get("ID") or crm.get("id") or crm.get("NAME") or crm.get("name")
+            ):
+                record = crm
+        except Exception:
+            logger.info(
+                "crm.product.get missed product %s — reading catalog offer/parent",
+                product_id,
+            )
+
+        if not record or is_catalog_offer(record):
+            catalog_record = await self._catalog_product_by_id(product_id)
+            if catalog_record:
+                record = catalog_record
+
+        parent_id = catalog_parent_id(record)
+        if parent_id and parent_id != product_id and (
+            is_catalog_offer(record) or catalog_property(record, type_code) is None
+        ):
+            parent = await self._catalog_product_by_id(parent_id)
+            if parent:
+                record = prefer_parent_catalog_fields(
+                    record, parent, type_code, assoc_code
+                )
+        return record
+
+    async def _catalog_product_by_id(self, product_id: int) -> dict[str, Any]:
+        try:
+            payload = await self._call("catalog.product.get", {"id": product_id})
+        except Exception:
+            logger.info("catalog.product.get missed product %s", product_id)
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        product = payload.get("product")
+        if isinstance(product, dict) and product:
+            return product
+        if payload.get("id") or payload.get("ID") or payload.get("name") or payload.get("NAME"):
+            return payload
+        return {}
+
     async def enrich_product_rows_with_catalog(
         self, rows: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -3536,19 +3704,11 @@ class RealBitrixClient:
             needed.append(pid)
 
         for pid in needed:
-            try:
-                product = await self._call(
-                    "crm.product.get",
-                    {
-                        "id": pid,
-                    },
-                )
-            except Exception:
-                logger.exception("crm.product.get failed for product %s", pid)
-                product = {}
-            if not isinstance(product, dict):
-                product = {}
-            cache[pid] = product
+            cache[pid] = await self._load_product_catalog_record(
+                pid,
+                type_code=type_code,
+                assoc_code=assoc_code,
+            )
 
         out: list[dict[str, Any]] = []
         for row in rows:
@@ -3868,7 +4028,8 @@ class RealBitrixClient:
             or file_meta.get("url")
         )
 
-        # Prefer disk.file.get when we have a numeric id
+        # CRM UF ids are not Disk object ids. disk.file.get still fails for those
+        # even after the Disk scope is granted; the show_file URL is the real path.
         if file_id not in (None, "", 0, "0"):
             try:
                 disk = await self._call("disk.file.get", {"id": int(file_id)})
@@ -3881,7 +4042,7 @@ class RealBitrixClient:
                     filename = str(disk.get("NAME") or filename)
             except Exception:
                 logger.info(
-                    "disk.file.get unavailable for file id=%s — trying direct URL",
+                    "disk.file.get unavailable for CRM file id=%s — using show_file URL",
                     file_id,
                 )
 
@@ -3892,16 +4053,27 @@ class RealBitrixClient:
             # Relative CRM download path — prefix portal origin from webhook URL
             base = (self.settings.bitrix24_webhook_url or "").split("/rest/")[0].rstrip("/")
             url = f"{base}{url}"
+        url = bitrix_file_url_with_auth(
+            url,
+            bitrix_webhook_auth_token(self.settings.bitrix24_webhook_url),
+        )
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
+            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
                 content = resp.content
-            if not content:
+            if not content or bitrix_download_is_login_html(
+                content, resp.headers.get("content-type") or ""
+            ):
+                logger.warning(
+                    "Bitrix file download was a login page, not the file | id=%s name=%s",
+                    file_id,
+                    filename,
+                )
                 return None
             return filename, content
         except Exception:
-            logger.exception("Failed downloading Bitrix file url=%s", url)
+            logger.exception("Failed downloading Bitrix file id=%s", file_id)
             return None
 
     async def _reupload_lead_files_to_deal_field(

@@ -14,16 +14,82 @@ from app.integrations.bitrix import (
     PRODUCT_KIND_STUDY,
     PRODUCT_KIND_UNSET,
     _product_row_name,
+    bitrix_download_is_login_html,
+    bitrix_file_url_with_auth,
+    bitrix_webhook_auth_token,
     classify_product_kind,
     expand_course_bundle_units,
     expand_product_units,
     group_course_product_bundles,
     parse_associated_product_ids,
     parse_product_type_enum_id,
+    prefer_parent_catalog_fields,
 )
 from app.integrations.factory import get_bitrix_client
 from app.models.customer_workflow import CustomerWorkflow
 from tests.conftest import SAMPLE_REGISTRANT
+
+
+def test_catalog_offer_lab_joins_course_sku_on_the_deal():
+    """SKU rows fail crm.product.get; type and associated course are on the parent."""
+    course = prefer_parent_catalog_fields(
+        {"id": 12538, "type": 4, "parentId": {"value": "12536"}},
+        {"id": 12536, "type": 3, "property400": {"value": "494", "valueEnum": "Course"}},
+        "PROPERTY_400",
+        "PROPERTY_414",
+    )
+    lab = prefer_parent_catalog_fields(
+        {"id": 12542, "type": 4, "parentId": {"value": "12540"}},
+        {
+            "id": 12540,
+            "type": 3,
+            "property400": {"value": "496", "valueEnum": "Lab"},
+            "property414": [{"value": "12538"}, {"value": "2306"}],
+        },
+        "PROPERTY_400",
+        "PROPERTY_414",
+    )
+    rows = [
+        {
+            "productId": 12538,
+            "productName": "test",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: classify_product_kind(
+                parse_product_type_enum_id(course.get("PROPERTY_400"))
+            ),
+            CATALOG_ASSOCIATED_IDS_KEY: parse_associated_product_ids(
+                course.get("PROPERTY_414")
+            ),
+        },
+        {
+            "productId": 12542,
+            "productName": "test Lab",
+            "quantity": 1,
+            CATALOG_PRODUCT_KIND_KEY: classify_product_kind(
+                parse_product_type_enum_id(lab.get("PROPERTY_400"))
+            ),
+            CATALOG_ASSOCIATED_IDS_KEY: parse_associated_product_ids(
+                lab.get("PROPERTY_414")
+            ),
+        },
+    ]
+    bundles = group_course_product_bundles(rows)
+    assert len(bundles) == 1
+    assert bundles[0]["title"] == "test"
+    assert {row["productId"] for row in bundles[0]["products"]} == {12538, 12542}
+
+
+def test_crm_file_download_rejects_login_html_and_adds_webhook_auth():
+    webhook = "https://learnerspoint.bitrix24.com/rest/161836/webhook-token/"
+    assert bitrix_webhook_auth_token(webhook) == "webhook-token"
+    url = (
+        "/bitrix/components/bitrix/crm.deal.show/show_file.php"
+        "?fileId=8408920&ownerTypeId=2&ownerId=154988&auth="
+    )
+    authed = bitrix_file_url_with_auth(url, bitrix_webhook_auth_token(webhook))
+    assert "auth=webhook-token" in authed
+    assert bitrix_download_is_login_html(b"<!DOCTYPE html><html>login</html>", "")
+    assert not bitrix_download_is_login_html(b"%PDF-1.4", "application/pdf")
 
 
 def test_parse_product_type_and_associated_ids():
