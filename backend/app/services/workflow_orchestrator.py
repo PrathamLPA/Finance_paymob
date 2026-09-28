@@ -2314,6 +2314,43 @@ class WorkflowOrchestrator:
 
         await self._split_b2c_ops_for_sales(workflow, sales_id, context=context)
 
+    async def _b2c_ids_for_sales_deal(self, sales_deal_id: int) -> list[int] | None:
+        """Cards already created for this Sales deal. None means the lookup failed."""
+        try:
+            found = await self.bitrix.list_b2c_ops_deal_ids_for_sales(sales_deal_id)
+        except Exception:
+            logger.exception(
+                "Could not list B2C Ops cards for sales deal %s", sales_deal_id
+            )
+            return None
+        return [int(deal_id) for deal_id in found if int(deal_id) > 0]
+
+    def _remember_b2c_deal_ids(
+        self, workflow: CustomerWorkflow, new_ids: list[int]
+    ) -> None:
+        """Keep every B2C card for this lead, including cards from earlier Sales deals."""
+        ordered: list[int] = []
+        seen: set[int] = set()
+        raw_existing = list(workflow.b2c_deal_ids or [])
+        if workflow.b2c_deal_id:
+            raw_existing.insert(0, workflow.b2c_deal_id)
+        for raw in [*raw_existing, *new_ids]:
+            try:
+                deal_id = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if deal_id <= 0 or deal_id in seen:
+                continue
+            seen.add(deal_id)
+            ordered.append(deal_id)
+        if not ordered:
+            return
+        workflow.b2c_deal_ids = ordered
+        if not workflow.b2c_deal_id:
+            workflow.b2c_deal_id = ordered[0]
+        self.db.commit()
+        self.db.refresh(workflow)
+
     async def ensure_b2c_ops_from_sales_deal(self, sales_deal_id: int) -> dict[str, Any]:
         """Bitrix-owned Lead→Sales: Sales outbound webhook creates B2C Ops cards.
 
@@ -2370,12 +2407,21 @@ class WorkflowOrchestrator:
                 "lead_id": workflow.bitrix_lead_id,
             }
 
-        if workflow.b2c_deal_ids or workflow.b2c_deal_id:
+        existing_for_sales = await self._b2c_ids_for_sales_deal(sales_deal_id)
+        if existing_for_sales is None:
+            return {
+                "status": "ignored",
+                "reason": "b2c_lookup_failed",
+                "sales_deal_id": sales_deal_id,
+                "lead_id": workflow.bitrix_lead_id,
+            }
+        if existing_for_sales:
+            self._remember_b2c_deal_ids(workflow, existing_for_sales)
             return {
                 "status": "ignored",
                 "reason": "b2c_already_split",
                 "sales_deal_id": sales_deal_id,
-                "b2c_deal_ids": workflow.b2c_deal_ids or [workflow.b2c_deal_id],
+                "b2c_deal_ids": existing_for_sales,
             }
 
         context = self._student_context_from_workflow(workflow)
@@ -2415,12 +2461,21 @@ class WorkflowOrchestrator:
                 sales_id,
             )
             return
-        if workflow.b2c_deal_ids or workflow.b2c_deal_id:
+        existing_for_sales = await self._b2c_ids_for_sales_deal(sales_id)
+        if existing_for_sales:
             logger.info(
-                "Skip B2C Ops split | lead=%s already has b2c_deal_id=%s ids=%s",
+                "Skip B2C Ops split | lead=%s sales=%s already has cards=%s",
                 workflow.bitrix_lead_id,
-                workflow.b2c_deal_id,
-                workflow.b2c_deal_ids,
+                sales_id,
+                existing_for_sales,
+            )
+            self._remember_b2c_deal_ids(workflow, existing_for_sales)
+            return
+        if existing_for_sales is None:
+            logger.warning(
+                "Skip B2C Ops split | could not check existing cards for sales=%s lead=%s",
+                sales_id,
+                workflow.bitrix_lead_id,
             )
             return
 
@@ -2536,10 +2591,7 @@ class WorkflowOrchestrator:
                 assignee_user_ids=assignee_user_ids,
             )
             if b2c_ids:
-                workflow.b2c_deal_ids = b2c_ids
-                workflow.b2c_deal_id = b2c_ids[0]
-                self.db.commit()
-                self.db.refresh(workflow)
+                self._remember_b2c_deal_ids(workflow, b2c_ids)
                 logger.info(
                     "OK B2C Ops split | lead_id=%s sales_deal_id=%s b2c_deal_ids=%s",
                     workflow.bitrix_lead_id,

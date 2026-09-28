@@ -124,5 +124,39 @@ def test_sales_pipeline_webhook_splits_b2c_when_convert_disabled(
     assert again.status_code == 200
     assert again.json()["status"] == "ignored"
     assert again.json()["reason"] == "b2c_already_split"
+    db_session.refresh(workflow)
+    first_cards = list(workflow.b2c_deal_ids or [])
+
+    # A later Sales deal for the same lead gets its own B2C cards.
+    second_sales_id = 700002
+    bitrix._mock_deals[second_sales_id] = {
+        "ID": second_sales_id,
+        "LEAD_ID": lead_id,
+        "TITLE": f"Sales again - lead {lead_id}",
+        "CATEGORY_ID": "16",
+        "STAGE_ID": "C16:NEW",
+        "OPPORTUNITY": "5000",
+        "CURRENCY_ID": "AED",
+        "ASSIGNED_BY_ID": 1,
+    }
+    bitrix._mock_product_rows[("D", second_sales_id)] = [
+        {"productId": 71, "productName": "Python", "price": "3000", "quantity": 1},
+        {"productId": 72, "productName": "Excel", "price": "2000", "quantity": 1},
+    ]
+    second = client.post(
+        "/webhooks/bitrix24",
+        data={
+            "event": "ONCRMDEALUPDATE",
+            "data[FIELDS][ID]": str(second_sales_id),
+        },
+    )
+    assert second.status_code == 200
+    second_body = second.json()
+    assert second_body["status"] == "processed"
+    db_session.refresh(workflow)
+    assert workflow.sales_deal_id == second_sales_id
+    assert workflow.b2c_deal_ids is not None
+    assert len(workflow.b2c_deal_ids) == len(first_cards) + 2
+    assert set(first_cards).issubset(set(workflow.b2c_deal_ids))
 
     get_settings.cache_clear()

@@ -1702,6 +1702,23 @@ class MockBitrixClient:
         )
         return created
 
+    async def list_b2c_ops_deal_ids_for_sales(self, sales_deal_id: int) -> list[int]:
+        """B2C Ops cards already created for this Sales deal (not for the lead)."""
+        orig = (self.settings.bitrix_field_original_deal_id or "").strip()
+        pipeline = (self.settings.bitrix_b2c_pipeline_id or "").strip()
+        if not orig:
+            return []
+        found: list[int] = []
+        for deal_id, deal in self._mock_deals.items():
+            if not isinstance(deal, dict):
+                continue
+            if pipeline and str(deal.get("CATEGORY_ID") or "") != pipeline:
+                continue
+            if str(deal.get(orig) or "") != str(sales_deal_id):
+                continue
+            found.append(int(deal_id))
+        return found
+
     async def attach_invoice_reference(self, deal_id: int, invoice: InvoiceReference) -> None:
         deal = await self.get_deal(deal_id)
         deal[self.settings.bitrix_field_invoice_reference] = invoice.invoice_number
@@ -3253,6 +3270,33 @@ class RealBitrixClient:
             pipeline,
         )
         return created
+
+    async def list_b2c_ops_deal_ids_for_sales(self, sales_deal_id: int) -> list[int]:
+        """B2C Ops cards whose Original deal field is this Sales deal."""
+        orig = (self.settings.bitrix_field_original_deal_id or "").strip()
+        pipeline = (self.settings.bitrix_b2c_pipeline_id or "").strip()
+        if not orig or not pipeline or sales_deal_id <= 0:
+            return []
+        result = await self._call(
+            "crm.deal.list",
+            {
+                "filter": {orig: sales_deal_id, "CATEGORY_ID": pipeline},
+                "select": ["ID", "CATEGORY_ID", orig],
+            },
+        )
+        raw = self._scalar(result)
+        rows = raw if isinstance(raw, list) else []
+        found: list[int] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                deal_id = int(row.get("ID") or row.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if deal_id > 0 and deal_id not in found:
+                found.append(deal_id)
+        return found
 
     async def _set_deal_product_rows(
         self, deal_id: int, rows: list[dict[str, Any]]
