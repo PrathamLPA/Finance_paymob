@@ -17,6 +17,9 @@ from app.integrations.bitrix import (
     bitrix_download_is_login_html,
     bitrix_file_url_with_auth,
     bitrix_webhook_auth_token,
+    crm_show_file_ref,
+    uf_code_to_item_field,
+    url_machine_for_file,
     classify_product_kind,
     expand_course_bundle_units,
     expand_product_units,
@@ -77,6 +80,22 @@ def test_catalog_offer_lab_joins_course_sku_on_the_deal():
     assert len(bundles) == 1
     assert bundles[0]["title"] == "test"
     assert {row["productId"] for row in bundles[0]["products"]} == {12538, 12542}
+
+
+def test_crm_show_file_uses_item_machine_url():
+    ref = crm_show_file_ref(
+        "/bitrix/components/bitrix/crm.deal.show/show_file.php"
+        "?auth=&ownerId=155062&fieldName=UF_CRM_69D39E301706D&fileId=8409606"
+    )
+    assert ref is not None
+    assert ref["entity_type_id"] == 2
+    assert ref["owner_id"] == 155062
+    assert uf_code_to_item_field(ref["field_name"]) == "ufCrm_69D39E301706D"
+    machine = url_machine_for_file(
+        {"id": 8409606, "urlMachine": "https://example.test/file"},
+        8409606,
+    )
+    assert machine == "https://example.test/file"
 
 
 def test_crm_file_download_rejects_login_html_and_adds_webhook_auth():

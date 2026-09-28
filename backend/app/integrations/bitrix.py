@@ -597,6 +597,68 @@ def bitrix_download_is_login_html(content: bytes, content_type: str = "") -> boo
     return head.startswith(b"<!doctype") or head.startswith(b"<html")
 
 
+def crm_show_file_ref(url: str) -> dict[str, Any] | None:
+    """Parse owner, field, and file id from a CRM show_file.php link."""
+    from urllib.parse import parse_qs, urlparse
+
+    cleaned = (url or "").strip()
+    if not cleaned or "show_file.php" not in cleaned.lower():
+        return None
+    parsed = urlparse(cleaned)
+    path = parsed.path.lower()
+    if "crm.deal.show" in path:
+        entity_type_id = 2
+    elif "crm.lead.show" in path:
+        entity_type_id = 1
+    else:
+        return None
+    query = parse_qs(parsed.query, keep_blank_values=True)
+
+    def one(key: str) -> str:
+        values = query.get(key) or []
+        return str(values[0]).strip() if values else ""
+
+    owner = one("ownerId")
+    field_name = one("fieldName")
+    file_id = one("fileId")
+    if not owner.isdigit() or not field_name or not file_id.isdigit():
+        return None
+    return {
+        "entity_type_id": entity_type_id,
+        "owner_id": int(owner),
+        "field_name": field_name,
+        "file_id": int(file_id),
+    }
+
+
+def uf_code_to_item_field(code: str) -> str:
+    """UF_CRM_69D39E301706D → ufCrm_69D39E301706D (crm.item.get key)."""
+    raw = (code or "").strip()
+    upper = raw.upper()
+    if upper.startswith("UF_CRM_"):
+        return "ufCrm_" + raw.split("_", 2)[-1]
+    return raw
+
+
+def url_machine_for_file(value: Any, file_id: int) -> str | None:
+    items = value if isinstance(value, list) else [value]
+    fallback = ""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        machine = str(item.get("urlMachine") or "").strip()
+        if not machine:
+            continue
+        try:
+            item_id = int(item.get("id") or 0)
+        except (TypeError, ValueError):
+            item_id = 0
+        if item_id == int(file_id):
+            return machine
+        fallback = fallback or machine
+    return fallback or None
+
+
 def _product_row_qty(row: dict[str, Any]) -> int:
     raw_qty = row.get("quantity") if "quantity" in row else row.get("QUANTITY") or 1
     try:
@@ -4056,10 +4118,28 @@ class RealBitrixClient:
             return [item for item in raw if isinstance(item, dict)]
         return []
 
+    async def _machine_url_for_crm_file(self, show_url: str, file_id: Any) -> str | None:
+        """crm.item.get urlMachine works with the incoming webhook. show_file.php does not."""
+        ref = crm_show_file_ref(show_url)
+        if not ref:
+            return None
+        try:
+            wanted = int(file_id or ref["file_id"])
+        except (TypeError, ValueError):
+            wanted = int(ref["file_id"])
+        payload = await self._call(
+            "crm.item.get",
+            {"entityTypeId": ref["entity_type_id"], "id": ref["owner_id"]},
+        )
+        item = payload.get("item") if isinstance(payload, dict) else None
+        if not isinstance(item, dict):
+            return None
+        return url_machine_for_file(item.get(uf_code_to_item_field(ref["field_name"])), wanted)
+
     async def _download_bitrix_file_bytes(
         self, file_meta: dict[str, Any]
     ) -> tuple[str, bytes] | None:
-        """Download a CRM UF file via disk.file.get DOWNLOAD_URL or absolute show/download URL."""
+        """Download a CRM UF file. Prefer crm.item urlMachine over show_file.php."""
         file_id = file_meta.get("id") or file_meta.get("ID") or file_meta.get("fileId")
         filename = (
             str(file_meta.get("name") or file_meta.get("FILE_NAME") or "").strip()
@@ -4070,7 +4150,26 @@ class RealBitrixClient:
             or file_meta.get("DOWNLOAD_URL")
             or file_meta.get("showUrl")
             or file_meta.get("url")
+            or file_meta.get("urlMachine")
         )
+
+        if download_url and (
+            "show_file.php" in str(download_url).lower() or file_meta.get("urlMachine")
+        ):
+            machine_url = str(file_meta.get("urlMachine") or "").strip()
+            if not machine_url and "show_file.php" in str(download_url).lower():
+                try:
+                    machine_url = await self._machine_url_for_crm_file(str(download_url), file_id) or ""
+                except Exception:
+                    logger.info(
+                        "crm.item.get file link missed for file id=%s",
+                        file_id,
+                    )
+                    machine_url = ""
+            if machine_url:
+                downloaded = await self._http_get_bitrix_file(machine_url, filename, file_id)
+                if downloaded:
+                    return downloaded
 
         # CRM UF ids are not Disk object ids. disk.file.get still fails for those
         # even after the Disk scope is granted; the show_file URL is the real path.
@@ -4101,6 +4200,11 @@ class RealBitrixClient:
             url,
             bitrix_webhook_auth_token(self.settings.bitrix24_webhook_url),
         )
+        return await self._http_get_bitrix_file(url, filename, file_id)
+
+    async def _http_get_bitrix_file(
+        self, url: str, filename: str, file_id: Any
+    ) -> tuple[str, bytes] | None:
         try:
             async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
                 resp = await client.get(url)
@@ -4115,6 +4219,16 @@ class RealBitrixClient:
                     filename,
                 )
                 return None
+            if filename.startswith("file-") and "." not in filename:
+                ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                extension = {
+                    "application/pdf": ".pdf",
+                    "image/jpeg": ".jpg",
+                    "image/png": ".png",
+                    "image/webp": ".webp",
+                }.get(ctype, "")
+                if extension:
+                    filename = f"{filename}{extension}"
             return filename, content
         except Exception:
             logger.exception("Failed downloading Bitrix file id=%s", file_id)
