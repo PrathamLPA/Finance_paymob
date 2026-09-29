@@ -4,10 +4,13 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
+import httpx
+import jwt
 import pytest
 
 from app.config import Settings
-from app.integrations.tamara import MockTamaraClient
+from app.integrations.factory import get_tamara_client
+from app.integrations.tamara import MockTamaraClient, RealTamaraClient, _describe_error
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import CHANNEL_ONLINE, SESSION_COMPLETED, PaymentSession
 from app.services.payment_mode import is_tamara_payment_mode
@@ -37,6 +40,15 @@ def _settings(**kwargs) -> Settings:
     )
     base.update(kwargs)
     return Settings(**base)
+
+
+def _tamara_jwt(secret: str) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {"iat": now, "exp": now + timedelta(minutes=5), "iss": "Tamara"},
+        secret,
+        algorithm="HS256",
+    )
 
 
 def _expires() -> datetime:
@@ -190,7 +202,7 @@ async def test_tamara_webhook_approved_authorises_captures_credits(db_session):
         ),
     ):
         result = await orch.handle_tamara_webhook(
-            payload, auth_token="notif-secret"
+            payload, auth_token=_tamara_jwt("notif-secret")
         )
 
     assert result is not None
@@ -202,15 +214,49 @@ async def test_tamara_webhook_approved_authorises_captures_credits(db_session):
     assert session.status == SESSION_COMPLETED
 
 
-def test_mock_tamara_verify_token():
+def test_tamara_verify_token_requires_signed_jwt():
     client = MockTamaraClient(
         _settings(
             tamara_notification_token="secret",
             use_mock_integrations=False,
         )
     )
-    assert client.verify_webhook_token("secret")
-    assert not client.verify_webhook_token("nope")
+    assert client.verify_webhook_token(_tamara_jwt("secret"))
+    # Raw secret and JWTs signed with another key are rejected.
+    assert not client.verify_webhook_token("secret")
+    assert not client.verify_webhook_token(_tamara_jwt("other-secret"))
+    assert not client.verify_webhook_token(None)
+
+
+def test_factory_does_not_mock_tamara_without_token():
+    client = get_tamara_client(_settings(use_mock_integrations=False))
+    assert isinstance(client, RealTamaraClient)
+
+
+@pytest.mark.asyncio
+async def test_real_tamara_without_token_fails_loudly():
+    client = RealTamaraClient(_settings(use_mock_integrations=False))
+    with pytest.raises(ValueError, match="TAMARA_API_TOKEN is empty"):
+        await client.create_checkout_session(
+            amount=Decimal("100.00"),
+            currency="AED",
+            merchant_reference="WF-1-abc",
+            customer_email="customer@learnerspoint.org",
+            customer_name="Tamara User",
+        )
+
+
+def test_describe_error_explains_payment_type_unsupported():
+    response = httpx.Response(
+        400,
+        json={
+            "message": "Payment type not supported",
+            "errors": [{"error_code": "payment_type_unsupported"}],
+        },
+    )
+    msg = _describe_error("checkout", response)
+    assert "payment_type_unsupported" in msg
+    assert "Partner Care" in msg
 
 
 @pytest.mark.asyncio

@@ -441,6 +441,13 @@ class Settings(BaseSettings):
                 self.app_env,
             )
             self.use_mock_integrations = False
+        if env in {"production", "prod"} and not (self.tamara_api_token or "").strip():
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "APP_ENV=%s but TAMARA_API_TOKEN is empty — Tamara checkouts will fail",
+                self.app_env,
+            )
         return self
 
 

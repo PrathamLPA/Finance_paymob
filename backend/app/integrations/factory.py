@@ -44,7 +44,9 @@ def get_tabby_client(settings: Settings | None = None):
 def get_tamara_client(settings: Settings | None = None):
     global _mock_tamara_singleton
     settings = settings or get_settings()
-    if settings.use_mock_integrations or not settings.tamara_api_token:
+    # Mock only when explicitly requested. A missing token must fail loudly in
+    # RealTamaraClient, never fall back to a fake "success" checkout.
+    if settings.use_mock_integrations:
         if _mock_tamara_singleton is None:
             _mock_tamara_singleton = MockTamaraClient(settings)
         return _mock_tamara_singleton

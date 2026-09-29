@@ -125,12 +125,11 @@ class MockTamaraClient:
             return True
         if not expected or not token:
             return False
-        # Accept raw token match (some setups) or JWT signed with notification token.
-        if token.strip() == expected:
-            return True
+        # Tamara sends tamaraToken as an HS256 JWT signed with the notification
+        # token; a raw secret match is not accepted.
         try:
             jwt.decode(
-                token,
+                token.strip(),
                 expected,
                 algorithms=["HS256"],
                 options={"verify_aud": False},
@@ -191,7 +190,58 @@ class MockTamaraClient:
         )
 
 
+_ERROR_HINTS = {
+    "payment_type_unsupported": (
+        "Tamara has no payment product enabled for this country/currency/"
+        "payment type/instalments/amount. Ask Tamara Partner Care to enable "
+        "UAE AED products and confirm TAMARA_PAYMENT_TYPE, TAMARA_INSTALMENTS "
+        "and the min/max order limits."
+    ),
+    "not_supported_country_currency": (
+        "Tamara does not support this country/currency combination for the "
+        "merchant account. Check TAMARA_COUNTRY_CODE and the order currency."
+    ),
+}
+
+
+def _error_codes(response: httpx.Response) -> list[str]:
+    try:
+        body = response.json()
+    except ValueError:
+        return []
+    if not isinstance(body, dict):
+        return []
+    codes = []
+    for err in body.get("errors") or []:
+        if isinstance(err, dict) and err.get("error_code"):
+            codes.append(str(err["error_code"]).strip().lower())
+    return codes
+
+
+def _describe_error(action: str, response: httpx.Response) -> str:
+    """Human-readable Tamara error with a hint for known error codes."""
+    body = response.text[:800]
+    if response.status_code == 401:
+        return (
+            f"Tamara {action} failed (401): API token rejected. Check that "
+            "TAMARA_API_TOKEN matches TAMARA_BASE_URL (sandbox vs live). "
+            f"Body: {body}"
+        )
+    for code in _error_codes(response):
+        hint = _ERROR_HINTS.get(code)
+        if hint:
+            return f"Tamara {action} failed ({response.status_code}, {code}): {hint}"
+    return f"Tamara {action} failed ({response.status_code}): {body}"
+
+
 class RealTamaraClient(MockTamaraClient):
+    def _require_configured(self) -> None:
+        if not (self.settings.tamara_api_token or "").strip():
+            raise ValueError(
+                "Tamara is not configured: TAMARA_API_TOKEN is empty. "
+                "Generate an API token in the Tamara Partners Portal."
+            )
+
     def _auth_headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.settings.tamara_api_token}",
@@ -212,16 +262,7 @@ class RealTamaraClient(MockTamaraClient):
         customer_phone: str | None = None,
         item_title: str = "Course payment",
     ) -> TamaraCheckoutSession:
-        if not self.settings.tamara_api_token or self.settings.use_mock_integrations:
-            return await super().create_checkout_session(
-                amount=amount,
-                currency=currency,
-                merchant_reference=merchant_reference,
-                customer_email=customer_email,
-                customer_name=customer_name,
-                customer_phone=customer_phone,
-                item_title=item_title,
-            )
+        self._require_configured()
 
         first, last = _split_name(customer_name)
         email = (customer_email or "").strip()
@@ -311,15 +352,12 @@ class RealTamaraClient(MockTamaraClient):
             )
 
         if response.status_code >= 400:
-            body = response.text[:800]
             logger.error(
                 "Tamara checkout failed status=%s body=%s",
                 response.status_code,
-                body,
+                response.text[:800],
             )
-            raise ValueError(
-                f"Tamara checkout failed ({response.status_code}): {body}"
-            )
+            raise ValueError(_describe_error("checkout", response))
 
         data = response.json()
         order_id = str(data.get("order_id") or "").strip()
@@ -345,20 +383,16 @@ class RealTamaraClient(MockTamaraClient):
         )
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
-        if not self.settings.tamara_api_token or self.settings.use_mock_integrations:
-            return await super().get_order(order_id)
+        self._require_configured()
         url = f"{self._base()}/orders/{order_id}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=self._auth_headers())
         if response.status_code >= 400:
-            raise ValueError(
-                f"Tamara get order failed ({response.status_code}): {response.text[:500]}"
-            )
+            raise ValueError(_describe_error("get order", response))
         return response.json()
 
     async def authorise_order(self, order_id: str) -> dict[str, Any]:
-        if not self.settings.tamara_api_token or self.settings.use_mock_integrations:
-            return await super().authorise_order(order_id)
+        self._require_configured()
         url = f"{self._base()}/orders/{order_id}/authorise"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, headers=self._auth_headers())
@@ -373,9 +407,7 @@ class RealTamaraClient(MockTamaraClient):
                     "Tamara authorise already done order_id=%s: %s", order_id, text
                 )
                 return await self.get_order(order_id)
-            raise ValueError(
-                f"Tamara authorise failed ({response.status_code}): {text}"
-            )
+            raise ValueError(_describe_error("authorise", response))
         return response.json()
 
     async def capture_order(
@@ -386,13 +418,7 @@ class RealTamaraClient(MockTamaraClient):
         currency: str,
         item_title: str = "Course payment",
     ) -> dict[str, Any]:
-        if not self.settings.tamara_api_token or self.settings.use_mock_integrations:
-            return await super().capture_order(
-                order_id,
-                amount=amount,
-                currency=currency,
-                item_title=item_title,
-            )
+        self._require_configured()
         cur = (currency or "AED").upper()
         amt = Decimal(amount).quantize(Decimal("0.01"))
         title = (item_title or "Course payment")[:255]
@@ -435,7 +461,5 @@ class RealTamaraClient(MockTamaraClient):
                     "Tamara capture already done order_id=%s: %s", order_id, text
                 )
                 return await self.get_order(order_id)
-            raise ValueError(
-                f"Tamara capture failed ({response.status_code}): {text}"
-            )
+            raise ValueError(_describe_error("capture", response))
         return response.json()
