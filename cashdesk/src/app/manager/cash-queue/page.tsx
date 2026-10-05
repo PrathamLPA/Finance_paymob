@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
-import { api } from "@/lib/api";
+import { API_BASE, api, getToken } from "@/lib/api";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
@@ -28,6 +28,10 @@ type Collection = {
   amount_paid: string;
   remaining_balance: string;
   collect_method?: string | null;
+  has_proof?: boolean;
+  proof_url?: string | null;
+  proof_original_name?: string | null;
+  proof_content_type?: string | null;
 };
 
 function statusVariant(status: string) {
@@ -55,6 +59,9 @@ function CashQueueDetailModal({
 }) {
   const titleId = useId();
   const [mounted, setMounted] = useState(false);
+  const [proofUrl, setProofUrl] = useState<string | null>(null);
+  const [proofError, setProofError] = useState("");
+  const isPdf = row.proof_content_type === "application/pdf";
 
   useEffect(() => {
     setMounted(true);
@@ -74,6 +81,34 @@ function CashQueueDetailModal({
       document.removeEventListener("keydown", onKey);
     };
   }, [onClose]);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+    setProofUrl(null);
+    setProofError("");
+    if (!row.has_proof || !row.proof_url) return;
+    const token = getToken();
+    fetch(`${API_BASE}${row.proof_url}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: "include",
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Could not load collection photo");
+        const blob = await res.blob();
+        if (cancelled) return;
+        if (blob.type === "application/pdf" || isPdf) return;
+        objectUrl = URL.createObjectURL(blob);
+        setProofUrl(objectUrl);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setProofError(err.message || "Could not load collection photo");
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [row.has_proof, row.proof_url, row.id, isPdf]);
 
   if (!mounted) return null;
 
@@ -147,6 +182,41 @@ function CashQueueDetailModal({
                 }
               />
             </dl>
+          </section>
+
+          <section className="txn-modal-panel">
+            <h3 className="text-sm font-semibold text-stone-900">Collection photo</h3>
+            <p className="mt-1 text-sm leading-relaxed text-stone-600">
+              Photo or receipt uploaded when cash or POS was recorded.
+            </p>
+            {row.has_proof ? (
+              <div className="mt-3">
+                {isPdf ? (
+                  <a
+                    className="text-sm font-medium text-teal-800 underline"
+                    href={`${API_BASE}${row.proof_url}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open PDF
+                    {row.proof_original_name ? ` (${row.proof_original_name})` : ""}
+                  </a>
+                ) : proofUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={proofUrl}
+                    alt="Collection proof"
+                    className="max-h-80 w-full rounded-lg border border-stone-200 object-contain bg-white"
+                  />
+                ) : proofError ? (
+                  <p className="text-sm text-red-700">{proofError}</p>
+                ) : (
+                  <p className="text-sm text-stone-500">Loading photo…</p>
+                )}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-stone-500">No photo uploaded yet.</p>
+            )}
           </section>
 
           <section className="txn-modal-panel">

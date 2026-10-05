@@ -248,18 +248,22 @@ class BankTransferService:
                 "application/pdf": ".pdf",
             }.get(ctype, ".bin")
         safe_name = f"{row.id}_{uuid.uuid4().hex[:12]}{ext}"
-        dest = self._proof_dir() / safe_name
-        dest.write_bytes(data)
+        from app.services.proof_storage import (
+            delete_proof,
+            person_folder_name,
+            store_proof,
+        )
 
-        if row.proof_path:
-            try:
-                old = Path(row.proof_path)
-                if old.is_file() and old.resolve().parent == self._proof_dir().resolve():
-                    old.unlink(missing_ok=True)
-            except OSError:
-                logger.exception("Could not remove old bank transfer proof %s", row.proof_path)
-
-        row.proof_path = str(dest)
+        stored = store_proof(
+            self.settings,
+            local_dir=self._proof_dir(),
+            filename=safe_name,
+            person_folder=person_folder_name(row.bitrix_lead_id, row.customer_name),
+            content_type=ctype,
+            data=data,
+        )
+        delete_proof(self.settings, row.proof_path, local_dir=self._proof_dir())
+        row.proof_path = stored
         row.proof_content_type = ctype
         row.proof_original_name = (filename or safe_name)[:255]
         row.status = STATUS_PENDING_REVIEW
@@ -281,12 +285,11 @@ class BankTransferService:
     def read_proof_bytes(self, row: BankTransferSubmission) -> tuple[bytes, str, str]:
         if not row.proof_path:
             raise ValueError("No proof uploaded")
-        path = Path(row.proof_path)
-        if not path.is_file():
-            raise ValueError("Proof file missing on disk")
-        data = path.read_bytes()
+        from app.services.proof_storage import read_proof
+
+        data = read_proof(self.settings, row.proof_path)
         ctype = row.proof_content_type or "application/octet-stream"
-        name = row.proof_original_name or path.name
+        name = row.proof_original_name or Path(row.proof_path).name
         return data, ctype, name
 
     async def notify_proof_submitted(self, row: BankTransferSubmission) -> None:

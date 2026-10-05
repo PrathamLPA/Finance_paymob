@@ -1,9 +1,11 @@
 """Development and testing helper endpoints."""
 
+import html
 from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -277,6 +279,121 @@ async def zoho_oauth_callback(
         "state": state,
         "next": "POST /api/dev/zoho/exchange-code with JSON {\"code\": \"...\"}",
     }
+
+
+def _google_drive_client():
+    from app.integrations.google_drive import GoogleDriveClient
+
+    return GoogleDriveClient(get_settings())
+
+
+@router.get("/google-drive/status")
+async def google_drive_status() -> dict[str, Any]:
+    """Whether proof photos will be saved in Google Drive, and which account."""
+    from app.integrations.google_drive import GoogleDriveError
+
+    settings = get_settings()
+    client = _google_drive_client()
+    result: dict[str, Any] = {
+        "configured": client.configured,
+        "has_client_id": bool((settings.google_drive_client_id or "").strip()),
+        "has_client_secret": bool((settings.google_drive_client_secret or "").strip()),
+        "has_refresh_token": bool((settings.google_drive_refresh_token or "").strip()),
+        "redirect_uri": "",
+        "account_email": "",
+    }
+    try:
+        result["redirect_uri"] = client.redirect_uri()
+    except GoogleDriveError as exc:
+        result["redirect_error"] = str(exc)
+    if not client.configured:
+        result["message"] = (
+            "Set GOOGLE_DRIVE_CLIENT_ID and GOOGLE_DRIVE_CLIENT_SECRET, redeploy, "
+            "open /api/dev/google-drive/connect, then set GOOGLE_DRIVE_REFRESH_TOKEN."
+        )
+        return result
+    try:
+        result["account_email"] = client.account_email()
+        result["ok"] = True
+    except GoogleDriveError as exc:
+        result["ok"] = False
+        result["message"] = str(exc)
+    return result
+
+
+@router.get("/google-drive/oauth-url")
+async def google_drive_oauth_url() -> dict[str, Any]:
+    """Build the Google sign-in URL. The account you approve owns the Drive folders."""
+    from app.integrations.google_drive import GoogleDriveError
+
+    client = _google_drive_client()
+    try:
+        url = client.build_authorization_url()
+    except GoogleDriveError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "authorization_url": url,
+        "redirect_uri": client.redirect_uri(),
+        "instructions": [
+            "1. In Google Cloud, enable the Drive API and create a Web OAuth client.",
+            "2. Add redirect_uri exactly as an Authorized redirect URI.",
+            "3. Set GOOGLE_DRIVE_CLIENT_ID and GOOGLE_DRIVE_CLIENT_SECRET, then redeploy.",
+            "4. Open authorization_url and approve with the Google account that should store the photos.",
+            "5. Copy refresh_token from the callback page into GOOGLE_DRIVE_REFRESH_TOKEN and redeploy.",
+        ],
+    }
+
+
+@router.get("/google-drive/connect")
+async def google_drive_connect() -> RedirectResponse:
+    """Send the browser to Google so a person can approve Drive access."""
+    from app.integrations.google_drive import GoogleDriveError
+
+    client = _google_drive_client()
+    try:
+        url = client.build_authorization_url()
+    except GoogleDriveError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RedirectResponse(url)
+
+
+@router.get("/google-drive/oauth-callback", response_class=HTMLResponse)
+async def google_drive_oauth_callback(
+    code: str | None = None,
+    error: str | None = None,
+) -> HTMLResponse:
+    """Google redirects here once. Shows the refresh token to paste into Railway."""
+    from app.integrations.google_drive import GoogleDriveError
+
+    if error:
+        return HTMLResponse(_drive_page("Google sign-in was cancelled", html.escape(error)))
+    client = _google_drive_client()
+    try:
+        tokens = client.exchange_authorization_code(code or "")
+    except GoogleDriveError as exc:
+        return HTMLResponse(_drive_page("Google sign-in failed", html.escape(str(exc))), status_code=400)
+    token = html.escape(tokens["refresh_token"])
+    return HTMLResponse(
+        _drive_page(
+            "Google Drive is connected",
+            (
+                "<p>Copy this value into Railway as <strong>GOOGLE_DRIVE_REFRESH_TOKEN</strong>, "
+                "then redeploy the backend.</p>"
+                f"<textarea readonly rows=\"6\" cols=\"80\">{token}</textarea>"
+                "<p>After redeploy, open /api/dev/google-drive/status. "
+                "account_email should be the Google account you just approved. "
+                "Close this page after you copy the token. Do not share it.</p>"
+            ),
+        )
+    )
+
+
+def _drive_page(title: str, body: str) -> str:
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        f"<title>{html.escape(title)}</title></head><body>"
+        f"<h1>{html.escape(title)}</h1>{body}</body></html>"
+    )
 
 
 @router.get("/zoho/organizations")

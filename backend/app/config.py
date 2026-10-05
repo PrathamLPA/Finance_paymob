@@ -404,6 +404,15 @@ class Settings(BaseSettings):
     payment_session_ttl_hours: int = 72
     default_currency: str = "AED"
     storage_path: str = "storage"
+    # Payment proof images (cash desk + bank receipts). A normal Google account
+    # signs in once. Uploads then go to that account's Drive under a folder
+    # named "fynx", then a folder per customer (lead id and name).
+    google_drive_client_id: str = ""
+    google_drive_client_secret: str = ""
+    google_drive_refresh_token: str = ""
+    # Must match the redirect URI registered on the Google OAuth client.
+    # Empty uses {PUBLIC_BASE_URL}/api/dev/google-drive/oauth-callback.
+    google_drive_redirect_uri: str = ""
     # Minimum paid % of total before customer may proceed (e.g. 50)
     payment_required_percent: float = 50.0
     # Automated payment reminders
