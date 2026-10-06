@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LogOut,
   Receipt,
+  ShieldCheck,
   Users,
   Wallet,
 } from "lucide-react";
@@ -26,7 +27,18 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const isManager = user.role === "manager";
+  const isAdmin = user.role === "admin";
+  const isManager = user.role === "manager" || isAdmin;
+
+  const adminLinks: NavItem[] = [
+    { href: "/admin", label: "Control", icon: LayoutDashboard },
+    { href: "/admin/people", label: "People", icon: Users },
+    { href: "/admin/verification", label: "Finance check", icon: ShieldCheck },
+    { href: "/admin/transactions", label: "Transactions", icon: ArrowLeftRight },
+    { href: "/manager/cash-queue", label: "Cash queue", icon: Banknote },
+    { href: "/manager/bank-transfers", label: "Bank transfers", icon: Receipt },
+    { href: "/manager/deposits", label: "Deposits", icon: Wallet },
+  ];
 
   const managerLinks: NavItem[] = [
     { href: "/manager", label: "Overview", icon: LayoutDashboard },
@@ -35,6 +47,7 @@ export function AppShell({
     { href: "/manager/bank-transfers", label: "Bank transfers", icon: Receipt },
     { href: "/manager/deposits", label: "Deposits", icon: Wallet },
     { href: "/manager/employees", label: "Employees", icon: Users },
+    { href: "/admin/verification", label: "Finance check", icon: ShieldCheck },
   ];
 
   const employeeLinks: NavItem[] = [
@@ -42,10 +55,10 @@ export function AppShell({
     { href: "/employee/deposits", label: "Deposits", icon: Receipt },
   ];
 
-  const links = isManager ? managerLinks : employeeLinks;
+  const links = isAdmin ? adminLinks : isManager ? managerLinks : employeeLinks;
 
   function isActive(href: string) {
-    if (href === "/manager" || href === "/employee") return pathname === href;
+    if (href === "/manager" || href === "/employee" || href === "/admin") return pathname === href;
     return pathname.startsWith(href);
   }
 

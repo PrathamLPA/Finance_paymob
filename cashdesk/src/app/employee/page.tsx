@@ -12,6 +12,12 @@ import { StatCard } from "@/components/stat-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  CollectionReceipts,
+  CollectorsTable,
+  type CollectionReceipt,
+  type CollectorRow,
+} from "@/components/collectors-table";
 
 type Collection = {
   id: number;
@@ -46,6 +52,9 @@ type Summary = {
   deposited: string;
   left_to_deposit: string;
   collected: string;
+  pos_collected?: string;
+  cash_count?: number;
+  pos_count?: number;
   currency: string;
 };
 
@@ -483,17 +492,22 @@ function EmployeeDesk({ userId }: { userId: number }) {
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [collectMethod, setCollectMethod] = useState<CollectMethod>("cash");
   const [loading, setLoading] = useState(true);
+  const [collectors, setCollectors] = useState<CollectorRow[]>([]);
+  const [receipts, setReceipts] = useState<CollectionReceipt[]>([]);
 
   const refresh = useCallback(async () => {
     try {
-      const [queue, collected, bal] = await Promise.all([
+      const [queue, collected, bal, who] = await Promise.all([
         api<{ items: Collection[] }>("/api/staff/cash/queue"),
         api<{ items: Collection[] }>("/api/staff/cash/collected?limit=50"),
         api<Summary>("/api/staff/cash/my-summary"),
+        api<{ items: CollectorRow[]; receipts: CollectionReceipt[] }>("/api/staff/cash/collectors"),
       ]);
       setItems(queue.items);
       setCollectedItems(collected.items);
       setSummary(bal);
+      setCollectors(who.items);
+      setReceipts(who.receipts || []);
     } finally {
       setLoading(false);
     }
@@ -594,11 +608,28 @@ function EmployeeDesk({ userId }: { userId: number }) {
         description="Cases appear when Bitrix is cash. At the desk choose Cash (adds to on hand) or POS machine (proof only, no on hand)."
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Cash in hand" value={money(summary?.on_hand, summary?.currency)} icon={HandCoins} accent="amber" />
-        <StatCard label="Deposited" value={money(summary?.deposited, summary?.currency)} icon={PiggyBank} accent="teal" />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <StatCard
+          label="Cash you collected"
+          value={money(summary?.collected, summary?.currency)}
+          hint={`${summary?.cash_count ?? 0} cash cases`}
+          icon={HandCoins}
+          accent="teal"
+        />
+        <StatCard
+          label="POS you collected"
+          value={money(summary?.pos_collected, summary?.currency)}
+          hint={`${summary?.pos_count ?? 0} card-machine cases`}
+          icon={PiggyBank}
+          accent="sky"
+        />
+        <StatCard label="Cash in hand" value={money(summary?.on_hand, summary?.currency)} hint="Cash not yet deposited" icon={Wallet} accent="amber" />
+        <StatCard label="Deposited" value={money(summary?.deposited, summary?.currency)} icon={PiggyBank} accent="stone" />
         <StatCard label="Left to deposit" value={money(summary?.left_to_deposit, summary?.currency)} icon={Wallet} accent="stone" />
       </div>
+
+      <CollectorsTable rows={collectors} highlightId={userId} />
+      <CollectionReceipts rows={receipts} highlightId={userId} />
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {success ? (

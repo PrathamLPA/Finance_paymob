@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 ROLE_MANAGER = "manager"
 ROLE_EMPLOYEE = "employee"
+ROLE_ADMIN = "admin"
 
 
 class StaffUser(Base):

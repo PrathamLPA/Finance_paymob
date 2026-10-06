@@ -2090,8 +2090,33 @@ class WorkflowOrchestrator:
         skip_zoho: bool = False,
         skip_deals: bool = False,
         dev_simulate: bool = False,
+        finance_release: bool = False,
     ) -> CustomerWorkflow:
-        """Shared post-payment side effects for Paymob and Cash Desk collections."""
+        """Shared post-payment side effects for Paymob and Cash Desk collections.
+
+        When finance-manager verification is on, the money stays recorded and
+        Bitrix/invoice work waits until a manager releases this payment.
+        """
+        from app.services.finance_verification_service import FinanceVerificationService
+
+        if FinanceVerificationService(self.db, self.settings).hold_if_required(
+            workflow,
+            transaction,
+            amount=amount,
+            currency=currency,
+            comment_prefix=comment_prefix,
+            skip_zoho=skip_zoho,
+            skip_deals=skip_deals,
+            finance_release=finance_release,
+            dev_simulate=dev_simulate,
+        ):
+            logger.info(
+                "Payment recorded, waiting for finance manager | lead=%s txn=%s",
+                workflow.bitrix_lead_id,
+                transaction.transaction_id,
+            )
+            return workflow
+
         first_payment = workflow.is_first_payment_pending
         self.threshold_service.refresh_status(workflow)
         self.db.commit()

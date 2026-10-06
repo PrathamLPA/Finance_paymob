@@ -189,13 +189,37 @@ def cash_my_summary(
 ) -> dict[str, Any]:
     service = CashCollectionService(db)
     bal = service.employee_balances(staff.id)
+    mine = next(
+        (
+            row
+            for row in service.collection_totals_by_staff()
+            if row["employee_id"] == staff.id
+        ),
+        None,
+    )
     return {
         "employee_id": staff.id,
         "on_hand": str(bal["on_hand"]),
         "deposited": str(bal["deposited"]),
         "left_to_deposit": str(bal["left_to_deposit"]),
         "collected": str(bal["collected"]),
+        "pos_collected": (mine or {}).get("pos_collected", "0.00"),
+        "cash_count": (mine or {}).get("cash_count", 0),
+        "pos_count": (mine or {}).get("pos_count", 0),
         "currency": "AED",
+    }
+
+
+@router.get("/cash/collectors")
+def cash_collectors(
+    db: Session = Depends(get_db),
+    _staff: StaffUser = Depends(get_current_staff),
+) -> dict[str, Any]:
+    """Who collected how much, and from which customer. No one else's cash still in hand."""
+    service = CashCollectionService(db)
+    return {
+        "items": service.collection_totals_by_staff(),
+        "receipts": service.collection_receipts(),
     }
 
 

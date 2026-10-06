@@ -304,6 +304,14 @@ class Settings(BaseSettings):
     staff_bootstrap_manager_email: str = ""
     staff_bootstrap_manager_password: str = ""
     staff_bootstrap_manager_name: str = "Cash Desk Manager"
+    # Developer administrator (separate from the cash-desk manager).
+    developer_admin_email: str = ""
+    developer_admin_password: str = ""
+    developer_admin_name: str = "Developer Admin"
+    # While true, a recorded payment waits for a finance manager before
+    # Bitrix comments, invoices, and deal updates run. The admin screen can
+    # override this without a redeploy. Default off = today's flow.
+    finance_manager_verification: bool = False
     # Cash Desk Next.js origin (CORS) — comma-separated with frontend_origin if needed
     cashdesk_origin: str = "http://localhost:3001"
     # When true: payment link is only sent after catalog price check + Estimate create

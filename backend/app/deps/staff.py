@@ -6,7 +6,7 @@ from fastapi import Cookie, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.staff_user import ROLE_MANAGER, StaffUser
+from app.models.staff_user import ROLE_ADMIN, ROLE_MANAGER, StaffUser
 from app.services.staff_auth import decode_access_token
 
 STAFF_COOKIE = "cashdesk_token"
@@ -45,6 +45,13 @@ def get_current_staff(
 
 
 def require_manager(staff: StaffUser = Depends(get_current_staff)) -> StaffUser:
-    if staff.role != ROLE_MANAGER:
+    """Cash Desk manager, or the developer admin who can operate the same screens."""
+    if staff.role not in {ROLE_MANAGER, ROLE_ADMIN}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Manager only")
+    return staff
+
+
+def require_admin(staff: StaffUser = Depends(get_current_staff)) -> StaffUser:
+    if staff.role != ROLE_ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator only")
     return staff

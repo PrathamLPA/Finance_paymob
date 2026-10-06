@@ -730,6 +730,7 @@ class CashCollectionService:
             )
         ) or Decimal("0.00")
 
+        collectors = self.collection_totals_by_staff(balances)
         return {
             "cash_on_hand": str(Decimal(total_on_hand).quantize(Decimal("0.01"))),
             "total_deposited": str(Decimal(total_deposited).quantize(Decimal("0.01"))),
@@ -738,7 +739,113 @@ class CashCollectionService:
             "pos_collected": str(Decimal(pos_collected).quantize(Decimal("0.01"))),
             "online_collected": str(Decimal(online_collected).quantize(Decimal("0.01"))),
             "employee_count": len(employees),
+            "collectors": collectors,
+            "receipts": self.collection_receipts(),
         }
+
+    def collection_totals_by_staff(
+        self, balances: dict[int, dict[str, Decimal]] | None = None
+    ) -> list[dict[str, Any]]:
+        """Cash and POS each person has collected. On-hand is included when balances are passed."""
+        rows = self.db.execute(
+            select(
+                CashCollection.collected_by_id,
+                CashCollection.collect_method,
+                func.coalesce(func.sum(CashCollection.collected_amount), 0),
+                func.count(),
+            )
+            .where(
+                CashCollection.status == STATUS_COLLECTED,
+                CashCollection.collected_by_id.is_not(None),
+            )
+            .group_by(CashCollection.collected_by_id, CashCollection.collect_method)
+        ).all()
+        buckets: dict[int, dict[str, Any]] = {}
+        for staff_id, method, amount, count in rows:
+            if not staff_id:
+                continue
+            bucket = buckets.setdefault(
+                int(staff_id),
+                {
+                    "cash_collected": Decimal("0.00"),
+                    "pos_collected": Decimal("0.00"),
+                    "cash_count": 0,
+                    "pos_count": 0,
+                },
+            )
+            amt = Decimal(amount or 0).quantize(Decimal("0.01"))
+            if (method or COLLECT_METHOD_CASH) == COLLECT_METHOD_POS:
+                bucket["pos_collected"] += amt
+                bucket["pos_count"] += int(count or 0)
+            else:
+                bucket["cash_collected"] += amt
+                bucket["cash_count"] += int(count or 0)
+
+        staff_ids = set(buckets)
+        if balances is not None:
+            staff_ids.update(balances)
+        if not staff_ids:
+            return []
+        users = {
+            user.id: user
+            for user in self.db.scalars(select(StaffUser).where(StaffUser.id.in_(staff_ids)))
+        }
+        out: list[dict[str, Any]] = []
+        for staff_id in staff_ids:
+            user = users.get(staff_id)
+            bucket = buckets.get(staff_id) or {
+                "cash_collected": Decimal("0.00"),
+                "pos_collected": Decimal("0.00"),
+                "cash_count": 0,
+                "pos_count": 0,
+            }
+            item: dict[str, Any] = {
+                "employee_id": staff_id,
+                "name": user.name if user else "Unknown",
+                "cash_collected": str(bucket["cash_collected"]),
+                "pos_collected": str(bucket["pos_collected"]),
+                "cash_count": bucket["cash_count"],
+                "pos_count": bucket["pos_count"],
+            }
+            if balances is not None:
+                bal = balances.get(staff_id) or {}
+                item["on_hand"] = str(bal.get("on_hand", Decimal("0.00")))
+            out.append(item)
+        out.sort(
+            key=lambda row: Decimal(row["cash_collected"]) + Decimal(row["pos_collected"]),
+            reverse=True,
+        )
+        return out
+
+    def collection_receipts(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Each collected payment: who took it, from which customer, and how much."""
+        stmt = (
+            select(CashCollection)
+            .options(joinedload(CashCollection.collected_by))
+            .where(
+                CashCollection.status == STATUS_COLLECTED,
+                CashCollection.collected_by_id.is_not(None),
+            )
+            .order_by(CashCollection.collected_at.desc().nullslast(), CashCollection.id.desc())
+            .limit(max(1, min(limit, 200)))
+        )
+        rows = list(self.db.scalars(stmt).unique().all())
+        return [
+            {
+                "id": row.id,
+                "employee_id": row.collected_by_id,
+                "employee_name": row.collected_by.name if row.collected_by else "Unknown",
+                "customer_name": row.customer_name or "Customer",
+                "amount": str(row.collected_amount),
+                "currency": row.currency or "AED",
+                "collect_method": row.collect_method or COLLECT_METHOD_CASH,
+                "collected_at": row.collected_at.isoformat() if row.collected_at else None,
+                "course_title": row.course_title,
+                "bitrix_lead_id": row.bitrix_lead_id,
+                "installment_number": row.installment_number,
+            }
+            for row in rows
+        ]
 
     def list_transactions(
         self,

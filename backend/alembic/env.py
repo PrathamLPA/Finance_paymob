@@ -8,10 +8,12 @@ from sqlalchemy import engine_from_config, pool
 from app.config import get_settings
 from app.db.session import Base
 from app.models import (  # noqa: F401
+    app_setting,
     bank_transfer,
     cash_collection,
     cash_deposit,
     customer_workflow,
+    finance_verification,
     payment_session,
     payment_transaction,
     price_approval,

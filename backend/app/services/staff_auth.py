@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.config import Settings, get_settings
 from app.models.staff_user import ROLE_MANAGER, StaffUser
 
+logger = logging.getLogger(__name__)
 _PBKDF2_ROUNDS = 120_000
 
 
@@ -112,3 +114,42 @@ def sync_bootstrap_manager_credentials(db: Session, settings: Settings | None = 
 def bootstrap_manager_if_needed(db: Session, settings: Settings | None = None) -> StaffUser | None:
     """Create or refresh the bootstrap manager from env."""
     return sync_bootstrap_manager_credentials(db, settings)
+
+
+def sync_bootstrap_admin_credentials(db: Session, settings: Settings | None = None) -> StaffUser | None:
+    """Create or refresh the developer administrator. Does not replace the cash-desk manager."""
+    from app.models.staff_user import ROLE_ADMIN
+
+    settings = settings or get_settings()
+    email = (settings.developer_admin_email or "").strip().lower()
+    password = settings.developer_admin_password or ""
+    name = (settings.developer_admin_name or "Developer Admin").strip()
+    manager_email = (settings.staff_bootstrap_manager_email or "").strip().lower()
+    if not email or not password:
+        return None
+    if manager_email and email == manager_email:
+        logger.warning(
+            "DEVELOPER_ADMIN_EMAIL matches the cash-desk manager; admin account was not changed"
+        )
+        return None
+    user = db.scalar(select(StaffUser).where(StaffUser.email == email))
+    if user:
+        user.role = ROLE_ADMIN
+        user.is_active = True
+        user.password_hash = hash_password(password)
+        if name:
+            user.name = name
+        db.commit()
+        db.refresh(user)
+        return user
+    user = StaffUser(
+        email=email,
+        name=name,
+        password_hash=hash_password(password),
+        role=ROLE_ADMIN,
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user

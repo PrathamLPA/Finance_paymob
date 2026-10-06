@@ -10,7 +10,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from app.config import get_settings
-from app.routers import approval_api, cash_api, dev, health, payment_api, staff_auth, webhooks
+from app.routers import (
+    admin_api,
+    approval_api,
+    cash_api,
+    dev,
+    health,
+    payment_api,
+    staff_auth,
+    webhooks,
+)
 
 settings = get_settings()
 logging.basicConfig(
@@ -62,7 +71,10 @@ async def lifespan(_app: FastAPI):
     )
     try:
         from app.db.session import SessionLocal
-        from app.services.staff_auth import bootstrap_manager_if_needed
+        from app.services.staff_auth import (
+            bootstrap_manager_if_needed,
+            sync_bootstrap_admin_credentials,
+        )
 
         db = SessionLocal()
         try:
@@ -74,6 +86,9 @@ async def lifespan(_app: FastAPI):
                     "Cash Desk bootstrap manager email=%s (existing manager kept if different)",
                     settings.staff_bootstrap_manager_email.strip().lower(),
                 )
+            admin = sync_bootstrap_admin_credentials(db, settings)
+            if admin:
+                logger.info("Developer admin ready email=%s", admin.email)
         finally:
             db.close()
     except Exception:
@@ -122,4 +137,5 @@ app.include_router(payment_api.router)
 app.include_router(approval_api.router)
 app.include_router(staff_auth.router)
 app.include_router(cash_api.router)
+app.include_router(admin_api.router)
 app.include_router(dev.router)

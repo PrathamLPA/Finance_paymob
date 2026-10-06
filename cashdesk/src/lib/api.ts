@@ -63,7 +63,9 @@ export function setCachedUser(user: StaffUser | null) {
 }
 
 export function homeFor(user: StaffUser | null | undefined): string {
-  return user?.role === "manager" ? "/manager" : "/employee";
+  if (user?.role === "admin") return "/admin";
+  if (user?.role === "manager") return "/manager";
+  return "/employee";
 }
 
 function messageFromBody(data: unknown, fallback: string): string {

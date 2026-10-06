@@ -15,11 +15,19 @@ import {
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 
+function roleAllowed(userRole: string, required?: "manager" | "employee" | "admin"): boolean {
+  if (!required) return true;
+  if (required === "admin") return userRole === "admin";
+  // Developer admin can open the manager screens as well.
+  if (required === "manager") return userRole === "manager" || userRole === "admin";
+  return userRole === required;
+}
+
 export function RequireAuth({
   role,
   children,
 }: {
-  role?: "manager" | "employee";
+  role?: "manager" | "employee" | "admin";
   children: (user: StaffUser) => React.ReactNode;
 }) {
   const router = useRouter();
@@ -44,8 +52,8 @@ export function RequireAuth({
     try {
       const me = await api<StaffUser>("/api/staff/me");
       setCachedUser(me);
-      if (role === "manager" && me.role !== "manager") {
-        router.replace("/employee");
+      if (!roleAllowed(me.role, role)) {
+        router.replace(homeFor(me));
         return;
       }
       setUser(me);
@@ -71,12 +79,12 @@ export function RequireAuth({
 
   // Cached user with the wrong role: send them to their own home right away.
   useEffect(() => {
-    if (user && role === "manager" && user.role !== "manager") {
+    if (user && !roleAllowed(user.role, role)) {
       router.replace(homeFor(user));
     }
   }, [user, role, router]);
 
-  if (user && !(role === "manager" && user.role !== "manager")) {
+  if (user && roleAllowed(user.role, role)) {
     return <AppShell user={user}>{children(user)}</AppShell>;
   }
 
