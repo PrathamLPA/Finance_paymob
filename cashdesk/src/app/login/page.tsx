@@ -16,6 +16,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 
+function roleMatches(userRole: string, asRole: string): boolean {
+  if (asRole === "admin") return userRole === "admin";
+  if (asRole === "manager") return userRole === "manager" || userRole === "admin";
+  if (asRole === "employee") return userRole === "employee";
+  return true;
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -23,11 +30,17 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [signedIn, setSignedIn] = useState<StaffUser | null>(null);
+  const [asRole, setAsRole] = useState("");
 
   useEffect(() => {
-    const cached = getCachedUser();
-    if (getToken() && cached) setSignedIn(cached);
-  }, []);
+    const as = new URLSearchParams(window.location.search).get("as") || "";
+    setAsRole(as);
+    const cached = getToken() ? getCachedUser() : null;
+    setSignedIn(cached);
+    // Stay on this page when the saved account is a different role.
+    // Only skip the form when this address already matches who is signed in.
+    if (cached && as && roleMatches(cached.role, as)) router.replace(homeFor(cached));
+  }, [router]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -38,6 +51,17 @@ export default function LoginPage() {
         method: "POST",
         body: JSON.stringify({ email: email.trim(), password }),
       });
+      if (asRole && !roleMatches(res.user.role, asRole)) {
+        await api("/api/staff/logout", { method: "POST" });
+        setError(
+          asRole === "admin"
+            ? "This account is not the developer admin. Sign in with the admin email."
+            : asRole === "manager"
+              ? "This account is not a finance manager. Sign in with the manager email."
+              : "This account cannot open that page."
+        );
+        return;
+      }
       setToken(res.token);
       setCachedUser(res.user);
       router.replace(homeFor(res.user));
@@ -58,12 +82,15 @@ export default function LoginPage() {
           <p className="font-serif text-3xl text-teal-950">Finance</p>
           <CardTitle className="text-lg">Sign in</CardTitle>
           <CardDescription>
-            Employees collect cash. Managers review transactions and deposits. Admins control people
-            and settings. Each address opens only for that account.
+            {asRole === "admin"
+              ? "Sign in with the developer admin account."
+              : asRole === "manager"
+                ? "Sign in with the finance manager account."
+                : "Employees collect cash. Managers review transactions and deposits. Admins control people and settings."}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {signedIn ? (
+          {signedIn && (!asRole || roleMatches(signedIn.role, asRole)) ? (
             <div className="mb-4 rounded-lg border border-stone-200 bg-stone-50 px-3 py-3 text-sm text-stone-700">
               <p>
                 This browser is signed in as <span className="font-medium">{signedIn.name}</span> (

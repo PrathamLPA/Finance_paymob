@@ -740,7 +740,6 @@ class CashCollectionService:
             "online_collected": str(Decimal(online_collected).quantize(Decimal("0.01"))),
             "employee_count": len(employees),
             "collectors": collectors,
-            "receipts": self.collection_receipts(),
         }
 
     def collection_totals_by_staff(
@@ -817,7 +816,14 @@ class CashCollectionService:
         )
         return out
 
-    def collection_receipts(self, *, limit: int = 100) -> list[dict[str, Any]]:
+    def collection_receipts(
+        self,
+        *,
+        limit: int = 200,
+        employee_id: int | None = None,
+        method: str | None = None,
+        q: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Each collected payment: who took it, from which customer, and how much."""
         stmt = (
             select(CashCollection)
@@ -826,9 +832,25 @@ class CashCollectionService:
                 CashCollection.status == STATUS_COLLECTED,
                 CashCollection.collected_by_id.is_not(None),
             )
-            .order_by(CashCollection.collected_at.desc().nullslast(), CashCollection.id.desc())
-            .limit(max(1, min(limit, 200)))
         )
+        if employee_id:
+            stmt = stmt.where(CashCollection.collected_by_id == employee_id)
+        chosen = (method or "").strip().lower()
+        if chosen in {COLLECT_METHOD_CASH, COLLECT_METHOD_POS}:
+            stmt = stmt.where(CashCollection.collect_method == chosen)
+        term = (q or "").strip()
+        if term:
+            like = f"%{term}%"
+            stmt = stmt.where(
+                or_(
+                    CashCollection.customer_name.ilike(like),
+                    CashCollection.course_title.ilike(like),
+                    CashCollection.collected_by.has(StaffUser.name.ilike(like)),
+                )
+            )
+        stmt = stmt.order_by(
+            CashCollection.collected_at.desc().nullslast(), CashCollection.id.desc()
+        ).limit(max(1, min(limit, 500)))
         rows = list(self.db.scalars(stmt).unique().all())
         return [
             {

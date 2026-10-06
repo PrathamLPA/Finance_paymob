@@ -6,7 +6,6 @@ import {
   api,
   getCachedUser,
   getToken,
-  homeFor,
   isAuthError,
   setCachedUser,
   setToken,
@@ -14,6 +13,18 @@ import {
 } from "@/lib/api";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
+
+function RoleLogin({ role }: { role?: "manager" | "employee" | "admin" }) {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(role ? `/login?as=${role}` : "/login");
+  }, [role, router]);
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-stone-50 text-stone-500">
+      Sign in…
+    </div>
+  );
+}
 
 function roleAllowed(userRole: string, required?: "manager" | "employee" | "admin"): boolean {
   if (!required) return true;
@@ -74,30 +85,7 @@ export function RequireAuth({
   }, [verify]);
 
   if (user && !roleAllowed(user.role, role)) {
-    const needed =
-      role === "admin" ? "a developer admin" : role === "manager" ? "a finance manager" : "an employee";
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-stone-50 px-4 text-center">
-        <p className="max-w-md text-sm text-stone-700">
-          This page is for {needed}. You are signed in as {user.name}, {user.role === "employee" ? "an employee" : `a ${user.role}`}.
-        </p>
-        <div className="flex gap-2">
-          <Button size="sm" onClick={() => router.replace(homeFor(user))}>
-            Go to my page
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setToken(null);
-              router.replace("/login");
-            }}
-          >
-            Sign in as someone else
-          </Button>
-        </div>
-      </div>
-    );
+    return <RoleLogin role={role} />;
   }
 
   if (user && roleAllowed(user.role, role)) {

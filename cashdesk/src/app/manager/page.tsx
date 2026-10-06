@@ -19,7 +19,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { CollectionReceipts, CollectorsTable, type CollectionReceipt, type CollectorRow } from "@/components/collectors-table";
+import { CollectorsTable, type CollectorRow } from "@/components/collectors-table";
 
 type Dashboard = {
   cash_on_hand: string;
@@ -30,7 +30,6 @@ type Dashboard = {
   online_collected: string;
   employee_count: number;
   collectors?: CollectorRow[];
-  receipts?: CollectionReceipt[];
 };
 
 const quickLinks = [
@@ -88,7 +87,6 @@ function ManagerOverview() {
       </div>
 
       <CollectorsTable rows={dash?.collectors || []} showOnHand />
-      <CollectionReceipts rows={dash?.receipts || []} />
 
       <Card>
         <CardHeader>

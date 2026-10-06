@@ -217,9 +217,26 @@ def cash_collectors(
 ) -> dict[str, Any]:
     """Who collected how much, and from which customer. No one else's cash still in hand."""
     service = CashCollectionService(db)
+    return {"items": service.collection_totals_by_staff()}
+
+
+@router.get("/cash/receipts")
+def cash_receipts(
+    db: Session = Depends(get_db),
+    _staff: StaffUser = Depends(get_current_staff),
+    q: str | None = None,
+    method: str | None = None,
+    employee_id: int | None = None,
+    limit: int = Query(default=200, ge=1, le=500),
+) -> dict[str, Any]:
+    """Who collected from which customer. Filter by person, cash or POS, or a name search."""
     return {
-        "items": service.collection_totals_by_staff(),
-        "receipts": service.collection_receipts(),
+        "items": CashCollectionService(db).collection_receipts(
+            limit=limit,
+            employee_id=employee_id,
+            method=method,
+            q=q,
+        )
     }
 
 

@@ -6,6 +6,7 @@ import {
   ArrowLeftRight,
   Banknote,
   LayoutDashboard,
+  List,
   LogOut,
   Receipt,
   Settings,
@@ -38,6 +39,7 @@ export function AppShell({
     { href: "/admin/verification", label: "Finance check", icon: ShieldCheck },
     { href: "/admin/transactions", label: "Transactions", icon: ArrowLeftRight },
     { href: "/manager/cash-queue", label: "Cash queue", icon: Banknote },
+    { href: "/collected", label: "Collected from", icon: List },
     { href: "/manager/bank-transfers", label: "Bank transfers", icon: Receipt },
     { href: "/manager/deposits", label: "Deposits", icon: Wallet },
   ];
@@ -46,6 +48,7 @@ export function AppShell({
     { href: "/manager", label: "Overview", icon: LayoutDashboard },
     { href: "/manager/transactions", label: "Transactions", icon: ArrowLeftRight },
     { href: "/manager/cash-queue", label: "Cash queue", icon: Banknote },
+    { href: "/collected", label: "Collected from", icon: List },
     { href: "/manager/bank-transfers", label: "Bank transfers", icon: Receipt },
     { href: "/manager/deposits", label: "Deposits", icon: Wallet },
     { href: "/manager/employees", label: "Employees", icon: Users },
@@ -54,6 +57,7 @@ export function AppShell({
 
   const employeeLinks: NavItem[] = [
     { href: "/employee", label: "Collections", icon: Banknote },
+    { href: "/collected", label: "Collected from", icon: List },
     { href: "/employee/deposits", label: "Deposits", icon: Receipt },
   ];
 

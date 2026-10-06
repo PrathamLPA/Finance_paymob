@@ -12,12 +12,7 @@ import { StatCard } from "@/components/stat-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  CollectionReceipts,
-  CollectorsTable,
-  type CollectionReceipt,
-  type CollectorRow,
-} from "@/components/collectors-table";
+import { CollectorsTable, type CollectorRow } from "@/components/collectors-table";
 
 type Collection = {
   id: number;
@@ -493,7 +488,6 @@ function EmployeeDesk({ userId }: { userId: number }) {
   const [collectMethod, setCollectMethod] = useState<CollectMethod>("cash");
   const [loading, setLoading] = useState(true);
   const [collectors, setCollectors] = useState<CollectorRow[]>([]);
-  const [receipts, setReceipts] = useState<CollectionReceipt[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -501,13 +495,12 @@ function EmployeeDesk({ userId }: { userId: number }) {
         api<{ items: Collection[] }>("/api/staff/cash/queue"),
         api<{ items: Collection[] }>("/api/staff/cash/collected?limit=50"),
         api<Summary>("/api/staff/cash/my-summary"),
-        api<{ items: CollectorRow[]; receipts: CollectionReceipt[] }>("/api/staff/cash/collectors"),
+        api<{ items: CollectorRow[] }>("/api/staff/cash/collectors"),
       ]);
       setItems(queue.items);
       setCollectedItems(collected.items);
       setSummary(bal);
       setCollectors(who.items);
-      setReceipts(who.receipts || []);
     } finally {
       setLoading(false);
     }
@@ -629,7 +622,6 @@ function EmployeeDesk({ userId }: { userId: number }) {
       </div>
 
       <CollectorsTable rows={collectors} highlightId={userId} />
-      <CollectionReceipts rows={receipts} highlightId={userId} />
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {success ? (

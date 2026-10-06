@@ -30,7 +30,7 @@ export function CollectionReceipts({
       <CardHeader>
         <CardTitle>Who collected from whom</CardTitle>
         <CardDescription>
-          Each line is one desk payment: the employee, the customer, and the amount. Latest 100.
+          Employee, customer, and amount for each desk payment.
         </CardDescription>
       </CardHeader>
       <CardContent className="px-0 pb-0">

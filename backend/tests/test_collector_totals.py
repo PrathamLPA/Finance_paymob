@@ -72,3 +72,7 @@ def test_collection_totals_split_cash_and_pos(db_session):
     assert ada_from["10.00"] == "Sara"
     assert ada_from["4.50"] == "Sara"
     assert next(item["customer_name"] for item in receipts if item["employee_name"] == "Ben") == "Omar"
+
+    only_omar = CashCollectionService(db_session).collection_receipts(q="Omar", method="cash")
+    assert [item["employee_name"] for item in only_omar] == ["Ben"]
+    assert CashCollectionService(db_session).collection_receipts(employee_id=ada.id, method="pos")[0]["amount"] == "4.50"
