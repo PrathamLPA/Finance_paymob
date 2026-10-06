@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -21,6 +22,8 @@ logging.basicConfig(
 logger = logging.getLogger("frontend")
 
 app = FastAPI(title=settings.app_name)
+# Compress HTML and the Cash Desk JS/CSS bundles.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(payment.router)
 app.include_router(approvals.router)
 
@@ -46,8 +49,19 @@ async def on_shutdown() -> None:
 
 @app.middleware("http")
 async def log_request_timing(request: Request, call_next):
+    if request.url.path.startswith("/cashdesk/_next/static/"):
+        # Next.js hashes these filenames, so browsers can keep them for a year
+        # instead of re-asking on every page open.
+        response = await call_next(request)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
     if request.url.path.startswith("/static") or request.url.path.startswith("/cashdesk"):
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path.startswith("/cashdesk") and response.status_code == 200:
+            # HTML shells must always be re-checked so a new deploy shows up.
+            response.headers["Cache-Control"] = "no-cache"
+        return response
     started = time.perf_counter()
     response = await call_next(request)
     elapsed_ms = int((time.perf_counter() - started) * 1000)

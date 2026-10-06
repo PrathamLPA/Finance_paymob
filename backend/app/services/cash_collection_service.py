@@ -329,6 +329,8 @@ class CashCollectionService:
         stmt = (
             select(CashCollection)
             .options(
+                # One query instead of one extra round-trip per row for the workflow.
+                joinedload(CashCollection.workflow),
                 joinedload(CashCollection.claimed_by),
                 joinedload(CashCollection.collected_by),
             )
@@ -355,6 +357,7 @@ class CashCollectionService:
         stmt = (
             select(CashCollection)
             .options(
+                joinedload(CashCollection.workflow),
                 joinedload(CashCollection.claimed_by),
                 joinedload(CashCollection.collected_by),
             )
@@ -553,6 +556,53 @@ class CashCollectionService:
         self.db.refresh(user)
         return user
 
+    def employee_balances_bulk(
+        self, employee_ids: list[int]
+    ) -> dict[int, dict[str, Decimal]]:
+        """Same numbers as employee_balances, in two grouped queries for all staff."""
+        zero = Decimal("0.00")
+        out: dict[int, dict[str, Decimal]] = {
+            emp_id: {
+                "collected": zero,
+                "deposited": zero,
+                "on_hand": zero,
+                "left_to_deposit": zero,
+            }
+            for emp_id in employee_ids
+        }
+        if not employee_ids:
+            return out
+        collected_rows = self.db.execute(
+            select(
+                CashCollection.collected_by_id,
+                func.coalesce(func.sum(CashCollection.collected_amount), 0),
+            )
+            .where(
+                CashCollection.collected_by_id.in_(employee_ids),
+                CashCollection.status == STATUS_COLLECTED,
+                CashCollection.collect_method == COLLECT_METHOD_CASH,
+            )
+            .group_by(CashCollection.collected_by_id)
+        ).all()
+        deposited_rows = self.db.execute(
+            select(CashDeposit.employee_id, func.coalesce(func.sum(CashDeposit.amount), 0))
+            .where(CashDeposit.employee_id.in_(employee_ids))
+            .group_by(CashDeposit.employee_id)
+        ).all()
+        collected_by_id = {int(r[0]): Decimal(r[1] or 0) for r in collected_rows if r[0]}
+        deposited_by_id = {int(r[0]): Decimal(r[1] or 0) for r in deposited_rows if r[0]}
+        for emp_id in employee_ids:
+            collected = collected_by_id.get(emp_id, zero).quantize(Decimal("0.01"))
+            deposited = deposited_by_id.get(emp_id, zero).quantize(Decimal("0.01"))
+            on_hand = max(collected - deposited, zero)
+            out[emp_id] = {
+                "collected": collected,
+                "deposited": deposited,
+                "on_hand": on_hand,
+                "left_to_deposit": on_hand,
+            }
+        return out
+
     def list_employees(self) -> list[dict[str, Any]]:
         users = list(
             self.db.scalars(
@@ -561,9 +611,10 @@ class CashCollectionService:
                 .order_by(StaffUser.name.asc())
             ).all()
         )
+        balances = self.employee_balances_bulk([u.id for u in users])
         out: list[dict[str, Any]] = []
         for user in users:
-            bal = self.employee_balances(user.id)
+            bal = balances[user.id]
             out.append(
                 {
                     "id": user.id,
@@ -646,8 +697,9 @@ class CashCollectionService:
         )
         total_on_hand = Decimal("0.00")
         total_deposited = Decimal("0.00")
+        balances = self.employee_balances_bulk([e.id for e in employees])
         for emp in employees:
-            bal = self.employee_balances(emp.id)
+            bal = balances[emp.id]
             total_on_hand += bal["on_hand"]
             total_deposited += bal["deposited"]
 

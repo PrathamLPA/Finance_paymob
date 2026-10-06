@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Expand, X } from "lucide-react";
-import { API_BASE, api, getToken } from "@/lib/api";
+import { api } from "@/lib/api";
+import { useProof } from "@/lib/use-proof";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
@@ -61,6 +62,8 @@ function BankTransferDetailModal({
   busy,
   error,
   proofUrl,
+  proofLoading,
+  proofError,
   onNoteChange,
   onClose,
   onApprove,
@@ -72,6 +75,8 @@ function BankTransferDetailModal({
   busy: boolean;
   error: string;
   proofUrl: string | null;
+  proofLoading: boolean;
+  proofError: string;
   onNoteChange: (value: string) => void;
   onClose: () => void;
   onApprove: () => void;
@@ -191,17 +196,23 @@ function BankTransferDetailModal({
             {row.has_proof ? (
               <div className="mt-3 space-y-2">
                 <div className="overflow-hidden rounded-lg border border-stone-200 bg-stone-50">
-                  {isPdf ? (
+                  {proofError ? (
+                    <p className="px-4 py-6 text-center text-sm text-red-700">{proofError}</p>
+                  ) : proofLoading || !proofUrl ? (
+                    <p className="px-4 py-6 text-center text-sm text-stone-500">
+                      Loading receipt…
+                    </p>
+                  ) : isPdf ? (
                     <a
                       className="block px-4 py-6 text-center text-sm text-teal-800 underline"
-                      href={proofUrl || "#"}
+                      href={proofUrl}
                       target="_blank"
                       rel="noreferrer"
                     >
                       Open PDF receipt
                       {row.proof_original_name ? ` (${row.proof_original_name})` : ""}
                     </a>
-                  ) : proofUrl ? (
+                  ) : (
                     <button
                       type="button"
                       className="group relative block w-full cursor-zoom-in text-left"
@@ -218,10 +229,6 @@ function BankTransferDetailModal({
                         Click to view full screen
                       </span>
                     </button>
-                  ) : (
-                    <p className="px-4 py-6 text-center text-sm text-stone-500">
-                      Loading receipt…
-                    </p>
                   )}
                 </div>
                 {proofUrl && !isPdf ? (
@@ -285,16 +292,23 @@ function BankTransferDetailModal({
 
 function BankTransfersPage() {
   const [items, setItems] = useState<Submission[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Submission | null>(null);
-  const [proofUrl, setProofUrl] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  // Keyed on the proof path, so approving/rejecting does not re-download the receipt.
+  const proof = useProof(selected?.proof_url ?? null, selected?.proof_content_type);
+  const proofUrl = proof.url;
 
   const refresh = useCallback(async () => {
-    const res = await api<{ items: Submission[] }>("/api/staff/bank-transfers");
-    setItems(res.items);
+    try {
+      const res = await api<{ items: Submission[] }>("/api/staff/bank-transfers");
+      setItems(res.items);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -302,41 +316,16 @@ function BankTransfersPage() {
   }, [refresh]);
 
   useEffect(() => {
-    if (!selected) return;
-    const fresh = items.find((item) => item.id === selected.id);
-    if (fresh && fresh !== selected) setSelected(fresh);
-  }, [items, selected]);
+    setSelected((current) => {
+      if (!current) return current;
+      const fresh = items.find((item) => item.id === current.id);
+      return fresh && fresh !== current ? fresh : current;
+    });
+  }, [items]);
 
   useEffect(() => {
-    let objectUrl: string | null = null;
-    let cancelled = false;
-
-    async function loadProof() {
-      setProofUrl(null);
-      setFullscreen(false);
-      if (!selected?.proof_url) return;
-      try {
-        const token = getToken();
-        const res = await fetch(`${API_BASE}${selected.proof_url}`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          credentials: "include",
-        });
-        if (!res.ok) throw new Error("Could not load receipt image");
-        const blob = await res.blob();
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setProofUrl(objectUrl);
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Proof load failed");
-      }
-    }
-
-    loadProof();
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [selected]);
+    setFullscreen(false);
+  }, [selected?.id]);
 
   useEffect(() => {
     if (!fullscreen) return;
@@ -401,7 +390,7 @@ function BankTransfersPage() {
               {items.length === 0 ? (
                 <TR>
                   <TD colSpan={4} className="py-10 text-center text-stone-500">
-                    No bank transfer submissions
+                    {loading ? "Loading bank transfers…" : "No bank transfer submissions"}
                   </TD>
                 </TR>
               ) : (
@@ -445,6 +434,8 @@ function BankTransfersPage() {
           busy={busy}
           error={error}
           proofUrl={proofUrl}
+          proofLoading={proof.loading}
+          proofError={proof.error}
           onNoteChange={setNote}
           onClose={() => {
             setSelected(null);

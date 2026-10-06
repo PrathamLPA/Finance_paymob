@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { rangeForPeriod, toDateInputValue, type DatePeriod } from "@/lib/date-range";
 import { downloadExcelSheet } from "@/lib/excel-export";
+import { useDebounced } from "@/lib/use-debounced";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
 import { ListFilterBar } from "@/components/list-filter-bar";
@@ -33,6 +34,10 @@ function TransactionsPage() {
   const [sortBy, setSortBy] = useState("paid_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  // Wait until typing pauses instead of calling the API on every keystroke.
+  const debouncedQ = useDebounced(q.trim(), 350);
+  const requestSeq = useRef(0);
 
   const activeRange = useMemo(
     () => rangeForPeriod(period, { dateFrom, dateTo }),
@@ -40,16 +45,28 @@ function TransactionsPage() {
   );
 
   const refresh = useCallback(async () => {
+    const seq = ++requestSeq.current;
     const params = new URLSearchParams({ channel, sort_by: sortBy, sort_dir: sortDir });
-    if (q.trim()) params.set("q", q.trim());
+    if (debouncedQ) params.set("q", debouncedQ);
     if (activeRange?.dateFrom) params.set("date_from", activeRange.dateFrom);
     if (activeRange?.dateTo) params.set("date_to", activeRange.dateTo);
-    const tx = await api<{ items: TxnRow[] }>(`/api/staff/transactions?${params}`);
-    setItems(tx.items);
-  }, [channel, q, activeRange, sortBy, sortDir]);
+    setLoading(true);
+    try {
+      const tx = await api<{ items: TxnRow[] }>(`/api/staff/transactions?${params}`);
+      // Ignore replies that arrive out of order (older filter finishing last).
+      if (seq !== requestSeq.current) return;
+      setItems(tx.items);
+      setError("");
+    } catch (err) {
+      if (seq !== requestSeq.current) return;
+      setError(err instanceof Error ? err.message : "Could not load transactions");
+    } finally {
+      if (seq === requestSeq.current) setLoading(false);
+    }
+  }, [channel, debouncedQ, activeRange, sortBy, sortDir]);
 
   useEffect(() => {
-    refresh().catch((err) => setError(err.message));
+    refresh();
   }, [refresh]);
 
   function handlePeriodChange(next: DatePeriod) {
@@ -145,9 +162,13 @@ function TransactionsPage() {
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
-      <Card>
+      <Card className={loading ? "opacity-70 transition-opacity" : "transition-opacity"}>
         <CardContent className="px-0 pb-0 pt-0">
-          <TransactionTable items={items} onUpdated={refresh} />
+          {loading && items.length === 0 ? (
+            <p className="py-10 text-center text-sm text-stone-500">Loading transactions…</p>
+          ) : (
+            <TransactionTable items={items} onUpdated={refresh} />
+          )}
         </CardContent>
       </Card>
     </div>

@@ -50,13 +50,14 @@ export function AppShell({
   }
 
   async function logout() {
+    // Clear local state first so the UI never waits on the network.
+    setToken(null);
+    router.replace("/login");
     try {
       await api("/api/staff/logout", { method: "POST" });
     } catch {
-      /* ignore */
+      /* cookie cleanup is best effort */
     }
-    setToken(null);
-    router.replace("/login");
   }
 
   return (

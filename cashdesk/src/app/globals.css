@@ -29,7 +29,7 @@ body {
 }
 
 .cashdesk-page-enter {
-  animation: cashdesk-rise 0.4s ease-out both;
+  animation: cashdesk-rise 0.18s ease-out both;
 }
 
 .cashdesk-nav-link {
@@ -66,9 +66,10 @@ body {
   inset: 0;
   border: 0;
   cursor: pointer;
-  background: rgb(28 25 23 / 0.48);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgb(28 25 23 / 0.55);
+  /* Light blur: heavy backdrop blur makes modals stutter on tablets and older laptops. */
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 
 .txn-modal-dialog {
@@ -90,9 +91,7 @@ body {
   box-shadow:
     0 24px 60px -28px rgb(15 23 42 / 0.45),
     inset 0 1px 0 rgb(255 255 255 / 0.7);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  animation: txn-modal-rise 0.24s ease-out;
+  animation: txn-modal-rise 0.18s ease-out;
 }
 
 .txn-modal-header {

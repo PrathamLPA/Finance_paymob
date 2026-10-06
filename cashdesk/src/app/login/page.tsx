@@ -1,8 +1,17 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, API_BASE, setToken, type StaffUser } from "@/lib/api";
+import {
+  api,
+  API_BASE,
+  getCachedUser,
+  getToken,
+  homeFor,
+  setCachedUser,
+  setToken,
+  type StaffUser,
+} from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
@@ -14,6 +23,12 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Already signed in on this device: skip the form.
+  useEffect(() => {
+    const cached = getCachedUser();
+    if (getToken() && cached) router.replace(homeFor(cached));
+  }, [router]);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
@@ -21,14 +36,15 @@ export default function LoginPage() {
     try {
       const res = await api<{ token: string; user: StaffUser }>("/api/staff/login", {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
       setToken(res.token);
-      router.replace(res.user.role === "manager" ? "/manager" : "/employee");
+      setCachedUser(res.user);
+      router.replace(homeFor(res.user));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Login failed";
       console.error("[Cash Desk login]", { api: API_BASE, email, error: message });
-      setError(`${message} (API: ${API_BASE})`);
+      setError(message);
     } finally {
       setLoading(false);
     }

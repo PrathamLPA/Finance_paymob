@@ -39,6 +39,8 @@ type RetriggerResult = {
   detail?: string | null;
 };
 
+const PAGE_SIZE = 100;
+
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="grid grid-cols-[6.75rem_1fr] gap-x-3 gap-y-1 border-b border-stone-200/70 py-2 last:border-b-0 sm:grid-cols-[7.5rem_1fr]">
@@ -224,12 +226,23 @@ export function TransactionTable({
   const [busyId, setBusyId] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  // Render in pages so a long month does not freeze the browser.
+  const [visible, setVisible] = useState(PAGE_SIZE);
 
   useEffect(() => {
-    if (!selected) return;
-    const fresh = items.find((item) => item.id === selected.id);
-    if (fresh) setSelected(fresh);
-  }, [items, selected?.id]);
+    // Keep "Show more" progress on a plain refresh; shrink only if the list got shorter.
+    setVisible((v) => Math.max(PAGE_SIZE, Math.min(v, items.length)));
+  }, [items]);
+
+  useEffect(() => {
+    setSelected((current) => {
+      if (!current) return current;
+      const fresh = items.find((item) => item.id === current.id);
+      return fresh && fresh !== current ? fresh : current;
+    });
+  }, [items]);
+
+  const shown = items.length > visible ? items.slice(0, visible) : items;
 
   async function retrigger(row: TxnRow) {
     setBusyId(row.id);
@@ -290,7 +303,7 @@ export function TransactionTable({
               </TD>
             </TR>
           ) : (
-            items.map((row) => (
+            shown.map((row) => (
               <TR
                 key={row.id}
                 className="cursor-pointer transition-colors hover:bg-teal-50/60"
@@ -345,6 +358,21 @@ export function TransactionTable({
           )}
         </TBody>
       </Table>
+
+      {items.length > shown.length ? (
+        <div className="flex items-center justify-between gap-3 border-t border-stone-100 px-3 py-3 text-xs text-stone-500">
+          <span>
+            Showing {shown.length} of {items.length}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setVisible((v) => v + PAGE_SIZE)}
+          >
+            Show more
+          </Button>
+        </div>
+      ) : null}
 
       {selected ? (
         <TransactionDetailModal

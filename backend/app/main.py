@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from app.config import get_settings
 from app.routers import approval_api, cash_api, dev, health, payment_api, staff_auth, webhooks
@@ -98,6 +99,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+# Cash Desk list responses are large JSON; gzip cuts transfer time a lot.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 origins = [o.strip() for o in settings.frontend_origin.split(",") if o.strip()]
 for extra in (settings.cashdesk_origin or "").split(","):

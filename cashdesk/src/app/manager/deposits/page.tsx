@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { money } from "@/lib/utils";
 import { rangeForPeriod, toDateInputValue, type DatePeriod } from "@/lib/date-range";
@@ -38,6 +38,8 @@ function DepositsPage() {
   const [sortBy, setSortBy] = useState("deposited_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const requestSeq = useRef(0);
 
   const activeRange = useMemo(
     () => rangeForPeriod(period, { dateFrom, dateTo }),
@@ -45,15 +47,26 @@ function DepositsPage() {
   );
 
   const refresh = useCallback(async () => {
+    const seq = ++requestSeq.current;
     const params = new URLSearchParams({ sort_by: sortBy, sort_dir: sortDir });
     if (activeRange?.dateFrom) params.set("date_from", activeRange.dateFrom);
     if (activeRange?.dateTo) params.set("date_to", activeRange.dateTo);
-    const res = await api<{ items: Deposit[] }>(`/api/staff/cash/deposits?${params}`);
-    setItems(res.items);
+    setLoading(true);
+    try {
+      const res = await api<{ items: Deposit[] }>(`/api/staff/cash/deposits?${params}`);
+      if (seq !== requestSeq.current) return;
+      setItems(res.items);
+      setError("");
+    } catch (err) {
+      if (seq !== requestSeq.current) return;
+      setError(err instanceof Error ? err.message : "Could not load deposits");
+    } finally {
+      if (seq === requestSeq.current) setLoading(false);
+    }
   }, [activeRange, sortBy, sortDir]);
 
   useEffect(() => {
-    refresh().catch((err) => setError(err.message));
+    refresh();
   }, [refresh]);
 
   function handlePeriodChange(next: DatePeriod) {
@@ -107,7 +120,7 @@ function DepositsPage() {
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
-      <Card>
+      <Card className={loading ? "opacity-70 transition-opacity" : "transition-opacity"}>
         <CardContent className="px-0 pb-0 pt-0">
           <Table>
             <THead>
@@ -123,7 +136,7 @@ function DepositsPage() {
               {items.length === 0 ? (
                 <TR>
                   <TD colSpan={5} className="py-10 text-center text-stone-500">
-                    No deposits in this period
+                    {loading ? "Loading deposits…" : "No deposits in this period"}
                   </TD>
                 </TR>
               ) : (

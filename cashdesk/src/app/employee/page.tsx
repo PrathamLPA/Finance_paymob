@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CheckCircle2, HandCoins, PiggyBank, Wallet, X } from "lucide-react";
-import { API_BASE, api, getToken } from "@/lib/api";
+import { api } from "@/lib/api";
+import { useProof } from "@/lib/use-proof";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
@@ -32,6 +33,7 @@ type Collection = {
   has_proof?: boolean;
   proof_url?: string | null;
   proof_original_name?: string | null;
+  proof_content_type?: string | null;
   details_ready?: boolean;
   details_ready_at?: string | null;
   collect_method?: "cash" | "pos" | string | null;
@@ -61,9 +63,8 @@ function DetailRow({ label, value }: { label: string; value: ReactNode }) {
 function CollectionDetailModal({
   row,
   busy,
+  error,
   proofFile,
-  proofPreviewUrl,
-  proofLoading,
   collectMethod,
   onCollectMethodChange,
   onProofChange,
@@ -73,9 +74,8 @@ function CollectionDetailModal({
 }: {
   row: Collection;
   busy: boolean;
+  error: string;
   proofFile: File | null;
-  proofPreviewUrl: string | null;
-  proofLoading: boolean;
   collectMethod: CollectMethod;
   onCollectMethodChange: (method: CollectMethod) => void;
   onProofChange: (file: File | null) => void;
@@ -85,6 +85,11 @@ function CollectionDetailModal({
 }) {
   const titleId = useId();
   const [mounted, setMounted] = useState(false);
+  const isCollected = row.status === "collected";
+  const savedProof = useProof(
+    isCollected && row.has_proof ? row.proof_url : null,
+    row.proof_content_type
+  );
 
   useEffect(() => {
     setMounted(true);
@@ -109,7 +114,6 @@ function CollectionDetailModal({
 
   const isOpen = row.status === "open";
   const isClaimed = row.status === "claimed";
-  const isCollected = row.status === "collected";
   const detailsReady = Boolean(row.details_ready);
   const recordedMethod = (row.collect_method || "cash") as CollectMethod;
   const activeMethod = isCollected ? recordedMethod : collectMethod;
@@ -294,30 +298,37 @@ function CollectionDetailModal({
               <p className="mt-1 text-xs text-stone-500">
                 {row.proof_original_name || "Attached photo"}
               </p>
-              {proofLoading ? (
+              {savedProof.loading ? (
                 <p className="mt-3 text-sm text-stone-500">Loading photo…</p>
-              ) : proofPreviewUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={proofPreviewUrl}
-                  alt="Collection proof"
-                  className="mt-3 max-h-56 w-full rounded-lg border border-stone-200 object-contain bg-stone-50"
-                />
-              ) : (
+              ) : savedProof.error ? (
+                <p className="mt-3 text-sm text-red-700">{savedProof.error}</p>
+              ) : savedProof.url && savedProof.isPdf ? (
                 <a
                   className="mt-3 inline-block text-sm font-medium text-teal-800 underline"
-                  href={`${API_BASE}${row.proof_url}`}
+                  href={savedProof.url}
                   target="_blank"
                   rel="noreferrer"
                 >
                   Open proof file
                 </a>
-              )}
+              ) : savedProof.url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={savedProof.url}
+                  alt="Collection proof"
+                  className="mt-3 max-h-56 w-full rounded-lg border border-stone-200 object-contain bg-stone-50"
+                />
+              ) : null}
             </section>
           ) : null}
         </div>
 
         <footer className="txn-modal-footer">
+          {error ? (
+            <p className="w-full text-sm text-red-700" role="alert">
+              {error}
+            </p>
+          ) : null}
           <Button variant="outline" onClick={onClose} className="min-w-[6.5rem]">
             Close
           </Button>
@@ -470,71 +481,45 @@ function EmployeeDesk({ userId }: { userId: number }) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Collection | null>(null);
   const [proofFile, setProofFile] = useState<File | null>(null);
-  const [proofPreviewUrl, setProofPreviewUrl] = useState<string | null>(null);
-  const [proofLoading, setProofLoading] = useState(false);
   const [collectMethod, setCollectMethod] = useState<CollectMethod>("cash");
+  const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const [queue, collected, bal] = await Promise.all([
-      api<{ items: Collection[] }>("/api/staff/cash/queue"),
-      api<{ items: Collection[] }>("/api/staff/cash/collected?limit=50"),
-      api<Summary>("/api/staff/cash/my-summary"),
-    ]);
-    setItems(queue.items);
-    setCollectedItems(collected.items);
-    setSummary(bal);
+    try {
+      const [queue, collected, bal] = await Promise.all([
+        api<{ items: Collection[] }>("/api/staff/cash/queue"),
+        api<{ items: Collection[] }>("/api/staff/cash/collected?limit=50"),
+        api<Summary>("/api/staff/cash/my-summary"),
+      ]);
+      setItems(queue.items);
+      setCollectedItems(collected.items);
+      setSummary(bal);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     refresh().catch((err) => setError(err.message));
   }, [refresh]);
 
+  // Keep the open modal in sync with the latest list (status, proof, amounts).
   useEffect(() => {
-    let revoked: string | null = null;
-    let cancelled = false;
-
-    async function loadProof() {
-      setProofPreviewUrl(null);
-      if (!selected?.has_proof || !selected.proof_url || selected.status !== "collected") {
-        setProofLoading(false);
-        return;
-      }
-      setProofLoading(true);
-      try {
-        const token = getToken();
-        const res = await fetch(`${API_BASE}${selected.proof_url}`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          credentials: "include",
-        });
-        if (!res.ok) throw new Error("Could not load proof");
-        const blob = await res.blob();
-        if (cancelled) return;
-        if (!blob.type.startsWith("image/")) {
-          setProofLoading(false);
-          return;
-        }
-        const url = URL.createObjectURL(blob);
-        revoked = url;
-        setProofPreviewUrl(url);
-      } catch {
-        if (!cancelled) setProofPreviewUrl(null);
-      } finally {
-        if (!cancelled) setProofLoading(false);
-      }
-    }
-
-    loadProof();
-    return () => {
-      cancelled = true;
-      if (revoked) URL.revokeObjectURL(revoked);
-    };
-  }, [selected]);
+    setSelected((current) => {
+      if (!current) return current;
+      const fresh =
+        items.find((i) => i.id === current.id) ||
+        collectedItems.find((i) => i.id === current.id);
+      return fresh && fresh !== current ? fresh : current;
+    });
+  }, [items, collectedItems]);
 
   function openRow(row: Collection) {
     setSelected(row);
     setProofFile(null);
     setCollectMethod("cash");
     setError("");
+    setSuccess("");
   }
 
   async function claim(id: number) {
@@ -542,14 +527,13 @@ function EmployeeDesk({ userId }: { userId: number }) {
     setError("");
     setSuccess("");
     try {
-      await api(`/api/staff/cash/${id}/claim`, { method: "POST" });
+      // The claim reply already carries the updated row; no second queue fetch needed.
+      const updated = await api<Collection>(`/api/staff/cash/${id}/claim`, { method: "POST" });
       setSuccess("Case claimed. Choose Cash or POS, upload proof, then confirm.");
-      await refresh();
-      setTab("claimed");
-      const queue = await api<{ items: Collection[] }>("/api/staff/cash/queue");
-      const updated = queue.items.find((i) => i.id === id) || null;
       setSelected(updated);
       setCollectMethod("cash");
+      setTab("claimed");
+      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Claim failed");
     } finally {
@@ -646,7 +630,9 @@ function EmployeeDesk({ userId }: { userId: number }) {
         {list.length === 0 ? (
           <Card>
             <CardContent className="py-10 text-center text-stone-500">
-              {tab === "open"
+              {loading
+                ? "Loading…"
+                : tab === "open"
                 ? "No open cash cases right now"
                 : tab === "claimed"
                   ? "No claimed cases - claim one from Open"
@@ -677,9 +663,8 @@ function EmployeeDesk({ userId }: { userId: number }) {
         <CollectionDetailModal
           row={selected}
           busy={busyId === selected.id}
+          error={error}
           proofFile={proofFile}
-          proofPreviewUrl={proofPreviewUrl}
-          proofLoading={proofLoading}
           collectMethod={collectMethod}
           onCollectMethodChange={setCollectMethod}
           onProofChange={setProofFile}
