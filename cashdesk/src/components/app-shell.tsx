@@ -80,8 +80,8 @@ export function AppShell({
       <div className="mx-auto flex min-h-screen max-w-7xl">
         <aside className="hidden w-64 shrink-0 border-r border-stone-200/80 bg-white p-4 md:flex md:flex-col">
           <div className="mb-8 px-2">
-            <p className="font-serif text-2xl text-teal-950">Cash Desk</p>
-            <p className="text-xs text-stone-500">Learners Point finance</p>
+            <p className="font-serif text-2xl text-teal-950">Finance</p>
+            <p className="text-xs text-stone-500">Learners Point</p>
           </div>
           <nav className="flex flex-1 flex-col gap-1">
             {links.map((link) => {
@@ -118,7 +118,7 @@ export function AppShell({
           <header className="border-b border-stone-200/80 bg-white px-4 py-3 md:hidden">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="font-serif text-lg text-teal-950">Cash Desk</p>
+                <p className="font-serif text-lg text-teal-950">Finance</p>
                 <p className="text-xs text-stone-500">{user.name}</p>
               </div>
               <Button variant="outline" size="sm" onClick={logout}>

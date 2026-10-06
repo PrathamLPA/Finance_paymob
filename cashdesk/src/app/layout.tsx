@@ -13,8 +13,8 @@ const display = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "Cash Desk | Learners Point",
-  description: "Cash collection desk for employees and managers",
+  title: "Finance | Learners Point",
+  description: "Finance app for collections, transactions, managers, and admin",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

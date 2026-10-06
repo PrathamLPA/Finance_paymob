@@ -356,7 +356,7 @@ class BankTransferService:
             f"{comment}\n\n"
             f"Please review the timeline on the lead"
             + (f" / estimate #{estimate_id}" if estimate_id else "")
-            + ". Finance will approve in Cash Desk."
+            + ". A finance manager will approve it in Finance."
         )
         await orchestrator._notify_assigned_agent(workflow, subject=subject, body=body)
 
@@ -451,7 +451,7 @@ class BankTransferService:
 
         course = row.course_title or course_title_from_workflow(workflow)
         comment_prefix = (
-            f"Bank transfer payment approved via Cash Desk\n"
+            f"Bank transfer payment approved via Finance\n"
             f"Approved by: {staff.name} ({staff.email})\n"
             f"Course: {course}\n"
             f"Installment {row.installment_number}\n"

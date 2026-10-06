@@ -43,7 +43,7 @@ def staff_login(body: LoginBody, response: Response, db: Session = Depends(get_d
         logger.warning("Staff login failed email=%s reason=invalid_credentials", email)
         raise HTTPException(
             status_code=401,
-            detail="Invalid email or password. Use the Cash Desk manager email from STAFF_BOOTSTRAP_MANAGER_EMAIL.",
+            detail="Invalid email or password.",
         )
     try:
         token = create_access_token(user)

@@ -47,7 +47,7 @@ GET https://<frontend>/health   → finance-payment-frontend
 
 Copy **all** variables from [`backend/railway.env.example`](backend/railway.env.example) into Railway backend (not just the 4 URL vars). Missing `DATABASE_URL` causes 500 on payment link creation.
 
-## Service B — Frontend (customer payment pages + Cash Desk at `/cashdesk`)
+## Service B — Frontend (customer payment pages + Finance at `/finance`)
 
 | Setting | Value |
 |---------|--------|
@@ -55,12 +55,12 @@ Copy **all** variables from [`backend/railway.env.example`](backend/railway.env.
 | **Dockerfile Path** | `Dockerfile.frontend` |
 | Start command | (from Dockerfile) `sh start.sh` |
 
-Cash Desk is a static Next.js export served under `/cashdesk/*` on the **same host** as payment links. `/payment/{token}` and `/approvals/{token}` are unchanged.
+Finance is a static Next.js export served under `/finance/*` on the **same host** as payment links. `/payment/{token}` and `/approvals/{token}` are unchanged. Old `/cashdesk/*` links redirect to `/finance/*`.
 
 ### Frontend env vars
 
 - `API_BASE_URL` = `https://<backend-domain>` (no trailing slash)
-- `NEXT_PUBLIC_API_BASE_URL` = same as `API_BASE_URL` (**required at Docker build** for Cash Desk API calls)
+- `NEXT_PUBLIC_API_BASE_URL` = same as `API_BASE_URL` (**required at Docker build** for Finance API calls)
 
 Payment links written to Bitrix look like:
 
@@ -68,10 +68,10 @@ Payment links written to Bitrix look like:
 https://<frontend-domain>/payment/{token}
 ```
 
-Cash Desk login (after deploy):
+Finance login (after deploy):
 
 ```text
-https://<frontend-domain>/cashdesk/login/
+https://<frontend-domain>/finance/login/
 ```
 
 Backend `CASHDESK_ORIGIN` should be the **frontend domain** (same URL as `FRONTEND_ORIGIN`).

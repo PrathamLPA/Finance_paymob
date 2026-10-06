@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  basePath: "/cashdesk",
-  assetPrefix: "/cashdesk/",
+  basePath: "/finance",
+  assetPrefix: "/finance/",
   output: "export",
   trailingSlash: true,
   images: { unoptimized: true },

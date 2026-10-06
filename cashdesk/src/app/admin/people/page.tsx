@@ -94,13 +94,13 @@ function PeoplePage() {
     <div className="space-y-6">
       <PageHeader
         title="People"
-        description="Add a developer admin, a finance manager, or a cash-desk employee."
+        description="Add a developer admin, a finance manager, or an employee who collects cash."
       />
       <div className="grid gap-4 lg:grid-cols-5">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Add person</CardTitle>
-            <CardDescription>They sign in on this same Cash Desk login.</CardDescription>
+            <CardDescription>They sign in on this same Finance login.</CardDescription>
           </CardHeader>
           <CardContent>
             <form className="space-y-3" onSubmit={onSubmit}>

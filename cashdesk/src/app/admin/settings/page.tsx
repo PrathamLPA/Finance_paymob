@@ -62,7 +62,7 @@ function SettingsPage() {
             soon as the payment is recorded.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center justify-between gap-4">
+        <CardContent className="flex items-center justify-between gap-4">
           <div>
             <p className="text-sm font-medium text-stone-900">{on ? "On" : "Off"}</p>
             <p className="text-sm text-stone-600">
@@ -78,25 +78,21 @@ function SettingsPage() {
             aria-label="Only after manager confirmation"
             disabled={busy || data === null}
             onClick={() => setVerification(!on)}
-            className={`relative h-7 w-12 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
-              on ? "bg-teal-800" : "bg-stone-300"
+            className={`inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors disabled:opacity-50 ${
+              on ? "justify-end bg-teal-800" : "justify-start bg-stone-300"
             }`}
           >
-            <span
-              className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-sm transition-transform ${
-                on ? "translate-x-5" : "translate-x-0.5"
-              }`}
-            />
+            <span className="block h-5 w-5 rounded-full bg-white shadow-sm" />
           </button>
         </CardContent>
       </Card>
 
-      <p className="text-sm text-stone-600">
-        Confirm or reject waiting payments on{" "}
+      <div className="flex flex-wrap items-center gap-3 text-sm text-stone-600">
+        <span>Confirm or reject waiting payments on Finance check.</span>
         <Button asChild variant="outline" size="sm">
-          <Link href="/admin/verification">Finance check</Link>
+          <Link href="/admin/verification">Open finance check</Link>
         </Button>
-      </p>
+      </div>
     </div>
   );
 }

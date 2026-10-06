@@ -263,22 +263,22 @@ class WorkflowOrchestrator:
 
         if details_ready:
             comment = (
-                f"Cash collection queued (Cash Desk)\n"
+                f"Cash collection queued (Finance)\n"
                 f"Installment {collection.installment_number}: "
                 f"{collection.due_amount} {collection.currency}\n"
                 f"Customer details already on file from the first payment "
                 f"— no new form fill required.\n"
-                f"Collect at the office desk via Cash Desk.\n"
+                f"Collect at the office desk and record it in Finance.\n"
                 f"Reference link: {payment_url}"
             )
         else:
             comment = (
-                f"Cash collection queued (Cash Desk)\n"
+                f"Cash collection queued (Finance)\n"
                 f"Installment {collection.installment_number}: "
                 f"{collection.due_amount} {collection.currency}\n"
                 f"Customer must fill name / email / phone and accept Terms first.\n"
                 f"Fill-details link: {payment_url}\n"
-                f"After that, pay at the office desk - collect in Cash Desk."
+                f"After that, pay at the office desk and record it in Finance."
             )
         try:
             await self.bitrix.add_timeline_comment(
@@ -2750,7 +2750,7 @@ class WorkflowOrchestrator:
         )
         if method == COLLECT_METHOD_POS:
             comment_prefix = (
-                f"POS / card machine payment confirmed via Cash Desk\n"
+                f"POS / card machine payment confirmed via Finance\n"
                 f"Collected by: {staff.name} ({staff.email})\n"
                 f"Course: {course}\n"
                 f"Installment {row.installment_number}\n"
@@ -2766,7 +2766,7 @@ class WorkflowOrchestrator:
             )
         else:
             comment_prefix = (
-                f"Cash payment confirmed via Cash Desk\n"
+                f"Cash payment confirmed via Finance\n"
                 f"Collected by: {staff.name} ({staff.email})\n"
                 f"Course: {course}\n"
                 f"Installment {row.installment_number}\n"

@@ -45,7 +45,7 @@ function AdminHome() {
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard label="Active people" value={String(data?.staff_total ?? "—")} icon={Users} />
-        <StatCard label="Managers" value={String(data?.staff.manager ?? "—")} hint="Cash desk managers" icon={Users} accent="stone" />
+        <StatCard label="Managers" value={String(data?.staff.manager ?? "—")} hint="Finance managers" icon={Users} accent="stone" />
         <StatCard label="Employees" value={String(data?.staff.employee ?? "—")} icon={Wallet} accent="amber" />
         <StatCard label="Transactions" value={String(data?.transactions ?? "—")} icon={Receipt} accent="sky" />
         <StatCard label="Open cash cases" value={String(data?.open_cash_collections ?? "—")} icon={Banknote} accent="amber" />

@@ -55,7 +55,7 @@ function ManagerOverview() {
     <div className="space-y-8">
       <PageHeader
         title="Overview"
-        description="High-level cash desk health. Drill into transactions, queue, deposits, or team from the sidebar."
+        description="Payments, cash on hand, and the team. Open transactions, the cash queue, deposits, or people from the sidebar."
       />
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}

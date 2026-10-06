@@ -126,7 +126,7 @@ function CashQueueDetailModal({
         <div className="txn-modal-body">
           <section className="txn-modal-panel">
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <Badge variant="cash">cash desk</Badge>
+              <Badge variant="cash">Cash collection</Badge>
               <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
               {row.collect_method === "pos" ? (
                 <Badge variant="online">POS</Badge>

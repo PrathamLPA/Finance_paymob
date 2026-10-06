@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger("frontend")
 
 app = FastAPI(title=settings.app_name)
-# Compress HTML and the Cash Desk JS/CSS bundles.
+# Compress HTML and the Finance JS/CSS bundles.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(payment.router)
 app.include_router(approvals.router)
@@ -49,16 +49,16 @@ async def on_shutdown() -> None:
 
 @app.middleware("http")
 async def log_request_timing(request: Request, call_next):
-    if request.url.path.startswith("/cashdesk/_next/static/"):
+    if request.url.path.startswith("/finance/_next/static/"):
         # Next.js hashes these filenames, so browsers can keep them for a year
         # instead of re-asking on every page open.
         response = await call_next(request)
         if response.status_code == 200:
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
-    if request.url.path.startswith("/static") or request.url.path.startswith("/cashdesk"):
+    if request.url.path.startswith("/static") or request.url.path.startswith("/finance"):
         response = await call_next(request)
-        if request.url.path.startswith("/cashdesk") and response.status_code == 200:
+        if request.url.path.startswith("/finance") and response.status_code == 200:
             # HTML shells must always be re-checked so a new deploy shows up.
             response.headers["Cache-Control"] = "no-cache"
         return response
@@ -83,9 +83,26 @@ async def terms_and_conditions(request: Request):
     return _templates.TemplateResponse("policy.html", {"request": request})
 
 
+def _legacy_cashdesk_target(rest: str = "") -> str:
+    suffix = (rest or "").strip("/")
+    if not suffix:
+        return "/finance/login/"
+    leaf = suffix.rsplit("/", 1)[-1]
+    if "." in leaf:
+        return f"/finance/{suffix}"
+    return f"/finance/{suffix}/"
+
+
+@app.get("/finance", include_in_schema=False)
+async def finance_index() -> RedirectResponse:
+    return RedirectResponse(url="/finance/login/", status_code=307)
+
+
 @app.get("/cashdesk", include_in_schema=False)
-async def cashdesk_index() -> RedirectResponse:
-    return RedirectResponse(url="/cashdesk/login/", status_code=307)
+@app.get("/cashdesk/{rest:path}", include_in_schema=False)
+async def legacy_cashdesk(rest: str = "") -> RedirectResponse:
+    """Old Cash Desk links keep working after the app moved to /finance."""
+    return RedirectResponse(url=_legacy_cashdesk_target(rest), status_code=307)
 
 
 @app.get("/")
@@ -102,7 +119,7 @@ async def root() -> dict:
         "api_base_url": settings.api_base_url,
     }
     if _cashdesk_dir.is_dir() and (_cashdesk_dir / "login").is_dir():
-        payload["cashdesk"] = "/cashdesk/login/"
+        payload["finance"] = "/finance/login/"
     return payload
 
 
@@ -117,8 +134,8 @@ if static_dir.exists():
 
 if _cashdesk_dir.is_dir() and (_cashdesk_dir / "login").is_dir():
     app.mount(
-        "/cashdesk",
+        "/finance",
         StaticFiles(directory=str(_cashdesk_dir), html=True),
-        name="cashdesk",
+        name="finance",
     )
-    logging.getLogger(__name__).info("Cash Desk mounted at /cashdesk from %s", _cashdesk_dir)
+    logging.getLogger(__name__).info("Finance app mounted at /finance from %s", _cashdesk_dir)

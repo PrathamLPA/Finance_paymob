@@ -43,7 +43,7 @@ export default function LoginPage() {
       router.replace(homeFor(res.user));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Login failed";
-      console.error("[Cash Desk login]", { api: API_BASE, email, error: message });
+      console.error("[Finance login]", { api: API_BASE, email, error: message });
       setError(message);
     } finally {
       setLoading(false);
@@ -55,11 +55,11 @@ export default function LoginPage() {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,_#ccfbf1_0%,_transparent_40%),radial-gradient(circle_at_80%_0%,_#fef3c7_0%,_transparent_35%),linear-gradient(180deg,_#fafaf9,_#f5f5f4)]" />
       <Card className="relative z-10 w-full max-w-md border-stone-200/80 shadow-lg">
         <CardHeader>
-          <p className="font-serif text-3xl text-teal-950">Cash Desk</p>
+          <p className="font-serif text-3xl text-teal-950">Finance</p>
           <CardTitle className="text-lg">Sign in</CardTitle>
           <CardDescription>
-            Employees collect cash. Managers oversee deposits and ledger. Sign in with the manager
-            email set in Railway as <code className="text-xs">STAFF_BOOTSTRAP_MANAGER_EMAIL</code>.
+            Employees collect cash. Managers review transactions and deposits. Admins control people
+            and settings.
           </CardDescription>
         </CardHeader>
         <CardContent>

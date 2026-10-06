@@ -6,7 +6,7 @@ Middleware integrating **Bitrix24 CRM**, **Paymob**, and **Zoho Books**, split f
 |---------|--------|------|
 | **Backend API** | [`backend/`](backend/) | Webhooks, sessions, Bitrix/Paymob/Zoho, Cash Desk APIs |
 | **Frontend** | [`frontend/`](frontend/) | Customer `/payment/{token}` T&C pages |
-| **Cash Desk** | [`cashdesk/`](cashdesk/) | Employee/manager cash collection UI (Next.js) |
+| **Finance** | [`cashdesk/`](cashdesk/) | Collections, transactions, manager, and admin UI (Next.js), served at `/finance` |
 
 See [`RAILWAY.md`](RAILWAY.md) for deploy steps.
 
@@ -70,7 +70,7 @@ Or: `.\start.ps1`
 | Bitrix outbound Handler | `https://<API>/webhooks/bitrix24` |
 | Customer payment link | `https://<FRONTEND>/payment/{token}` |
 | Paymob notification | `https://<API>/webhooks/paymob` |
-| Cash Desk UI | `https://<CASHDESK>/` |
+| Finance UI | `https://<FRONTEND>/finance/login/` |
 
 ## API Endpoints (backend)
 
@@ -81,7 +81,7 @@ Or: `.\start.ps1`
 | POST | `/webhooks/paymob` | Paymob callback |
 | GET | `/api/payment/{token}` | Terms payload for frontend |
 | POST | `/api/payment/{token}/accept` | Accept T&C → `{ checkout_url }` |
-| POST | `/api/staff/login` | Cash Desk login |
+| POST | `/api/staff/login` | Finance login |
 | GET | `/api/staff/me` | Current staff user |
 | GET | `/api/staff/cash/queue` | Open / claimed cash collections |
 | POST | `/api/staff/cash/{id}/claim` | Claim a cash case |

@@ -67,7 +67,7 @@ async def approve_price(token: str, body: DecisionBody, db: Session = Depends(ge
             "payment_url": None,
             "message": (
                 "Payment mode is Cash - no Paymob link was sent. "
-                "Collect cash in Cash Desk."
+                "Collect cash in Finance."
             ),
         }
     except ValueError as exc:
