@@ -52,10 +52,6 @@ export function RequireAuth({
     try {
       const me = await api<StaffUser>("/api/staff/me");
       setCachedUser(me);
-      if (!roleAllowed(me.role, role)) {
-        router.replace(homeFor(me));
-        return;
-      }
       setUser(me);
     } catch (err) {
       if (isAuthError(err)) {
@@ -77,12 +73,32 @@ export function RequireAuth({
     verify();
   }, [verify]);
 
-  // Cached user with the wrong role: send them to their own home right away.
-  useEffect(() => {
-    if (user && !roleAllowed(user.role, role)) {
-      router.replace(homeFor(user));
-    }
-  }, [user, role, router]);
+  if (user && !roleAllowed(user.role, role)) {
+    const needed =
+      role === "admin" ? "a developer admin" : role === "manager" ? "a finance manager" : "an employee";
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-stone-50 px-4 text-center">
+        <p className="max-w-md text-sm text-stone-700">
+          This page is for {needed}. You are signed in as {user.name}, {user.role === "employee" ? "an employee" : `a ${user.role}`}.
+        </p>
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => router.replace(homeFor(user))}>
+            Go to my page
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setToken(null);
+              router.replace("/login");
+            }}
+          >
+            Sign in as someone else
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (user && roleAllowed(user.role, role)) {
     return <AppShell user={user}>{children(user)}</AppShell>;

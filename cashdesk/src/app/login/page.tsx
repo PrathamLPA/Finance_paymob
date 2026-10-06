@@ -22,12 +22,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [signedIn, setSignedIn] = useState<StaffUser | null>(null);
 
-  // Already signed in on this device: skip the form.
   useEffect(() => {
     const cached = getCachedUser();
-    if (getToken() && cached) router.replace(homeFor(cached));
-  }, [router]);
+    if (getToken() && cached) setSignedIn(cached);
+  }, []);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -59,10 +59,28 @@ export default function LoginPage() {
           <CardTitle className="text-lg">Sign in</CardTitle>
           <CardDescription>
             Employees collect cash. Managers review transactions and deposits. Admins control people
-            and settings.
+            and settings. Each address opens only for that account.
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {signedIn ? (
+            <div className="mb-4 rounded-lg border border-stone-200 bg-stone-50 px-3 py-3 text-sm text-stone-700">
+              <p>
+                This browser is signed in as <span className="font-medium">{signedIn.name}</span> (
+                {signedIn.role}). Open a page for a different role only after you sign in with that
+                account below.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => router.push(homeFor(signedIn))}
+              >
+                Continue as {signedIn.name}
+              </Button>
+            </div>
+          ) : null}
           <form className="space-y-4" onSubmit={onSubmit}>
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
