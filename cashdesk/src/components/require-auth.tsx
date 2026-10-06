@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   api,
@@ -35,9 +35,9 @@ export function RequireAuth({
   const [checking, setChecking] = useState(true);
   const [failure, setFailure] = useState("");
 
-  // The static export is pre-rendered without a user, so read the cache after
-  // mount. This makes moving between pages instant instead of waiting on /me.
-  useEffect(() => {
+  // Apply the signed-in user before the browser paints, so a click does not
+  // flash the full-screen "Loading…" placeholder.
+  useLayoutEffect(() => {
     const cached = getCachedUser();
     if (cached) setUser(cached);
   }, []);

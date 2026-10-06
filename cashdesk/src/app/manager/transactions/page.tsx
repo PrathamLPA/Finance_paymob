@@ -162,7 +162,7 @@ function TransactionsPage() {
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
-      <Card className={loading ? "opacity-70 transition-opacity" : "transition-opacity"}>
+      <Card>
         <CardContent className="px-0 pb-0 pt-0">
           {loading && items.length === 0 ? (
             <p className="py-10 text-center text-sm text-stone-500">Loading transactions…</p>

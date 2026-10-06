@@ -1,6 +1,8 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8001";
 const TOKEN_KEY = "cashdesk_token";
 const USER_KEY = "cashdesk_user";
+/** Survives client-side page changes so the next screen does not flash "Loading…". */
+let memoryUser: StaffUser | null = null;
 /** Give up on a request after this long so pages never hang on "Loading…". */
 const DEFAULT_TIMEOUT_MS = 40_000;
 /** Uploads can be slow on mobile data; allow more time. */
@@ -39,24 +41,31 @@ export function setToken(token: string | null) {
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else {
     localStorage.removeItem(TOKEN_KEY);
+    memoryUser = null;
     sessionStorage.removeItem(USER_KEY);
   }
 }
 
 /** Last verified user, so pages can render instantly while /me re-checks in the background. */
 export function getCachedUser(): StaffUser | null {
+  if (memoryUser) return memoryUser;
   if (typeof window === "undefined") return null;
   try {
     const raw = sessionStorage.getItem(USER_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StaffUser;
-    return parsed && typeof parsed.id === "number" && parsed.role ? parsed : null;
+    if (parsed && typeof parsed.id === "number" && parsed.role) {
+      memoryUser = parsed;
+      return parsed;
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
 export function setCachedUser(user: StaffUser | null) {
+  memoryUser = user;
   if (typeof window === "undefined") return;
   if (user) sessionStorage.setItem(USER_KEY, JSON.stringify(user));
   else sessionStorage.removeItem(USER_KEY);

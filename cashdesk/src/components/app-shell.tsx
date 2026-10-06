@@ -76,7 +76,7 @@ export function AppShell({
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#f0fdfa_0%,#fafaf9_28%,#f5f5f4_100%)]">
       <div className="mx-auto flex min-h-screen max-w-7xl">
-        <aside className="hidden w-64 shrink-0 border-r border-stone-200/80 bg-white/70 p-4 backdrop-blur md:flex md:flex-col">
+        <aside className="hidden w-64 shrink-0 border-r border-stone-200/80 bg-white p-4 md:flex md:flex-col">
           <div className="mb-8 px-2">
             <p className="font-serif text-2xl text-teal-950">Cash Desk</p>
             <p className="text-xs text-stone-500">Learners Point finance</p>
@@ -113,7 +113,7 @@ export function AppShell({
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="border-b border-stone-200/80 bg-white/80 px-4 py-3 backdrop-blur md:hidden">
+          <header className="border-b border-stone-200/80 bg-white px-4 py-3 md:hidden">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="font-serif text-lg text-teal-950">Cash Desk</p>
@@ -141,7 +141,7 @@ export function AppShell({
               })}
             </nav>
           </header>
-          <main className="cashdesk-page-enter flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
+          <main className="flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
         </div>
       </div>
     </div>
