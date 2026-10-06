@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { Banknote, Receipt, ShieldCheck, Users, Wallet } from "lucide-react";
 import { api } from "@/lib/api";
 import { RequireAuth } from "@/components/require-auth";
@@ -22,7 +23,6 @@ type Overview = {
 function AdminHome() {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     const overview = await api<Overview>("/api/staff/admin/overview");
@@ -33,29 +33,13 @@ function AdminHome() {
     refresh().catch((err) => setError(err instanceof Error ? err.message : "Could not load"));
   }, [refresh]);
 
-  async function setVerification(enabled: boolean) {
-    setBusy(true);
-    setError("");
-    try {
-      await api("/api/staff/admin/verification", {
-        method: "PUT",
-        body: JSON.stringify({ enabled }),
-      });
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update the switch");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const on = Boolean(data?.finance_manager_verification);
 
   return (
     <div className="space-y-8">
       <PageHeader
         title="Control"
-        description="Live counts for the finance flow. The finance check can stay on while you watch the system, then switch off so payments continue on their own."
+        description="Live counts for the finance flow. Manager confirmation is changed in Settings."
       />
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
@@ -76,16 +60,13 @@ function AdminHome() {
           </CardTitle>
           <CardDescription>
             {on
-              ? "On. A recorded payment waits here until a finance manager approves it. Invoice and Bitrix updates run after that."
-              : "Off. Payments follow the normal flow with no extra approval."}
+              ? "On. Invoice, Bitrix updates, and the follow-up trigger wait until a finance manager confirms the payment."
+              : "Off. Those steps run as soon as the payment is recorded."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-3">
-          <Button disabled={busy || on} onClick={() => setVerification(true)}>
-            {busy && !on ? "Saving…" : "Turn on"}
-          </Button>
-          <Button variant="outline" disabled={busy || !on} onClick={() => setVerification(false)}>
-            {busy && on ? "Saving…" : "Turn off"}
+          <Button asChild variant="outline">
+            <Link href="/admin/settings">Open settings</Link>
           </Button>
           <p className="text-sm text-stone-600">
             {data ? `${data.pending_verifications} waiting for a manager` : "Loading…"}

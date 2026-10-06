@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LogOut,
   Receipt,
+  Settings,
   ShieldCheck,
   Users,
   Wallet,
@@ -32,6 +33,7 @@ export function AppShell({
 
   const adminLinks: NavItem[] = [
     { href: "/admin", label: "Control", icon: LayoutDashboard },
+    { href: "/admin/settings", label: "Settings", icon: Settings },
     { href: "/admin/people", label: "People", icon: Users },
     { href: "/admin/verification", label: "Finance check", icon: ShieldCheck },
     { href: "/admin/transactions", label: "Transactions", icon: ArrowLeftRight },
