@@ -57,9 +57,9 @@ type TabKey = "open" | "claimed" | "collected";
 
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="grid grid-cols-[6.75rem_1fr] gap-x-3 gap-y-1 border-b border-stone-200/70 py-2 last:border-b-0 sm:grid-cols-[7.5rem_1fr]">
+    <div className="grid grid-cols-[6.75rem_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-stone-200/70 py-2 last:border-b-0 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
       <dt className="text-[11px] font-medium uppercase tracking-wide text-stone-500">{label}</dt>
-      <dd className="break-words text-sm text-stone-900">{value || "-"}</dd>
+      <dd className="min-w-0 break-words text-sm text-stone-900">{value || "-"}</dd>
     </div>
   );
 }

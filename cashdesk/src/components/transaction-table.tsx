@@ -41,11 +41,19 @@ type RetriggerResult = {
 
 const PAGE_SIZE = 100;
 
+// "Lead #123 · Lead 123" reads as a bug; the backend falls back to "Lead <id>" when a
+// payment has no course title, so only show a real title next to the lead number.
+function leadLine(row: TxnRow): string {
+  const title = (row.course_title || "").trim();
+  const placeholder = /^lead\s*#?\s*\d+$/i.test(title);
+  return `Lead #${row.bitrix_lead_id ?? "-"}${title && !placeholder ? ` · ${title}` : ""}`;
+}
+
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="grid grid-cols-[6.75rem_1fr] gap-x-3 gap-y-1 border-b border-stone-200/70 py-2 last:border-b-0 sm:grid-cols-[7.5rem_1fr]">
+    <div className="grid grid-cols-[6.75rem_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-stone-200/70 py-2 last:border-b-0 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
       <dt className="text-[11px] font-medium uppercase tracking-wide text-stone-500">{label}</dt>
-      <dd className="break-words text-sm text-stone-900">{value || "-"}</dd>
+      <dd className="min-w-0 break-words text-sm text-stone-900">{value || "-"}</dd>
     </div>
   );
 }
@@ -115,9 +123,7 @@ function TransactionDetailModal({
             >
               {row.customer_name || "Customer"}
             </h2>
-            <p className="mt-1 text-sm text-stone-500">
-              Lead #{row.bitrix_lead_id ?? "-"} · {row.course_title || "No course title"}
-            </p>
+            <p className="mt-1 text-sm text-stone-500">{leadLine(row)}</p>
           </div>
           <button
             type="button"
@@ -318,9 +324,7 @@ export function TransactionTable({
                 </TD>
                 <TD>
                   <div className="font-medium text-stone-900">{row.customer_name || "-"}</div>
-                  <div className="text-xs text-stone-500">
-                    Lead #{row.bitrix_lead_id ?? "-"} · {row.course_title || "-"}
-                  </div>
+                  <div className="text-xs text-stone-500">{leadLine(row)}</div>
                 </TD>
                 <TD>
                   <Badge
