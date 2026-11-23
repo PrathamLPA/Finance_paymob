@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowLeftRight,
   Banknote,
+  ClipboardList,
   LayoutDashboard,
   List,
   LogOut,
@@ -34,6 +35,8 @@ export function AppShell({
 
   const adminLinks: NavItem[] = [
     { href: "/admin", label: "Control", icon: LayoutDashboard },
+    { href: "/manager", label: "Manager", icon: ClipboardList },
+    { href: "/employee", label: "Collections", icon: Banknote },
     { href: "/admin/settings", label: "Settings", icon: Settings },
     { href: "/admin/people", label: "People", icon: Users },
     { href: "/admin/verification", label: "Finance check", icon: ShieldCheck },

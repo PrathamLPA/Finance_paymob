@@ -7,7 +7,7 @@ import {
   API_BASE,
   getCachedUser,
   getToken,
-  homeFor,
+  pageFor,
   setCachedUser,
   setToken,
   type StaffUser,
@@ -37,10 +37,7 @@ export default function LoginPage() {
     setAsRole(as);
     const cached = getToken() ? getCachedUser() : null;
     setSignedIn(cached);
-    // Stay on this page when the saved account is a different role.
-    // Only skip the form when this address already matches who is signed in.
-    if (cached && as && roleMatches(cached.role, as)) router.replace(homeFor(cached));
-  }, [router]);
+  }, []);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -64,7 +61,7 @@ export default function LoginPage() {
       }
       setToken(res.token);
       setCachedUser(res.user);
-      router.replace(homeFor(res.user));
+      router.replace(pageFor(asRole, res.user));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Login failed";
       console.error("[Finance login]", { api: API_BASE, email, error: message });
@@ -102,7 +99,7 @@ export default function LoginPage() {
                 variant="outline"
                 size="sm"
                 className="mt-3"
-                onClick={() => router.push(homeFor(signedIn))}
+                onClick={() => router.push(pageFor(asRole, signedIn))}
               >
                 Continue as {signedIn.name}
               </Button>

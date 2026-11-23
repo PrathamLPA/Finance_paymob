@@ -77,6 +77,14 @@ export function homeFor(user: StaffUser | null | undefined): string {
   return "/employee";
 }
 
+/** Open the section the address asked for. An admin must not be sent to /admin when the link is employee or manager. */
+export function pageFor(asRole: string, user: StaffUser | null | undefined): string {
+  if (asRole === "employee") return "/employee";
+  if (asRole === "manager") return "/manager";
+  if (asRole === "admin") return "/admin";
+  return homeFor(user);
+}
+
 function messageFromBody(data: unknown, fallback: string): string {
   const detail =
     data && typeof data === "object" && "detail" in data
