@@ -2079,6 +2079,39 @@ class WorkflowOrchestrator:
             workflow.sales_deal_id or "-",
         )
 
+    async def _sync_lead_paid_status(self, workflow: CustomerWorkflow) -> None:
+        """Keep the lead's Paid Status (Fully Paid / Partially paid) current on every payment.
+
+        The Complete-lead autofill only fills this field when it is empty, on the first
+        payment, so a later installment never moved it from Partially paid to Fully paid.
+        """
+        field = (self.settings.bitrix_field_complete_paid_status or "").strip()
+        if not field or workflow.amount_paid <= 0:
+            return
+        enum_id = (
+            self.settings.bitrix_complete_paid_status_fully_paid_enum
+            if workflow.remaining_balance <= 0
+            else self.settings.bitrix_complete_paid_status_partially_paid_enum
+        )
+        if not enum_id:
+            return
+        try:
+            await self.bitrix.update_lead_fields(workflow.bitrix_lead_id, {field: enum_id})
+            logger.info(
+                "Lead paid status set | lead=%s field=%s value=%s remaining=%s",
+                workflow.bitrix_lead_id,
+                field,
+                enum_id,
+                workflow.remaining_balance,
+            )
+        except Exception:
+            logger.exception(
+                "Could not update the lead paid status (field=%s value=%s) | lead=%s",
+                field,
+                enum_id,
+                workflow.bitrix_lead_id,
+            )
+
     async def apply_recorded_payment(
         self,
         workflow: CustomerWorkflow,
@@ -2120,6 +2153,9 @@ class WorkflowOrchestrator:
         first_payment = workflow.is_first_payment_pending
         self.threshold_service.refresh_status(workflow)
         self.db.commit()
+
+        if not dev_simulate:
+            await self._sync_lead_paid_status(workflow)
 
         installment_1_paid_date: str | None = None
         if first_payment and not dev_simulate:
