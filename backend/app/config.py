@@ -348,6 +348,10 @@ class Settings(BaseSettings):
     paymob_hmac_secret: str = ""
     paymob_base_url: str = "https://accept.paymob.com"
     paymob_checkout_base_url: str = "https://accept.paymob.com/unifiedcheckout/"
+    # True: Tabby / Tamara payment modes are charged through Paymob (the Tabby and Tamara
+    # Paymob integration IDs above). False: use the direct Tabby / Tamara APIs below.
+    # Sessions already started on a direct checkout still finish through their webhooks.
+    bnpl_checkout_via_paymob: bool = True
 
     # Tabby direct API (UAE). Used when Bitrix Payment Mode is Tabby (not via Paymob).
     # Docs: https://docs.tabby.ai/pay-in-4-custom-integration/quick-start
@@ -458,7 +462,11 @@ class Settings(BaseSettings):
                 self.app_env,
             )
             self.use_mock_integrations = False
-        if env in {"production", "prod"} and not (self.tamara_api_token or "").strip():
+        if (
+            env in {"production", "prod"}
+            and not self.bnpl_checkout_via_paymob
+            and not (self.tamara_api_token or "").strip()
+        ):
             import logging
 
             logging.getLogger(__name__).warning(

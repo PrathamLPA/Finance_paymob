@@ -613,6 +613,8 @@ async def resolve_is_tabby_payment_mode(
     allow_cross_installment_fallback: bool = True,
 ) -> bool:
     """Tabby check with live Bitrix enumeration labels."""
+    if settings.bnpl_checkout_via_paymob:
+        return False  # Tabby is charged through the Paymob Tabby integration instead
     bitrix_labels = await _load_payment_mode_bitrix_labels(
         installment_number=installment_number,
         settings=settings,
@@ -700,6 +702,8 @@ async def resolve_is_tamara_payment_mode(
     allow_cross_installment_fallback: bool = True,
 ) -> bool:
     """Tamara check with live Bitrix enumeration labels."""
+    if settings.bnpl_checkout_via_paymob:
+        return False  # Tamara is charged through the Paymob Tamara integration instead
     bitrix_labels = await _load_payment_mode_bitrix_labels(
         installment_number=installment_number,
         settings=settings,

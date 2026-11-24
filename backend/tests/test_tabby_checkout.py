@@ -35,6 +35,7 @@ def _settings(**kwargs) -> Settings:
         public_base_url="http://api.test",
         payment_frontend_base_url="http://frontend.test",
         bitrix_price_gate_enabled=False,
+        bnpl_checkout_via_paymob=False,  # these tests cover the direct Tabby/Tamara route
     )
     base.update(kwargs)
     return Settings(**base)
