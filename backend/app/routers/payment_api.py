@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -366,7 +367,9 @@ async def upload_bank_transfer_receipt(
     bt = BankTransferService(db, session_service.settings)
     submission = bt.get_by_session(session) or bt.enqueue_for_session(session)
     try:
-        submission = bt.save_proof(
+        # Blocking Google Drive upload: keep it off the event loop.
+        submission = await run_in_threadpool(
+            bt.save_proof,
             submission,
             filename=file.filename or "receipt.jpg",
             content_type=file.content_type,

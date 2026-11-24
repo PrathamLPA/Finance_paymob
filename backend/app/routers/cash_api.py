@@ -9,6 +9,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.db.session import get_db
 from app.deps.staff import get_current_staff, require_manager
@@ -118,7 +119,10 @@ async def cash_collect(
 
     data = await proof.read()
     try:
-        service.save_proof(
+        # The Google Drive upload is blocking (about 5 s with folder creation). Run it
+        # on a worker thread so it does not freeze every other request on the event loop.
+        await run_in_threadpool(
+            service.save_proof,
             row,
             filename=proof.filename or "payment-proof.jpg",
             content_type=proof.content_type,
