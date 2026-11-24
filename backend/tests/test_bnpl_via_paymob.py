@@ -53,6 +53,25 @@ def test_paymob_methods_use_the_tabby_and_tamara_integrations():
     assert paymob_methods_for_customer_mode("tamara", settings) == [52266]
 
 
+def test_offer_all_methods_is_off_by_default():
+    assert _settings().paymob_offer_all_methods is False
+
+
+@pytest.mark.parametrize("enum_id", ["5782", "5784", "5776", "13156", ""])
+def test_offer_all_methods_shows_card_tabby_and_tamara(enum_id):
+    settings = _settings(paymob_offer_all_methods=True)
+    assert resolve_paymob_payment_method_ids(
+        {"UF_MODE_1": enum_id}, installment_number=1, settings=settings
+    ) == [49586, 52169, 52266]
+
+
+def test_offer_all_methods_skips_integrations_that_are_not_configured():
+    settings = _settings(paymob_offer_all_methods=True, paymob_integration_id_tamara=0)
+    assert resolve_paymob_payment_method_ids(
+        {"UF_MODE_1": "5782"}, installment_number=1, settings=settings
+    ) == [49586, 52169]
+
+
 @pytest.mark.asyncio
 async def test_direct_mode_checks_answer_no_when_via_paymob():
     bitrix = MagicMock()

@@ -434,6 +434,18 @@ def resolve_paymob_payment_method_ids(
     methods: list[int] = []
     wants_tabby = _label_means_tabby(effective) or mapped == "tabby"
     wants_tamara = _label_means_tamara(effective) or mapped == "tamara"
+    if getattr(settings, "paymob_offer_all_methods", False):
+        # Customer chooses Card / Tabby / Tamara on Paymob. Unconfigured ids are skipped.
+        for mid in (card_id, tabby_id, tamara_id):
+            if mid > 0 and mid not in methods:
+                methods.append(mid)
+        if methods:
+            logger.info(
+                "Paymob payment methods | installment=%s offer_all=on methods=%s",
+                installment_number,
+                methods,
+            )
+            return methods
     if wants_tabby:
         if tabby_id <= 0:
             raise ValueError(

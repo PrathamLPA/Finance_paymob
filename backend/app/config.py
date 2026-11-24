@@ -352,6 +352,10 @@ class Settings(BaseSettings):
     # Paymob integration IDs above). False: use the direct Tabby / Tamara APIs below.
     # Sessions already started on a direct checkout still finish through their webhooks.
     bnpl_checkout_via_paymob: bool = True
+    # When true, every Paymob checkout offers all enabled methods (Card, Tabby,
+    # Tamara) so the customer picks on Paymob, whatever Payment Mode the lead has.
+    # Cash and bank transfer are unaffected (they never reach Paymob).
+    paymob_offer_all_methods: bool = False
 
     # Tabby direct API (UAE). Used when Bitrix Payment Mode is Tabby (not via Paymob).
     # Docs: https://docs.tabby.ai/pay-in-4-custom-integration/quick-start
