@@ -7,6 +7,7 @@ import {
   ArrowLeftRight,
   Banknote,
   ClipboardList,
+  FileText,
   LayoutDashboard,
   Link2,
   List,
@@ -62,6 +63,7 @@ export function AppShell({
     { href: "/manager/bank-transfers", label: "Bank transfers", icon: Receipt },
     { href: "/manager/deposits", label: "Deposits", icon: Wallet },
     { href: "/admin/people", label: "People", icon: Users, section: "Developer" },
+    { href: "/admin/terms", label: "Terms & policy", icon: FileText },
     { href: "/admin/settings", label: "Settings", icon: Settings },
   ];
 

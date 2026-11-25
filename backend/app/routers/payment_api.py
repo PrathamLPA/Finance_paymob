@@ -46,6 +46,20 @@ class AcceptTermsBody(BaseModel):
     participants: list[ParticipantBody] = Field(default_factory=list)
 
 
+@router.get("/terms")
+def published_terms(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The Terms and Conditions customers are shown right now (public)."""
+    from app.services.terms_service import TermsService
+
+    service = TermsService(db)
+    document = service.active_document()
+    return {
+        "version": service.current_version(),
+        "html": service.markdown_to_html(service.load_terms_markdown()),
+        "published_at": document.published_at.isoformat() if document else None,
+    }
+
+
 @router.get("/lookup/{merchant_reference}")
 async def lookup_payment_by_reference(
     merchant_reference: str,

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment - Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=26">
+    <link rel="stylesheet" href="/static/styles.css?v=27">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -449,7 +449,11 @@
             </div>
             <div class="terms-modal-body" id="terms-modal-body" tabindex="0">
                 <article class="policy-article terms-modal-article">
+                    {% if terms_html %}
+                    {{ terms_html|safe }}
+                    {% else %}
                     {% include "_policy_body.html" %}
+                    {% endif %}
                 </article>
                 <p class="terms-modal-end" id="terms-modal-end">End of policy</p>
             </div>

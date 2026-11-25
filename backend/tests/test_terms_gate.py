@@ -15,7 +15,7 @@ def test_payment_api_exposes_amounts_but_no_customer_data(client, seed_lead):
     assert page.status_code == 200
     data = page.json()
     assert "terms_html" in data
-    assert "Payment Terms" in data["terms_html"] or "Terms" in data["terms_html"]
+    assert "Refund Policy" in data["terms_html"]
     assert data["total_amount"] == "5000.00"
     assert data["remaining_balance"] == "5000.00"
     # Empty installment fields → full amount, locked (customer cannot edit)

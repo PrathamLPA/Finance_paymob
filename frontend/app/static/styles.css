@@ -2356,3 +2356,10 @@ body.terms-modal-open {
     25% { transform: translateX(-4px); }
     75% { transform: translateX(4px); }
 }
+
+
+.policy-version {
+    margin: 1.25rem 0 0;
+    font-size: 0.78rem;
+    color: var(--muted-foreground);
+}

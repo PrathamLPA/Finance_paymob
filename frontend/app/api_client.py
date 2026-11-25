@@ -94,6 +94,29 @@ async def _request(
     return response.json()
 
 
+_terms_cache: dict[str, Any] = {"at": 0.0, "data": None}
+_TERMS_TTL_SECONDS = 30.0
+
+
+async def get_published_terms() -> dict[str, Any] | None:
+    """The published Terms and Conditions, or None if the backend cannot be reached.
+
+    Cached briefly so a busy payment page does not ask the backend every time, yet an
+    edit made in the admin page reaches customers within about half a minute.
+    """
+    now = time.monotonic()
+    cached = _terms_cache["data"]
+    if cached is not None and now - float(_terms_cache["at"]) < _TERMS_TTL_SECONDS:
+        return cached
+    try:
+        data = await _request("GET", "/api/payment/terms", timeout=10.0)
+    except BackendApiError:
+        return cached  # an older copy is better than none
+    _terms_cache["data"] = data
+    _terms_cache["at"] = now
+    return data
+
+
 async def get_payment(token: str) -> dict[str, Any]:
     return await _request("GET", f"/api/payment/{token}", timeout=30.0)
 

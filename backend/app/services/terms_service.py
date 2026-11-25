@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import BackgroundTasks, HTTPException
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,7 @@ from app.config import Settings, get_settings
 from app.integrations.factory import get_bitrix_client, get_email_client
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_session import PaymentSession, SESSION_TERMS_ACCEPTED
+from app.models.terms_document import TermsDocument  # noqa: F401  (registers the table)
 from app.models.terms_acceptance import TermsAcceptance
 from app.services.course_seats import (
     load_lead_courses,
@@ -58,10 +59,77 @@ class TermsService:
         age = datetime.now(timezone.utc) - accepted_at.astimezone(timezone.utc)
         return age > timedelta(minutes=TermsService.BNPL_CHECKOUT_REUSE_MINUTES)
 
-    def load_terms_markdown(self) -> str:
+    def built_in_markdown(self) -> str:
+        """The text that ships with the app, used until an admin publishes an edit."""
         return self.terms_path.read_text(encoding="utf-8")
 
+    def active_document(self):
+        """The published version customers see now, or None while the built-in text is used."""
+
+        return self.db.scalar(
+            select(TermsDocument)
+            .where(TermsDocument.is_active.is_(True))
+            .order_by(TermsDocument.id.desc())
+            .limit(1)
+        )
+
+    def load_terms_markdown(self) -> str:
+        document = self.active_document()
+        return document.content if document is not None else self.built_in_markdown()
+
+    def current_version(self) -> str:
+        document = self.active_document()
+        return document.version if document is not None else self.settings.terms_version
+
+    def history(self) -> list:
+
+        return list(
+            self.db.scalars(select(TermsDocument).order_by(TermsDocument.id.desc()).limit(50))
+        )
+
+    def publish(self, content: str, *, staff, note: str | None = None):
+        """Make `content` the version customers see, keeping every earlier version."""
+        from datetime import datetime, timezone
+
+
+        text = (content or "").replace("\r\n", "\n").strip()
+        if len(text) < 50:
+            raise ValueError("The terms are too short to publish")
+        if len(text) > 60_000:
+            raise ValueError("The terms are too long (limit 60,000 characters)")
+        current = self.active_document()
+        if current is not None and current.content.strip() == text:
+            raise ValueError("Nothing changed: this is already the published text")
+
+        major = (self.settings.terms_version or "1").split(".")[0]
+        count = self.db.scalar(select(func.count()).select_from(TermsDocument)) or 0
+        for old in self.db.scalars(select(TermsDocument).where(TermsDocument.is_active.is_(True))):
+            old.is_active = False
+        row = TermsDocument(
+            version=f"{major}.{count + 1}",
+            content=text,
+            note=(note or "").strip()[:255] or None,
+            published_by_id=getattr(staff, "id", None),
+            published_by_name=getattr(staff, "name", None),
+            is_active=True,
+            published_at=datetime.now(timezone.utc),
+        )
+        self.db.add(row)
+        self.db.commit()
+        self.db.refresh(row)
+        logger.warning(
+            "Terms and Conditions published | version=%s by=%s",
+            row.version,
+            getattr(staff, "email", "?"),
+        )
+        return row
+
     def markdown_to_html(self, markdown: str) -> str:
+        from app.services.terms_render import render_terms_html
+
+        return render_terms_html(markdown)
+
+    def _legacy_markdown_to_html(self, markdown: str) -> str:
         blocks: list[str] = []
         for block in markdown.split("\n\n"):
             block = block.strip()
@@ -164,7 +232,7 @@ class TermsService:
     def get_terms_context(self, **form_values: str | None) -> dict:
         markdown = self.load_terms_markdown()
         return {
-            "terms_version": self.settings.terms_version,
+            "terms_version": self.current_version(),
             "terms_html": self.markdown_to_html(markdown),
             "refund_policy_url": self.settings.refund_policy_url,
             "course_for": form_values.get("course_for"),
@@ -190,8 +258,9 @@ class TermsService:
             if not text.strip():
                 lines.append("")
                 continue
-            if text.startswith("# "):
-                lines.append(text[2:].strip())
+            heading = re.match(r"^#{1,3}\s+(.*\S)\s*$", text)
+            if heading:
+                lines.append(heading.group(1))
                 continue
             if text.startswith("- "):
                 lines.append(f"• {text[2:].strip()}")
@@ -258,7 +327,7 @@ class TermsService:
         c.setFont("Helvetica", 10)
         y = 728
         for line in (
-            f"Version: {self.settings.terms_version}",
+            f"Version: {self.current_version()}",
             f"Accepted at: {datetime.now(timezone.utc).isoformat()}",
             f"Session token: {session.token[:16]}...",
             f"Course registration: {course_label}",
@@ -403,7 +472,7 @@ class TermsService:
                     to_email=to_email,
                     customer_name=mail_name,
                     pdf_path=pdf_path,
-                    terms_version=service.settings.terms_version,
+                    terms_version=service.current_version(),
                 )
                 logger.info(
                     "Terms acceptance emailed | session_id=%s to=%s registrant=%s",
@@ -579,7 +648,7 @@ class TermsService:
                 payment_session_id=session.id,
                 ip_address=ip_address,
                 pdf_path=None,
-                terms_version=self.settings.terms_version,
+                terms_version=self.current_version(),
                 course_for=course_for,
                 registrant_name=registrant_name.strip(),
                 registrant_email=registrant_email.strip(),

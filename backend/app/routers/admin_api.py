@@ -54,6 +54,11 @@ class VerificationToggleBody(BaseModel):
     enabled: bool
 
 
+class TermsBody(BaseModel):
+    content: str = Field(default="", max_length=70_000)
+    note: str | None = Field(default=None, max_length=255)
+
+
 class DataModeBody(BaseModel):
     mode: Literal["test", "live"]
 
@@ -438,3 +443,116 @@ def payment_links_overview(
             for mail in emails[:limit]
         ],
     }
+
+
+def _terms_item(service: Any, row: Any, *, with_content: bool = False) -> dict[str, Any]:
+    item = {
+        "id": row.id,
+        "version": row.version,
+        "note": row.note,
+        "published_by": row.published_by_name,
+        "published_at": _iso(row.published_at),
+        "is_active": bool(row.is_active),
+    }
+    if with_content:
+        item["content"] = row.content
+        item["html"] = service.markdown_to_html(row.content)
+    return item
+
+
+@router.get("/terms")
+def get_terms(
+    db: Session = Depends(get_db),
+    _admin: StaffUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """What customers see now, the original text, and every version published so far."""
+    from app.services.terms_service import TermsService
+
+    service = TermsService(db)
+    document = service.active_document()
+    built_in = service.built_in_markdown()
+    if document is not None:
+        active = _terms_item(service, document, with_content=True)
+    else:
+        active = {
+            "id": None,
+            "version": service.current_version(),
+            "note": "Original text that came with the app",
+            "published_by": None,
+            "published_at": None,
+            "is_active": True,
+            "content": built_in,
+            "html": service.markdown_to_html(built_in),
+        }
+    return {
+        "active": active,
+        "built_in_content": built_in,
+        "history": [_terms_item(service, row) for row in service.history()],
+    }
+
+
+@router.get("/terms/{terms_id}")
+def get_terms_version(
+    terms_id: int,
+    db: Session = Depends(get_db),
+    _admin: StaffUser = Depends(require_admin),
+) -> dict[str, Any]:
+    from app.models.terms_document import TermsDocument
+    from app.services.terms_service import TermsService
+
+    row = db.get(TermsDocument, terms_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="That version was not found")
+    return _terms_item(TermsService(db), row, with_content=True)
+
+
+@router.post("/terms/preview")
+def preview_terms(
+    body: TermsBody,
+    db: Session = Depends(get_db),
+    _admin: StaffUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """The customer-facing HTML for text that has not been published yet."""
+    from app.services.terms_service import TermsService
+
+    return {"html": TermsService(db).markdown_to_html(body.content)}
+
+
+@router.post("/terms")
+def publish_terms(
+    body: TermsBody,
+    db: Session = Depends(get_db),
+    admin: StaffUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Publish an edit. Customers see it from their next page load."""
+    from app.services.terms_service import TermsService
+
+    service = TermsService(db)
+    try:
+        row = service.publish(body.content, staff=admin, note=body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _terms_item(service, row, with_content=True)
+
+
+@router.post("/terms/{terms_id}/restore")
+def restore_terms(
+    terms_id: int,
+    db: Session = Depends(get_db),
+    admin: StaffUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Publish an earlier version again as a new version."""
+    from app.models.terms_document import TermsDocument
+    from app.services.terms_service import TermsService
+
+    old = db.get(TermsDocument, terms_id)
+    if old is None:
+        raise HTTPException(status_code=404, detail="That version was not found")
+    service = TermsService(db)
+    try:
+        row = service.publish(
+            old.content, staff=admin, note=f"Restored from version {old.version}"
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _terms_item(service, row, with_content=True)

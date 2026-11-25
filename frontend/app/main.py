@@ -93,7 +93,18 @@ async def log_request_timing(request: Request, call_next):
 
 @app.get("/terms-and-conditions", include_in_schema=False)
 async def terms_and_conditions(request: Request):
-    return _templates.TemplateResponse("policy.html", {"request": request})
+    from app.api_client import get_published_terms
+
+    terms = await get_published_terms() or {}
+    return _templates.TemplateResponse(
+        "policy.html",
+        {
+            "request": request,
+            "terms_html": terms.get("html", ""),
+            "terms_version": terms.get("version", ""),
+            "terms_published_at": terms.get("published_at") or "",
+        },
+    )
 
 
 def _legacy_cashdesk_target(rest: str = "") -> str:

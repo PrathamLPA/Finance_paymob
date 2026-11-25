@@ -20,6 +20,7 @@ from app.models import (  # noqa: F401
     price_approval,
     staff_user,
     terms_acceptance,
+    terms_document,
     workflow_installment,
 )
 
