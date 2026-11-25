@@ -2151,6 +2151,21 @@ class WorkflowOrchestrator:
             return workflow
 
         first_payment = workflow.is_first_payment_pending
+        logger.info(
+            "Applying payment side effects | lead=%s txn=%s first_payment=%s "
+            "finance_release=%s skip_zoho=%s skip_deals=%s dev_simulate=%s "
+            "paid=%s total=%s remaining=%s",
+            workflow.bitrix_lead_id,
+            transaction.transaction_id,
+            first_payment,
+            finance_release,
+            skip_zoho,
+            skip_deals,
+            dev_simulate,
+            workflow.amount_paid,
+            workflow.total_amount,
+            workflow.remaining_balance,
+        )
         self.threshold_service.refresh_status(workflow)
         self.db.commit()
 
@@ -2196,6 +2211,11 @@ class WorkflowOrchestrator:
             try:
                 await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
                 invoice_synced = True
+                logger.info(
+                    "Invoice synced after payment | lead=%s zoho_invoice=%s",
+                    workflow.bitrix_lead_id,
+                    workflow.zoho_invoice_id,
+                )
             except Exception:
                 logger.exception(
                     "Failed to sync invoice after payment for lead %s",
@@ -2252,12 +2272,30 @@ class WorkflowOrchestrator:
 
         # Optional Bitrix stage trigger (Deal Won robots / Finance tunnel). Safe if
         # the lead is already CONVERTED — Bitrix may no-op; payment is already done.
+        if not (first_payment and invoice_synced and not skip_deals and not dev_simulate):
+            logger.info(
+                "Invoice-sent stage trigger NOT run | lead=%s first_payment=%s "
+                "invoice_synced=%s skip_deals=%s dev_simulate=%s "
+                "(it only fires on the first payment, after the invoice synced)",
+                workflow.bitrix_lead_id,
+                first_payment,
+                invoice_synced,
+                skip_deals,
+                dev_simulate,
+            )
         if first_payment and invoice_synced and not skip_deals and not dev_simulate:
+            logger.info(
+                "Firing invoice-sent stage trigger | lead=%s", workflow.bitrix_lead_id
+            )
             try:
                 triggered = await self.bitrix.trigger_invoice_sent(
                     workflow.bitrix_lead_id
                 )
-                if not triggered:
+                if triggered:
+                    logger.info(
+                        "Invoice-sent stage trigger done | lead=%s", workflow.bitrix_lead_id
+                    )
+                else:
                     logger.error(
                         "Invoice-sent stage trigger did not activate | lead=%s. "
                         "See the preceding Bitrix trigger diagnostic log.",

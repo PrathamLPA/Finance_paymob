@@ -134,6 +134,14 @@ class FinanceVerificationService:
             raise ValueError("Verification not found")
         if row.status != STATUS_PENDING:
             raise ValueError(f"Already {row.status}")
+        logger.info(
+            "Finance verification %s | id=%s txn=%s lead=%s by=%s",
+            "APPROVE requested" if approve else "REJECT requested",
+            row.id,
+            row.payment_transaction_id,
+            row.bitrix_lead_id,
+            staff.email,
+        )
         row.status = STATUS_APPROVED if approve else STATUS_REJECTED
         row.decision_note = (note or "").strip() or None
         row.decided_by_id = staff.id
@@ -155,6 +163,14 @@ class FinanceVerificationService:
                 skip_zoho=row.skip_zoho,
                 skip_deals=row.skip_deals,
                 finance_release=True,
+            )
+            logger.info(
+                "Finance verification RELEASED | id=%s txn=%s lead=%s paid=%s remaining=%s",
+                row.id,
+                row.payment_transaction_id,
+                row.bitrix_lead_id,
+                workflow.amount_paid,
+                workflow.remaining_balance,
             )
         self.db.refresh(row)
         return self._to_dict(row, staff.name)

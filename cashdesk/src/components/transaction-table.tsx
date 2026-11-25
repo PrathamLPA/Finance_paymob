@@ -35,6 +35,7 @@ type RetriggerResult = {
   zoho_invoice_id?: string | null;
   invoice_number?: string | null;
   created_new?: boolean;
+  released_hold?: boolean;
   steps?: Record<string, string>;
   detail?: string | null;
 };
@@ -265,7 +266,9 @@ export function TransactionTable({
       const steps = result.steps
         ? `Zoho: ${result.steps.zoho}; Bitrix: ${result.steps.bitrix}; Email: ${result.steps.email}`
         : "";
-      const nextNotice = result.created_new
+      const nextNotice = result.released_hold
+        ? "Payment approved and released: invoice, Bitrix paid status and the next-stage trigger have been run. Check the Finance check page for the result."
+        : result.created_new
         ? `Invoice created ${result.invoice_number || result.zoho_invoice_id || ""}. ${steps}`
         : `Invoice resent ${result.invoice_number || result.zoho_invoice_id || ""}. ${steps}`;
       setNotice(nextNotice);

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
@@ -16,6 +17,8 @@ from app.deps.staff import get_current_staff, require_manager
 from app.models.staff_user import ROLE_MANAGER, StaffUser
 from app.services.cash_collection_service import CashCollectionService
 from app.services.workflow_orchestrator import WorkflowOrchestrator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/staff", tags=["cash-desk"])
 
@@ -500,7 +503,12 @@ async def retrigger_invoice(
     db: Session = Depends(get_db),
     _manager: StaffUser = Depends(require_manager),
 ) -> dict[str, Any]:
-    """Create missing Zoho invoice and (re)send to Bitrix + customer email."""
+    """Create missing Zoho invoice and (re)send to Bitrix + customer email.
+
+    A payment that is still waiting for finance-manager approval is approved here
+    instead, so the button cannot send an invoice while skipping the Bitrix
+    trigger, the paid-status update and the lead stage move.
+    """
     from sqlalchemy import select
 
     from app.models.customer_workflow import CustomerWorkflow
@@ -541,6 +549,44 @@ async def retrigger_invoice(
             status_code=400,
             detail="No recorded payment found for this workflow - cannot create invoice",
         )
+
+    from app.models.finance_verification import STATUS_PENDING, FinanceVerification
+    from app.services.finance_verification_service import FinanceVerificationService
+
+    pending = db.scalar(
+        select(FinanceVerification).where(
+            FinanceVerification.payment_transaction_id == txn.id,
+            FinanceVerification.status == STATUS_PENDING,
+        )
+    )
+    if pending is not None:
+        logger.info(
+            "Invoice retrigger on a held payment - approving it instead | "
+            "verification=%s txn=%s lead=%s by=%s",
+            pending.id,
+            txn.id,
+            workflow.bitrix_lead_id,
+            _manager.email,
+        )
+        try:
+            released = await FinanceVerificationService(db).decide(
+                pending.id,
+                staff=_manager,
+                approve=True,
+                note="Approved from Create & send invoice",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        db.refresh(workflow)
+        return {
+            "ok": True,
+            "released_hold": True,
+            "created_new": False,
+            "zoho_invoice_id": workflow.zoho_invoice_id,
+            "invoice_number": workflow.zoho_invoice_id,
+            "verification": released,
+            "steps": {"zoho": "released", "bitrix": "released", "email": "released"},
+        }
 
     result = await InvoiceService(db).retrigger_invoice_delivery(workflow, txn)
     if not result.get("ok") and str(result.get("steps", {}).get("zoho", "")).startswith(
