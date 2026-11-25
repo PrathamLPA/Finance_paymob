@@ -13,6 +13,7 @@ from app.models import (  # noqa: F401
     cash_collection,
     cash_deposit,
     customer_workflow,
+    email_log,
     finance_verification,
     payment_session,
     payment_transaction,

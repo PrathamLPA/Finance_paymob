@@ -108,3 +108,56 @@ def test_manager_cannot_use_admin_routes_but_can_review(client, db_session):
     ).status_code == 403
     # The finance-check queue is for managers.
     assert client.get("/api/staff/admin/verifications", headers=manager).status_code == 200
+
+
+def test_payment_links_page_lists_links_emails_and_mode(client, db_session):
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+
+    from app.models.customer_workflow import CustomerWorkflow
+    from app.models.email_log import EmailLog
+    from app.models.payment_session import PaymentSession
+
+    _make_user(db_session, email="fin@example.com", role=ROLE_MANAGER)
+    manager = _login(client, "fin@example.com")
+
+    workflow = CustomerWorkflow(
+        bitrix_lead_id=777, customer_name="Sam", customer_email="sam@example.com"
+    )
+    db_session.add(workflow)
+    db_session.commit()
+    session = PaymentSession(
+        workflow_id=workflow.id,
+        token="tok-abc-123",
+        source_type="lead",
+        source_id=777,
+        charge_amount=Decimal("2.10"),
+        merchant_reference="WF-1",
+        customer_payment_mode="tabby",
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.add(
+        EmailLog(
+            to_email="sam@example.com",
+            subject="Payment Request",
+            body="Pay here: https://x/payment/tok-abc-123",
+            status="sent",
+        )
+    )
+    db_session.add(
+        EmailLog(to_email="other@example.com", subject="Other", body="no link", status="sent")
+    )
+    db_session.commit()
+
+    res = client.get("/api/staff/admin/payment-links", headers=manager)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert len(body["links"]) == 1
+    link = body["links"][0]
+    assert link["lead_id"] == 777
+    assert link["chosen_mode"] == "tabby"
+    assert link["payment_url"].endswith("/payment/tok-abc-123")
+    assert [m["to"] for m in link["emails"]] == ["sam@example.com"]
+    assert len(body["emails"]) == 2
+    assert body["pending_approvals"] == []

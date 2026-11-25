@@ -13,6 +13,11 @@ from app.db.session import get_db
 from app.deps.staff import require_admin, require_manager
 from app.models.bank_transfer import BankTransferSubmission
 from app.models.cash_collection import STATUS_CLAIMED, STATUS_OPEN, CashCollection
+from app.config import get_settings
+from app.models.customer_workflow import CustomerWorkflow
+from app.models.email_log import EmailLog
+from app.models.finance_verification import STATUS_PENDING, FinanceVerification
+from app.models.payment_session import PaymentSession
 from app.models.payment_transaction import PaymentTransaction
 from app.models.staff_user import ROLE_ADMIN, ROLE_EMPLOYEE, ROLE_MANAGER, StaffUser
 from app.services.finance_verification_service import FinanceVerificationService
@@ -196,3 +201,134 @@ async def reject_verification(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _iso(value: Any) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+@router.get("/payment-links")
+def payment_links_overview(
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    _reviewer: StaffUser = Depends(require_manager),
+) -> dict[str, Any]:
+    """Every payment link, the emails sent, the mode chosen and what still needs approval."""
+    limit = max(1, min(limit, 500))
+    settings = get_settings()
+    base = (settings.payment_frontend_base_url or settings.public_base_url or "").rstrip("/")
+
+    emails = list(
+        db.scalars(select(EmailLog).order_by(EmailLog.id.desc()).limit(500)).all()
+    )
+    rows = db.execute(
+        select(PaymentSession, CustomerWorkflow)
+        .join(CustomerWorkflow, CustomerWorkflow.id == PaymentSession.workflow_id)
+        .order_by(PaymentSession.id.desc())
+        .limit(limit)
+    ).all()
+
+    session_ids = [session.id for session, _ in rows]
+    txn_by_session: dict[int, PaymentTransaction] = {}
+    verification_by_txn: dict[int, FinanceVerification] = {}
+    if session_ids:
+        for txn in db.scalars(
+            select(PaymentTransaction).where(PaymentTransaction.payment_session_id.in_(session_ids))
+        ):
+            if txn.payment_session_id is not None:
+                txn_by_session[txn.payment_session_id] = txn
+        txn_ids = [t.id for t in txn_by_session.values()]
+        if txn_ids:
+            for ver in db.scalars(
+                select(FinanceVerification).where(
+                    FinanceVerification.payment_transaction_id.in_(txn_ids)
+                )
+            ):
+                verification_by_txn[ver.payment_transaction_id] = ver
+
+    def _emails_for(token: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": mail.id,
+                "to": mail.to_email,
+                "subject": mail.subject,
+                "status": mail.status,
+                "sent_at": _iso(mail.created_at),
+            }
+            for mail in emails
+            if token and token in (mail.body or "")
+        ]
+
+    links: list[dict[str, Any]] = []
+    for session, workflow in rows:
+        txn = txn_by_session.get(session.id)
+        ver = verification_by_txn.get(txn.id) if txn is not None else None
+        links.append(
+            {
+                "id": session.id,
+                "lead_id": workflow.bitrix_lead_id,
+                "customer_name": workflow.customer_name,
+                "customer_email": workflow.customer_email,
+                "amount": str(session.charge_amount),
+                "currency": session.currency,
+                "installment_number": session.installment_number,
+                "channel": session.channel,
+                "chosen_mode": session.customer_payment_mode,
+                "paid_with": txn.source_type if txn is not None else None,
+                "status": session.status,
+                "payment_url": f"{base}/payment/{session.token}",
+                "paymob_checkout_url": session.paymob_checkout_url,
+                "created_at": _iso(session.created_at),
+                "expires_at": _iso(session.expires_at),
+                "completed_at": _iso(session.completed_at),
+                "emails": _emails_for(session.token),
+                "approval": (
+                    {"id": ver.id, "status": ver.status} if ver is not None else None
+                ),
+            }
+        )
+
+    pending: list[dict[str, Any]] = []
+    for ver in db.scalars(
+        select(FinanceVerification)
+        .where(FinanceVerification.status == STATUS_PENDING)
+        .order_by(FinanceVerification.id.desc())
+    ):
+        txn = db.get(PaymentTransaction, ver.payment_transaction_id)
+        session = (
+            db.get(PaymentSession, txn.payment_session_id)
+            if txn is not None and txn.payment_session_id
+            else None
+        )
+        pending.append(
+            {
+                "id": ver.id,
+                "lead_id": ver.bitrix_lead_id,
+                "customer_name": ver.customer_name,
+                "amount": ver.amount,
+                "currency": ver.currency,
+                "channel": ver.channel,
+                "chosen_mode": session.customer_payment_mode if session is not None else None,
+                "paid_with": txn.source_type if txn is not None else None,
+                "transaction_id": txn.transaction_id if txn is not None else None,
+                "created_at": _iso(ver.created_at),
+            }
+        )
+
+    return {
+        "verification_enabled": FinanceVerificationService(db).is_enabled(),
+        "links": links,
+        "pending_approvals": pending,
+        "emails": [
+            {
+                "id": mail.id,
+                "to": mail.to_email,
+                "subject": mail.subject,
+                "status": mail.status,
+                "has_attachment": mail.has_attachment,
+                "sent_at": _iso(mail.created_at),
+                "body": mail.body,
+            }
+            for mail in emails[:limit]
+        ],
+    }

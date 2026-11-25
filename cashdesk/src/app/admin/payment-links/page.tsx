@@ -1,0 +1,341 @@
+"use client";
+
+import { Fragment, useCallback, useEffect, useState } from "react";
+import { api } from "@/lib/api";
+import { money } from "@/lib/utils";
+import { RequireAuth } from "@/components/require-auth";
+import { PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+
+type LinkEmail = { id: number; to: string; subject: string; status: string; sent_at: string | null };
+
+type LinkRow = {
+  id: number;
+  lead_id: number;
+  customer_name: string | null;
+  customer_email: string | null;
+  amount: string;
+  currency: string;
+  installment_number: number | null;
+  channel: string;
+  chosen_mode: string | null;
+  paid_with: string | null;
+  status: string;
+  payment_url: string;
+  paymob_checkout_url: string | null;
+  created_at: string | null;
+  expires_at: string | null;
+  completed_at: string | null;
+  emails: LinkEmail[];
+  approval: { id: number; status: string } | null;
+};
+
+type Pending = {
+  id: number;
+  lead_id: number;
+  customer_name: string | null;
+  amount: string;
+  currency: string;
+  channel: string | null;
+  chosen_mode: string | null;
+  paid_with: string | null;
+  transaction_id: string | null;
+  created_at: string | null;
+};
+
+type EmailRow = {
+  id: number;
+  to: string;
+  subject: string;
+  status: string;
+  has_attachment: boolean;
+  sent_at: string | null;
+  body: string | null;
+};
+
+type Overview = {
+  verification_enabled: boolean;
+  links: LinkRow[];
+  pending_approvals: Pending[];
+  emails: EmailRow[];
+};
+
+function when(value: string | null) {
+  return value ? new Date(value).toLocaleString() : "-";
+}
+
+function mode(value: string | null) {
+  return value ? value.replace(/_/g, " ") : "not chosen yet";
+}
+
+function statusVariant(status: string): "success" | "warning" | "muted" | "default" {
+  if (status === "completed" || status === "sent" || status === "approved") return "success";
+  if (status === "failed" || status === "expired" || status === "rejected") return "muted";
+  if (status === "pending" || status === "terms_accepted") return "warning";
+  return "default";
+}
+
+function PaymentLinks() {
+  const [data, setData] = useState<Overview | null>(null);
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [openMail, setOpenMail] = useState<number | null>(null);
+  const [copied, setCopied] = useState<number | null>(null);
+
+  const refresh = useCallback(async () => {
+    setData(await api<Overview>("/api/staff/admin/payment-links"));
+  }, []);
+
+  useEffect(() => {
+    refresh().catch((err) => setError(err instanceof Error ? err.message : "Could not load"));
+  }, [refresh]);
+
+  async function decide(id: number, action: "approve" | "reject") {
+    setBusyId(id);
+    setError("");
+    try {
+      await api(`/api/staff/admin/verifications/${id}/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ note: null }),
+      });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function copy(row: LinkRow) {
+    try {
+      await navigator.clipboard.writeText(row.payment_url);
+      setCopied(row.id);
+      setTimeout(() => setCopied(null), 1500);
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
+  const pending = data?.pending_approvals ?? [];
+
+  return (
+    <div className="space-y-8">
+      <PageHeader
+        title="Payment links"
+        description="Every payment link, the emails that went out, the method each customer chose, and what a finance manager still has to approve."
+      />
+      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Waiting for finance manager ({pending.length})</CardTitle>
+          <CardDescription>
+            {data?.verification_enabled
+              ? "Approving runs the invoice, the Bitrix paid status and the next-stage trigger."
+              : "The finance check switch is off, so new payments skip this list. Anything here was queued earlier."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="px-0 pb-0">
+          <Table>
+            <THead>
+              <TR>
+                <TH>Customer</TH>
+                <TH>Amount</TH>
+                <TH>Method chosen</TH>
+                <TH>Paid with</TH>
+                <TH>Queued</TH>
+                <TH></TH>
+              </TR>
+            </THead>
+            <TBody>
+              {pending.length === 0 ? (
+                <TR>
+                  <TD colSpan={6} className="py-8 text-center text-stone-500">
+                    Nothing waiting for approval
+                  </TD>
+                </TR>
+              ) : (
+                pending.map((row) => (
+                  <TR key={row.id}>
+                    <TD>
+                      <div className="font-medium">{row.customer_name || "Customer"}</div>
+                      <div className="text-xs text-stone-500">Lead #{row.lead_id}</div>
+                    </TD>
+                    <TD>{money(row.amount, row.currency)}</TD>
+                    <TD className="capitalize">{mode(row.chosen_mode || row.channel)}</TD>
+                    <TD className="capitalize">{mode(row.paid_with)}</TD>
+                    <TD className="text-xs text-stone-500">{when(row.created_at)}</TD>
+                    <TD className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busyId === row.id}
+                          onClick={() => decide(row.id, "reject")}
+                        >
+                          Reject
+                        </Button>
+                        <Button size="sm" disabled={busyId === row.id} onClick={() => decide(row.id, "approve")}>
+                          {busyId === row.id ? "Working..." : "Approve"}
+                        </Button>
+                      </div>
+                    </TD>
+                  </TR>
+                ))
+              )}
+            </TBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>All payment links ({data?.links.length ?? 0})</CardTitle>
+          <CardDescription>
+            Newest first. Method chosen is what the customer picked on the payment page.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="px-0 pb-0">
+          <Table>
+            <THead>
+              <TR>
+                <TH>Customer</TH>
+                <TH>Amount</TH>
+                <TH>Method chosen</TH>
+                <TH>Link status</TH>
+                <TH>Emails sent</TH>
+                <TH>Approval</TH>
+                <TH>Created</TH>
+                <TH></TH>
+              </TR>
+            </THead>
+            <TBody>
+              {!data || data.links.length === 0 ? (
+                <TR>
+                  <TD colSpan={8} className="py-8 text-center text-stone-500">
+                    {data ? "No payment links yet" : "Loading..."}
+                  </TD>
+                </TR>
+              ) : (
+                data.links.map((row) => (
+                  <TR key={row.id}>
+                    <TD>
+                      <div className="font-medium">{row.customer_name || "Customer"}</div>
+                      <div className="text-xs text-stone-500">
+                        Lead #{row.lead_id}
+                        {row.customer_email ? ` · ${row.customer_email}` : ""}
+                      </div>
+                    </TD>
+                    <TD>
+                      {money(row.amount, row.currency)}
+                      {row.installment_number ? (
+                        <div className="text-xs text-stone-500">Installment {row.installment_number}</div>
+                      ) : null}
+                    </TD>
+                    <TD className="capitalize">
+                      {mode(row.chosen_mode)}
+                      {row.paid_with ? (
+                        <div className="text-xs text-stone-500">paid: {mode(row.paid_with)}</div>
+                      ) : null}
+                    </TD>
+                    <TD>
+                      <Badge variant={statusVariant(row.status)}>{row.status.replace(/_/g, " ")}</Badge>
+                      <div className="mt-1 text-xs text-stone-500">Expires {when(row.expires_at)}</div>
+                    </TD>
+                    <TD>
+                      {row.emails.length === 0 ? (
+                        <span className="text-xs text-stone-500">none recorded</span>
+                      ) : (
+                        row.emails.map((mail) => (
+                          <div key={mail.id} className="text-xs">
+                            <Badge variant={statusVariant(mail.status)}>{mail.status}</Badge> {mail.to} ·{" "}
+                            {when(mail.sent_at)}
+                          </div>
+                        ))
+                      )}
+                    </TD>
+                    <TD>
+                      {row.approval ? (
+                        <Badge variant={statusVariant(row.approval.status)}>{row.approval.status}</Badge>
+                      ) : (
+                        <span className="text-xs text-stone-500">-</span>
+                      )}
+                    </TD>
+                    <TD className="text-xs text-stone-500">{when(row.created_at)}</TD>
+                    <TD className="text-right">
+                      <Button size="sm" variant="outline" onClick={() => copy(row)}>
+                        {copied === row.id ? "Copied" : "Copy link"}
+                      </Button>
+                    </TD>
+                  </TR>
+                ))
+              )}
+            </TBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Emails sent ({data?.emails.length ?? 0})</CardTitle>
+          <CardDescription>
+            Emails this system sends from now on (payment links, invoices, reminders). Click a row to read it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="px-0 pb-0">
+          <Table>
+            <THead>
+              <TR>
+                <TH>To</TH>
+                <TH>Subject</TH>
+                <TH>Status</TH>
+                <TH>Sent</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {!data || data.emails.length === 0 ? (
+                <TR>
+                  <TD colSpan={4} className="py-8 text-center text-stone-500">
+                    {data ? "No emails recorded yet" : "Loading..."}
+                  </TD>
+                </TR>
+              ) : (
+                data.emails.map((mail) => (
+                  <Fragment key={mail.id}>
+                    <TR className="cursor-pointer" onClick={() => setOpenMail(openMail === mail.id ? null : mail.id)}>
+                      <TD>{mail.to}</TD>
+                      <TD>
+                        {mail.subject}
+                        {mail.has_attachment ? <span className="ml-2 text-xs text-stone-500">(attachment)</span> : null}
+                      </TD>
+                      <TD>
+                        <Badge variant={statusVariant(mail.status)}>{mail.status}</Badge>
+                      </TD>
+                      <TD className="text-xs text-stone-500">{when(mail.sent_at)}</TD>
+                    </TR>
+                    {openMail === mail.id ? (
+                      <TR>
+                        <TD colSpan={4}>
+                          <pre className="whitespace-pre-wrap break-words rounded-md bg-stone-50 p-3 text-xs text-stone-700">
+                            {mail.body || "(no body)"}
+                          </pre>
+                        </TD>
+                      </TR>
+                    ) : null}
+                  </Fragment>
+                ))
+              )}
+            </TBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export default function AdminPaymentLinksPage() {
+  return <RequireAuth role="manager">{() => <PaymentLinks />}</RequireAuth>;
+}

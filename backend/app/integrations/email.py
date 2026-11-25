@@ -28,6 +28,15 @@ class MockEmailClient:
             content += f"\n\nAttachment: {attachment}"
         filename.write_text(content, encoding="utf-8")
         self.sent_emails.append({"to": to_email, "subject": subject, "body": body, "attachment": attachment})
+        from app.services.email_log_service import record_email
+
+        record_email(
+            to_email=to_email,
+            subject=subject,
+            body=body,
+            status="mock",
+            has_attachment=bool(attachment),
+        )
         logger.info("[MockEmail] Sent '%s' to %s", subject, to_email)
 
     def send_payment_request(
@@ -222,6 +231,17 @@ class RealEmailClient(MockEmailClient):
             status = int(getattr(response, "status_code", 0) or 0)
             headers = getattr(response, "headers", {}) or {}
             message_id = headers.get("X-Message-Id") or headers.get("x-message-id") or "-"
+            from app.services.email_log_service import record_email
+
+            record_email(
+                to_email=to_email,
+                subject=subject,
+                body=body,
+                status="sent" if 200 <= status < 300 else "failed",
+                provider_status=status,
+                message_id=message_id if message_id != "-" else None,
+                has_attachment=bool(attachment_path),
+            )
             if 200 <= status < 300:
                 logger.info(
                     "OK SendGrid accepted | to=%s from=%s subject=%s status=%s message_id=%s",
@@ -252,6 +272,15 @@ class RealEmailClient(MockEmailClient):
                 "FAIL SendGrid exception | to=%s subject=%s",
                 to_email,
                 subject,
+            )
+            from app.services.email_log_service import record_email
+
+            record_email(
+                to_email=to_email,
+                subject=subject,
+                body=body,
+                status="failed",
+                has_attachment=bool(attachment_path),
             )
             return False
 
