@@ -2174,6 +2174,22 @@ class WorkflowOrchestrator:
             )
             return None
 
+        from app.services.payment_followup import (
+            Checkpoints,
+            mark_running,
+            record_outcome,
+        )
+
+        # Saved before the hand-off, so a restart right now still leaves a trail to resume.
+        Checkpoints(self.db, transaction).set_meta(
+            first_payment=workflow.is_first_payment_pending,
+            amount=str(amount),
+            currency=currency,
+            comment_prefix=comment_prefix,
+            skip_zoho=skip_zoho,
+            skip_deals=skip_deals,
+        )
+        mark_running(self.db, transaction)
         workflow_id = workflow.id
         transaction_id = transaction.id
         settings = self.settings
@@ -2186,16 +2202,22 @@ class WorkflowOrchestrator:
                 if wf is None or txn is None:
                     return ["The payment record could not be found"]
                 orchestrator = WorkflowOrchestrator(db, settings)
-                await orchestrator.apply_recorded_payment(
-                    wf,
-                    txn,
-                    amount=amount,
-                    currency=currency,
-                    comment_prefix=comment_prefix,
-                    skip_zoho=skip_zoho,
-                    skip_deals=skip_deals,
-                    finance_release=True,
-                )
+                try:
+                    await orchestrator.apply_recorded_payment(
+                        wf,
+                        txn,
+                        amount=amount,
+                        currency=currency,
+                        comment_prefix=comment_prefix,
+                        skip_zoho=skip_zoho,
+                        skip_deals=skip_deals,
+                        finance_release=True,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    # Leave a visible, resumable trail instead of a silent gap.
+                    db.rollback()
+                    record_outcome(db, txn, [f"{type(exc).__name__}: {exc}"[:200]])
+                    raise
                 return orchestrator.last_problems
 
         key = f"payment:{transaction_id}"
@@ -2241,8 +2263,24 @@ class WorkflowOrchestrator:
             )
             return workflow
 
+        from app.services.payment_followup import Checkpoints, record_outcome
+
         self.last_problems = []
-        first_payment = workflow.is_first_payment_pending
+        cp = Checkpoints(self.db, transaction, enabled=not dev_simulate)
+        saved_first = cp.meta.get("first_payment")
+        # On a resume the first payment has usually been recorded already, so the
+        # answer saved the first time is used instead of asking again.
+        first_payment = (
+            bool(saved_first) if saved_first is not None else workflow.is_first_payment_pending
+        )
+        cp.set_meta(
+            first_payment=first_payment,
+            amount=str(amount),
+            currency=currency,
+            comment_prefix=comment_prefix,
+            skip_zoho=skip_zoho,
+            skip_deals=skip_deals,
+        )
         logger.info(
             "Applying payment side effects | lead=%s txn=%s first_payment=%s "
             "finance_release=%s skip_zoho=%s skip_deals=%s dev_simulate=%s "
@@ -2270,7 +2308,7 @@ class WorkflowOrchestrator:
                 workflow, transaction
             )
 
-        if first_payment and not skip_deals:
+        if first_payment and not skip_deals and not cp.done("first_payment"):
             try:
                 if dev_simulate:
                     await self._create_dev_simulated_deals(workflow)
@@ -2279,6 +2317,7 @@ class WorkflowOrchestrator:
                         workflow,
                         installment_1_date=installment_1_paid_date,
                     )
+                cp.mark("first_payment")
             except Exception:
                 self._problem("Bitrix lead was not updated for the first payment")
                 logger.exception(
@@ -2289,21 +2328,52 @@ class WorkflowOrchestrator:
         comment = self._payment_success_message(
             workflow, amount, currency, prefix=comment_prefix
         )
-        await self._comment_on_workflow_entities(workflow, comment)
-        await self._notify_assigned_agent(
-            workflow,
-            subject=f"{comment_prefix} - Lead {workflow.bitrix_lead_id}",
-            body=comment,
-        )
+        if not cp.done("comment"):
+            try:
+                await self._comment_on_workflow_entities(workflow, comment)
+                cp.mark("comment")
+            except Exception:
+                self._problem("The payment comment was not posted in Bitrix")
+                logger.exception(
+                    "Payment comment failed for lead %s", workflow.bitrix_lead_id
+                )
+        if not cp.done("notify"):
+            try:
+                await self._notify_assigned_agent(
+                    workflow,
+                    subject=f"{comment_prefix} - Lead {workflow.bitrix_lead_id}",
+                    body=comment,
+                )
+                cp.mark("notify")
+            except Exception:
+                self._problem("The sales agent was not notified")
+                logger.exception(
+                    "Agent notice failed for lead %s", workflow.bitrix_lead_id
+                )
 
         invoice_synced = False
         if skip_zoho or dev_simulate:
             if dev_simulate:
                 logger.info("Dev simulate - skipping Zoho invoice sync")
+        elif cp.done("invoice"):
+            invoice_synced = True
         else:
             try:
-                await self.invoice_service.sync_invoice_after_payment(workflow, transaction)
+                if cp.done("zoho"):
+                    # Zoho already has this payment; only deliver the invoice again.
+                    outcome = await self.invoice_service.retrigger_invoice_delivery(
+                        workflow, transaction
+                    )
+                    if not outcome.get("ok"):
+                        raise RuntimeError(outcome.get("detail") or "Invoice delivery failed")
+                else:
+                    await self.invoice_service.sync_invoice_after_payment(
+                        workflow,
+                        transaction,
+                        on_zoho_applied=lambda: cp.mark("zoho"),
+                    )
                 invoice_synced = True
+                cp.mark("invoice")
                 logger.info(
                     "Invoice synced after payment | lead=%s zoho_invoice=%s",
                     workflow.bitrix_lead_id,
@@ -2378,7 +2448,15 @@ class WorkflowOrchestrator:
                 skip_deals,
                 dev_simulate,
             )
-        if first_payment and invoice_synced and not skip_deals and not dev_simulate:
+        if (
+            first_payment
+            and invoice_synced
+            and not skip_deals
+            and not dev_simulate
+            and cp.done("trigger")
+        ):
+            logger.info("Invoice-sent stage trigger already ran | lead=%s", workflow.bitrix_lead_id)
+        elif first_payment and invoice_synced and not skip_deals and not dev_simulate:
             logger.info(
                 "Firing invoice-sent stage trigger | lead=%s", workflow.bitrix_lead_id
             )
@@ -2387,6 +2465,7 @@ class WorkflowOrchestrator:
                     workflow.bitrix_lead_id
                 )
                 if triggered:
+                    cp.mark("trigger")
                     logger.info(
                         "Invoice-sent stage trigger done | lead=%s", workflow.bitrix_lead_id
                     )
@@ -2407,10 +2486,12 @@ class WorkflowOrchestrator:
                 )
 
         try:
-            await self.threshold_service.apply_after_payment(
-                workflow,
-                latest_transaction_id=transaction.transaction_id,
-            )
+            if not cp.done("threshold"):
+                await self.threshold_service.apply_after_payment(
+                    workflow,
+                    latest_transaction_id=transaction.transaction_id,
+                )
+                cp.mark("threshold")
         except Exception:
             self._problem("The payment stage move in Bitrix failed")
             logger.exception(
@@ -2419,6 +2500,8 @@ class WorkflowOrchestrator:
             )
 
         self.db.commit()
+        if not dev_simulate:
+            record_outcome(self.db, transaction, self.last_problems)
         self.db.refresh(workflow)
         return workflow
 

@@ -2,8 +2,8 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { useToast } from "@/components/toast";
 import { money } from "@/lib/utils";
+import { useToast } from "@/components/toast";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,8 @@ type LinkRow = {
   lead_id: number;
   customer_name: string | null;
   customer_email: string | null;
+  customer_phone: string | null;
+  bitrix_posted_at: string | null;
   amount: string;
   currency: string;
   installment_number: number | null;
@@ -32,6 +34,40 @@ type LinkRow = {
   completed_at: string | null;
   emails: LinkEmail[];
   approval: { id: number; status: string } | null;
+};
+
+type ApprovalLink = {
+  url: string;
+  status: string;
+  created_at: string | null;
+  bitrix_posted_at: string | null;
+  emails: LinkEmail[];
+};
+
+type PriceApproval = {
+  id: number;
+  lead_id: number;
+  lead_title: string | null;
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  sales_owner: string | null;
+  manager_name: string | null;
+  manager_email: string | null;
+  status: string;
+  reason: string;
+  currency: string;
+  total_payable: string;
+  catalog_minimum_total: string;
+  sent_at: string | null;
+  sent_via: string | null;
+  created_at: string | null;
+  expires_at: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  approval_url: string;
+  emails: LinkEmail[];
+  payment_link: ApprovalLink | null;
 };
 
 type Pending = {
@@ -57,29 +93,6 @@ type EmailRow = {
   body: string | null;
 };
 
-type PriceApproval = {
-  id: number;
-  lead_id: number;
-  lead_title: string | null;
-  customer_name: string | null;
-  sales_owner: string | null;
-  manager_name: string | null;
-  manager_email: string | null;
-  status: string;
-  reason: string;
-  currency: string;
-  total_payable: string;
-  catalog_minimum_total: string;
-  sent_at: string | null;
-  sent_via: string | null;
-  created_at: string | null;
-  expires_at: string | null;
-  decided_at: string | null;
-  decision_note: string | null;
-  approval_url: string;
-  emails: LinkEmail[];
-};
-
 type Overview = {
   verification_enabled: boolean;
   price_approvals: PriceApproval[];
@@ -103,14 +116,56 @@ function statusVariant(status: string): "success" | "warning" | "muted" | "defau
   return "default";
 }
 
+/** Who a payment link went to, shown the same way in both tables. */
+function Recipient({
+  name,
+  email,
+  phone,
+}: {
+  name: string | null;
+  email: string | null;
+  phone?: string | null;
+}) {
+  return (
+    <div>
+      <div className="font-medium">{name || "Customer"}</div>
+      <div className="break-all text-xs text-stone-600">{email || "no email on file"}</div>
+      {phone ? <div className="text-xs text-stone-500">{phone}</div> : null}
+    </div>
+  );
+}
+
+/** How the link actually reached them: a Bitrix comment, and/or an email to an address. */
+function Delivery({ postedAt, emails }: { postedAt: string | null; emails: LinkEmail[] }) {
+  if (!postedAt && emails.length === 0) {
+    return <span className="text-xs text-stone-500">not delivered yet</span>;
+  }
+  return (
+    <div className="space-y-1 text-xs">
+      {postedAt ? (
+        <div>
+          <Badge variant="success">Posted on Bitrix lead</Badge>
+          <div className="mt-0.5 text-stone-500">{when(postedAt)}</div>
+        </div>
+      ) : null}
+      {emails.map((mail) => (
+        <div key={mail.id}>
+          <Badge variant={statusVariant(mail.status)}>email {mail.status}</Badge>
+          <div className="mt-0.5 break-all text-stone-600">to {mail.to}</div>
+          <div className="text-stone-500">{when(mail.sent_at)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PaymentLinks() {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
-  const toast = useToast();
   const [openMail, setOpenMail] = useState<number | null>(null);
-  const [copied, setCopied] = useState<number | null>(null);
-  const [copiedApproval, setCopiedApproval] = useState<number | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const toast = useToast();
 
   const refresh = useCallback(async () => {
     setData(await api<Overview>("/api/staff/admin/payment-links"));
@@ -118,6 +173,9 @@ function PaymentLinks() {
 
   useEffect(() => {
     refresh().catch((err) => setError(err instanceof Error ? err.message : "Could not load"));
+    // Keep the page current while links and emails are being sent in the background.
+    const timer = setInterval(() => void refresh().catch(() => undefined), 15000);
+    return () => clearInterval(timer);
   }, [refresh]);
 
   async function decide(id: number, action: "approve" | "reject") {
@@ -152,21 +210,11 @@ function PaymentLinks() {
     }
   }
 
-  async function copy(row: LinkRow) {
+  async function copy(key: string, text: string) {
     try {
-      await navigator.clipboard.writeText(row.payment_url);
-      setCopied(row.id);
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
       setTimeout(() => setCopied(null), 1500);
-    } catch {
-      /* clipboard blocked */
-    }
-  }
-
-  async function copyApproval(row: PriceApproval) {
-    try {
-      await navigator.clipboard.writeText(row.approval_url);
-      setCopiedApproval(row.id);
-      setTimeout(() => setCopiedApproval(null), 1500);
     } catch {
       /* clipboard blocked */
     }
@@ -178,7 +226,7 @@ function PaymentLinks() {
     <div className="space-y-8">
       <PageHeader
         title="Payment links"
-        description="Every payment link, the emails that went out, the method each customer chose, and what a finance manager still has to approve."
+        description="Every payment link with who it was sent to and their email, how it was delivered, the method each customer chose, and what a finance manager still has to approve."
       />
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
@@ -186,8 +234,8 @@ function PaymentLinks() {
         <CardHeader>
           <CardTitle>Manager price approvals ({data?.price_approvals.length ?? 0})</CardTitle>
           <CardDescription>
-            Below-minimum price requests: which manager the approval link went to, how it was sent, and
-            what they decided.
+            Each approval request: which manager it went to, what they decided, and the payment link that
+            was then sent to the customer.
           </CardDescription>
         </CardHeader>
         <CardContent className="px-0 pb-0">
@@ -195,17 +243,16 @@ function PaymentLinks() {
             <THead>
               <TR>
                 <TH>Lead</TH>
-                <TH>Manager</TH>
+                <TH>Manager (approval sent to)</TH>
                 <TH>Price</TH>
-                <TH>Sent</TH>
                 <TH>Decision</TH>
-                <TH></TH>
+                <TH>Payment link sent to customer</TH>
               </TR>
             </THead>
             <TBody>
               {!data || data.price_approvals.length === 0 ? (
                 <TR>
-                  <TD colSpan={6} className="py-8 text-center text-stone-500">
+                  <TD colSpan={5} className="py-8 text-center text-stone-500">
                     {data ? "No manager approvals yet" : "Loading..."}
                   </TD>
                 </TR>
@@ -213,7 +260,7 @@ function PaymentLinks() {
                 data.price_approvals.map((row) => (
                   <TR key={row.id}>
                     <TD>
-                      <div className="font-medium">{row.customer_name || row.lead_title || "Customer"}</div>
+                      <div className="font-medium">{row.lead_title || row.customer_name || "Lead"}</div>
                       <div className="text-xs text-stone-500">
                         Lead #{row.lead_id}
                         {row.sales_owner ? ` · sales: ${row.sales_owner}` : ""}
@@ -221,7 +268,22 @@ function PaymentLinks() {
                     </TD>
                     <TD>
                       <div className="font-medium">{row.manager_name || "Manager not found"}</div>
-                      <div className="text-xs text-stone-500">{row.manager_email || "no email on file"}</div>
+                      <div className="break-all text-xs text-stone-600">
+                        {row.manager_email || "no email on file"}
+                      </div>
+                      <div className="mt-1 text-xs text-stone-500">
+                        {row.sent_at
+                          ? `sent via ${(row.sent_via || "").replace(/\+/g, " + ")} · ${when(row.sent_at)}`
+                          : "approval link not delivered"}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mt-1.5"
+                        onClick={() => copy(`a${row.id}`, row.approval_url)}
+                      >
+                        {copied === `a${row.id}` ? "Copied" : "Copy approval link"}
+                      </Button>
                     </TD>
                     <TD>
                       {money(row.total_payable, row.currency)}
@@ -230,34 +292,50 @@ function PaymentLinks() {
                       </div>
                     </TD>
                     <TD>
-                      {row.sent_at ? (
-                        <>
-                          <Badge variant="success">sent via {(row.sent_via || "").replace(/\+/g, " + ")}</Badge>
-                          <div className="mt-1 text-xs text-stone-500">{when(row.sent_at)}</div>
-                        </>
-                      ) : (
-                        <Badge variant="warning">not delivered</Badge>
-                      )}
-                      {row.emails.map((mail) => (
-                        <div key={mail.id} className="text-xs text-stone-500">
-                          email to {mail.to}: {mail.status}
-                        </div>
-                      ))}
-                      <div className="text-xs text-stone-500">Expires {when(row.expires_at)}</div>
-                    </TD>
-                    <TD>
                       <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
                       {row.decided_at ? (
                         <div className="mt-1 text-xs text-stone-500">{when(row.decided_at)}</div>
-                      ) : null}
+                      ) : (
+                        <div className="mt-1 text-xs text-stone-500">Expires {when(row.expires_at)}</div>
+                      )}
                       {row.decision_note ? (
                         <div className="text-xs text-stone-500">{row.decision_note}</div>
                       ) : null}
                     </TD>
-                    <TD className="text-right">
-                      <Button size="sm" variant="outline" onClick={() => copyApproval(row)}>
-                        {copiedApproval === row.id ? "Copied" : "Copy link"}
-                      </Button>
+                    <TD>
+                      {row.status !== "approved" ? (
+                        <span className="text-xs text-stone-500">
+                          {row.status === "pending" ? "Waiting for the manager" : "No link was sent"}
+                        </span>
+                      ) : row.payment_link ? (
+                        <div className="space-y-1.5">
+                          <Recipient
+                            name={row.customer_name}
+                            email={row.customer_email}
+                            phone={row.customer_phone}
+                          />
+                          <Delivery
+                            postedAt={row.payment_link.bitrix_posted_at}
+                            emails={row.payment_link.emails}
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => copy(`p${row.id}`, row.payment_link!.url)}
+                          >
+                            {copied === `p${row.id}` ? "Copied" : "Copy payment link"}
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <Recipient
+                            name={row.customer_name}
+                            email={row.customer_email}
+                            phone={row.customer_phone}
+                          />
+                          <Badge variant="warning">Link is being prepared</Badge>
+                        </div>
+                      )}
                     </TD>
                   </TR>
                 ))
@@ -340,20 +418,19 @@ function PaymentLinks() {
           <Table>
             <THead>
               <TR>
-                <TH>Customer</TH>
+                <TH>Payment link</TH>
+                <TH>Sent to</TH>
+                <TH>How it was sent</TH>
                 <TH>Amount</TH>
                 <TH>Method chosen</TH>
-                <TH>Link status</TH>
-                <TH>Emails sent</TH>
+                <TH>Status</TH>
                 <TH>Approval</TH>
-                <TH>Created</TH>
-                <TH></TH>
               </TR>
             </THead>
             <TBody>
               {!data || data.links.length === 0 ? (
                 <TR>
-                  <TD colSpan={8} className="py-8 text-center text-stone-500">
+                  <TD colSpan={7} className="py-8 text-center text-stone-500">
                     {data ? "No payment links yet" : "Loading..."}
                   </TD>
                 </TR>
@@ -361,11 +438,29 @@ function PaymentLinks() {
                 data.links.map((row) => (
                   <TR key={row.id}>
                     <TD>
-                      <div className="font-medium">{row.customer_name || "Customer"}</div>
-                      <div className="text-xs text-stone-500">
-                        Lead #{row.lead_id}
-                        {row.customer_email ? ` · ${row.customer_email}` : ""}
+                      <div className="max-w-[14rem] break-all font-mono text-[11px] text-stone-600">
+                        {row.payment_url}
                       </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mt-1.5"
+                        onClick={() => copy(`l${row.id}`, row.payment_url)}
+                      >
+                        {copied === `l${row.id}` ? "Copied" : "Copy link"}
+                      </Button>
+                      <div className="mt-1 text-xs text-stone-500">Created {when(row.created_at)}</div>
+                    </TD>
+                    <TD>
+                      <Recipient
+                        name={row.customer_name}
+                        email={row.customer_email}
+                        phone={row.customer_phone}
+                      />
+                      <div className="mt-0.5 text-xs text-stone-500">Lead #{row.lead_id}</div>
+                    </TD>
+                    <TD>
+                      <Delivery postedAt={row.bitrix_posted_at} emails={row.emails} />
                     </TD>
                     <TD>
                       {money(row.amount, row.currency)}
@@ -384,29 +479,11 @@ function PaymentLinks() {
                       <div className="mt-1 text-xs text-stone-500">Expires {when(row.expires_at)}</div>
                     </TD>
                     <TD>
-                      {row.emails.length === 0 ? (
-                        <span className="text-xs text-stone-500">none recorded</span>
-                      ) : (
-                        row.emails.map((mail) => (
-                          <div key={mail.id} className="text-xs">
-                            <Badge variant={statusVariant(mail.status)}>{mail.status}</Badge> {mail.to} ·{" "}
-                            {when(mail.sent_at)}
-                          </div>
-                        ))
-                      )}
-                    </TD>
-                    <TD>
                       {row.approval ? (
                         <Badge variant={statusVariant(row.approval.status)}>{row.approval.status}</Badge>
                       ) : (
                         <span className="text-xs text-stone-500">-</span>
                       )}
-                    </TD>
-                    <TD className="text-xs text-stone-500">{when(row.created_at)}</TD>
-                    <TD className="text-right">
-                      <Button size="sm" variant="outline" onClick={() => copy(row)}>
-                        {copied === row.id ? "Copied" : "Copy link"}
-                      </Button>
                     </TD>
                   </TR>
                 ))

@@ -94,6 +94,14 @@ async def lifespan(_app: FastAPI):
     except Exception:
         logger.exception("Cash Desk manager bootstrap skipped/failed")
 
+    recovery_task = None
+    if settings.post_payment_background:
+        # Resume payment follow-ups (invoice, Bitrix, trigger) cut off by a restart.
+        from app.services.payment_followup import recovery_loop
+
+        recovery_task = asyncio.create_task(recovery_loop(settings))
+        logger.info("Payment follow-up recovery started")
+
     if settings.reminder_enabled and settings.reminder_scheduler_enabled:
         task = asyncio.create_task(_reminder_scheduler_loop())
         logger.info(
@@ -104,6 +112,8 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        if recovery_task:
+            recovery_task.cancel()
         if task:
             task.cancel()
             try:

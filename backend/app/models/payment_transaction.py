@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.data_mode import current_data_mode
@@ -57,5 +57,13 @@ class PaymentTransaction(Base):
     source_sub_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     source_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Follow-up work after the money is saved (invoice, Bitrix, email, trigger).
+    # post_steps keeps which steps finished so the work can resume after a failure.
+    post_state: Mapped[str] = mapped_column(String(12), default="", server_default="", index=True)
+    post_steps: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    post_problems: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    post_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    post_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     workflow: Mapped[CustomerWorkflow] = relationship(back_populates="transactions")

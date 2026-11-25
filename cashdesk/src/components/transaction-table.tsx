@@ -30,6 +30,7 @@ export type TxnRow = {
   zoho_invoice_id: string | null;
   invoice_synced: boolean;
   awaiting_approval?: boolean;
+  follow_up?: { state: string; problems: string[] };
 };
 
 type RetriggerResult = {
@@ -157,6 +158,10 @@ function TransactionDetailModal({
               </Badge>
               {row.awaiting_approval ? (
                 <Badge variant="warning">Awaiting finance approval</Badge>
+              ) : row.follow_up?.state === "problem" ? (
+                <Badge variant="warning">Follow-up incomplete</Badge>
+              ) : row.follow_up?.state === "running" ? (
+                <Badge variant="online">Finishing...</Badge>
               ) : row.invoice_synced ? (
                 <Badge variant="success">Invoice sent</Badge>
               ) : (
@@ -207,6 +212,18 @@ function TransactionDetailModal({
           </section>
         </div>
 
+        {row.follow_up?.state === "problem" && row.follow_up.problems.length > 0 ? (
+          <div className="mx-5 mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <p className="font-medium">The payment is saved, but these steps did not finish:</p>
+            <ul className="mt-1 list-disc pl-4">
+              {row.follow_up.problems.map((problem) => (
+                <li key={problem}>{problem}</li>
+              ))}
+            </ul>
+            <p className="mt-1 opacity-80">The system retries by itself. You can also press Retry now.</p>
+          </div>
+        ) : null}
+
         <footer className="txn-modal-footer">
           <Button variant="outline" onClick={onClose} className="min-w-[6.5rem]">
             Close
@@ -221,7 +238,9 @@ function TransactionDetailModal({
               ? "Starting..."
               : row.awaiting_approval
                 ? "Approve & send invoice"
-                : row.invoice_synced
+                : row.follow_up?.state === "problem"
+                  ? "Retry unfinished steps"
+                  : row.invoice_synced
                   ? "Resend invoice"
                   : "Create & send invoice"}
           </Button>
@@ -379,6 +398,10 @@ export function TransactionTable({
                 <TD>
                   {row.awaiting_approval ? (
                     <Badge variant="warning">Awaiting approval</Badge>
+                  ) : row.follow_up?.state === "problem" ? (
+                    <Badge variant="warning">Follow-up incomplete</Badge>
+                  ) : row.follow_up?.state === "running" ? (
+                    <Badge variant="online">Finishing...</Badge>
                   ) : row.invoice_synced ? (
                     <Badge variant="success">Sent</Badge>
                   ) : (

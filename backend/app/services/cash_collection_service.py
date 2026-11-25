@@ -1006,6 +1006,10 @@ class CashCollectionService:
                     "zoho_invoice_id": wf.zoho_invoice_id if wf else None,
                     "invoice_synced": bool(wf and wf.zoho_invoice_id),
                     "awaiting_approval": txn.id in awaiting_approval_ids,
+                    "follow_up": {
+                        "state": txn.post_state or "",
+                        "problems": list(txn.post_problems or []),
+                    },
                 }
             )
 

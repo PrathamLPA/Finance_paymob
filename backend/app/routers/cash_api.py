@@ -594,6 +594,20 @@ async def retrigger_invoice(
     from app.config import get_settings
     from app.services import background_jobs
 
+    if get_settings().post_payment_background and txn.post_state in ("problem", "running"):
+        # The payment's follow-up did not finish: carry on from where it stopped.
+        from app.services.payment_followup import start_resume
+
+        key = f"payment:{txn.id}"
+        live = background_jobs.get_job(key)
+        if live is None or live.state != background_jobs.STATE_RUNNING:
+            start_resume(
+                txn.id,
+                get_settings(),
+                label=f"Finishing the follow-up for lead {workflow.bitrix_lead_id}",
+            )
+        return {"ok": True, "queued": True, "job": key, "steps": {}}
+
     if get_settings().post_payment_background:
         # Zoho + Bitrix + email take many seconds. Answer now, finish in the background,
         # and let the screen follow the job and show any step that failed.
@@ -635,13 +649,25 @@ async def retrigger_invoice(
 @router.get("/jobs/{job_key}")
 def job_status(
     job_key: str,
+    db: Session = Depends(get_db),
     _staff: StaffUser = Depends(get_current_staff),
 ) -> dict[str, Any]:
     """Progress of work started by an Approve / Collect button (invoice, Bitrix, email)."""
+    from app.models.payment_transaction import PaymentTransaction
     from app.services.background_jobs import get_job
 
     job = get_job(job_key)
-    if job is None:
-        # Nothing running: it finished long ago, ran inline, or the server restarted.
-        return {"key": job_key, "state": "unknown", "problems": [], "label": "", "seconds": 0}
-    return job.to_dict()
+    if job is not None:
+        return job.to_dict()
+    # Not in memory (finished long ago, or the server restarted): use the saved state.
+    if job_key.startswith("payment:") and job_key[8:].isdigit():
+        txn = db.get(PaymentTransaction, int(job_key[8:]))
+        if txn is not None and txn.post_state:
+            return {
+                "key": job_key,
+                "state": txn.post_state,
+                "problems": list(txn.post_problems or []),
+                "label": "",
+                "seconds": 0,
+            }
+    return {"key": job_key, "state": "unknown", "problems": [], "label": "", "seconds": 0}

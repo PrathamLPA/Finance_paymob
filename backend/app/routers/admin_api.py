@@ -313,6 +313,8 @@ def payment_links_overview(
                 "lead_id": workflow.bitrix_lead_id,
                 "customer_name": workflow.customer_name,
                 "customer_email": workflow.customer_email,
+                "customer_phone": workflow.customer_phone,
+                "bitrix_posted_at": _iso(session.link_commented_at),
                 "amount": str(session.charge_amount),
                 "currency": session.currency,
                 "installment_number": session.installment_number,
@@ -359,6 +361,30 @@ def payment_links_overview(
             }
         )
 
+    def _naive(value: Any) -> Any:
+        return value.replace(tzinfo=None) if value is not None else None
+
+    def _link_after(approval: PriceApproval, workflow: CustomerWorkflow) -> dict[str, Any] | None:
+        """The payment link created for this lead once the manager approved."""
+        if approval.status != "approved" or approval.decided_at is None:
+            return None
+        decided = _naive(approval.decided_at)
+        for session in db.scalars(
+            select(PaymentSession)
+            .where(PaymentSession.workflow_id == workflow.id)
+            .order_by(PaymentSession.id.desc())
+            .limit(5)
+        ):
+            if _naive(session.created_at) is not None and _naive(session.created_at) >= decided:
+                return {
+                    "url": f"{base}/payment/{session.token}",
+                    "status": session.status,
+                    "created_at": _iso(session.created_at),
+                    "bitrix_posted_at": _iso(session.link_commented_at),
+                    "emails": _emails_for(session.token),
+                }
+        return None
+
     approvals: list[dict[str, Any]] = []
     for approval, workflow in db.execute(
         select(PriceApproval, CustomerWorkflow)
@@ -388,6 +414,9 @@ def payment_links_overview(
                 "decision_note": approval.decision_note,
                 "approval_url": f"{base}/approvals/{approval.token}",
                 "emails": _emails_for(approval.token),
+                "customer_email": workflow.customer_email,
+                "customer_phone": workflow.customer_phone,
+                "payment_link": _link_after(approval, workflow),
             }
         )
 

@@ -262,3 +262,70 @@ def test_payment_links_page_is_developer_only(client, db_session):
     _make_user(db_session, email="fin@example.com", role=ROLE_MANAGER)
     manager = _login(client, "fin@example.com")
     assert client.get("/api/staff/admin/payment-links", headers=manager).status_code == 403
+
+
+def test_approved_manager_request_shows_the_payment_link_and_who_got_it(client, db_session):
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+
+    from app.models.customer_workflow import CustomerWorkflow
+    from app.models.email_log import EmailLog
+    from app.models.payment_session import PaymentSession
+    from app.models.price_approval import PriceApproval
+
+    _make_user(db_session, email="admin@example.com", role=ROLE_ADMIN)
+    admin = _login(client, "admin@example.com")
+    now = datetime.now(timezone.utc)
+    workflow = CustomerWorkflow(
+        bitrix_lead_id=888,
+        customer_name="Noor Customer",
+        customer_email="noor@example.com",
+        customer_phone="+971500000001",
+    )
+    db_session.add(workflow)
+    db_session.commit()
+    db_session.add(
+        PriceApproval(
+            workflow_id=workflow.id,
+            bitrix_lead_id=888,
+            token="appr-linked",
+            status="approved",
+            manager_name="Mona Manager",
+            manager_email="mona@example.com",
+            decided_at=now - timedelta(minutes=2),
+            expires_at=now + timedelta(days=1),
+        )
+    )
+    db_session.add(
+        PaymentSession(
+            workflow_id=workflow.id,
+            token="link-token-1",
+            source_type="lead",
+            source_id=888,
+            charge_amount=Decimal("10.00"),
+            merchant_reference="WF-L-1",
+            link_commented_at=now - timedelta(minutes=1),
+            expires_at=now + timedelta(days=1),
+        )
+    )
+    db_session.add(
+        EmailLog(
+            to_email="noor@example.com",
+            subject="Payment Request",
+            body="Pay: https://x/payment/link-token-1",
+            status="sent",
+        )
+    )
+    db_session.commit()
+
+    body = client.get("/api/staff/admin/payment-links", headers=admin).json()
+    approval = body["price_approvals"][0]
+    assert approval["customer_email"] == "noor@example.com"
+    link = approval["payment_link"]
+    assert link["url"].endswith("/payment/link-token-1")
+    assert link["bitrix_posted_at"] is not None
+    assert [m["to"] for m in link["emails"]] == ["noor@example.com"]
+    row = body["links"][0]
+    assert row["customer_email"] == "noor@example.com"
+    assert row["customer_phone"] == "+971500000001"
+    assert row["bitrix_posted_at"] is not None

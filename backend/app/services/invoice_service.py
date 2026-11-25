@@ -41,6 +41,7 @@ class InvoiceService:
         self,
         workflow: CustomerWorkflow,
         transaction: PaymentTransaction,
+        on_zoho_applied=None,
     ) -> InvoiceReference:
         had_prior_invoice = bool(workflow.zoho_invoice_id)
         created_new = False
@@ -84,6 +85,10 @@ class InvoiceService:
                 workflow.zoho_customer_id = zoho_customer
             self.db.commit()
             created_new = True
+
+        if on_zoho_applied is not None:
+            # Zoho now holds this payment; a retry must not apply it a second time.
+            on_zoho_applied()
 
         document = await self.zoho.get_invoice_document(invoice.invoice_id)
         if document.pdf_path:
