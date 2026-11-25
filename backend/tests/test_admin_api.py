@@ -161,6 +161,36 @@ def test_payment_links_page_lists_links_emails_and_mode(client, db_session):
     assert [m["to"] for m in link["emails"]] == ["sam@example.com"]
     assert len(body["emails"]) == 2
     assert body["pending_approvals"] == []
+    assert body["price_approvals"] == []
+
+    from app.models.price_approval import PriceApproval
+
+    db_session.add(
+        PriceApproval(
+            workflow_id=workflow.id,
+            bitrix_lead_id=777,
+            token="appr-tok-9",
+            manager_name="Mona Manager",
+            manager_email="mona@example.com",
+            notified_via="sendgrid",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+    )
+    db_session.add(
+        EmailLog(
+            to_email="mona@example.com",
+            subject="Price approval needed",
+            body="Review: https://x/approvals/appr-tok-9",
+            status="sent",
+        )
+    )
+    db_session.commit()
+    approvals = client.get("/api/staff/admin/payment-links", headers=manager).json()["price_approvals"]
+    assert len(approvals) == 1
+    assert approvals[0]["manager_name"] == "Mona Manager"
+    assert approvals[0]["manager_email"] == "mona@example.com"
+    assert approvals[0]["approval_url"].endswith("/approvals/appr-tok-9")
+    assert [m["to"] for m in approvals[0]["emails"]] == ["mona@example.com"]
 
 
 def test_data_mode_separates_test_and_live_and_clear_only_touches_active_mode(client, db_session):

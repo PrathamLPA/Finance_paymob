@@ -21,6 +21,7 @@ from app.models.customer_workflow import CustomerWorkflow
 from app.models.email_log import EmailLog
 from app.models.finance_verification import STATUS_PENDING, FinanceVerification
 from app.models.payment_session import PaymentSession
+from app.models.price_approval import PriceApproval
 from app.models.payment_transaction import PaymentTransaction
 from app.models.staff_user import ROLE_ADMIN, ROLE_EMPLOYEE, ROLE_MANAGER, StaffUser
 from app.services.finance_verification_service import FinanceVerificationService
@@ -358,8 +359,41 @@ def payment_links_overview(
             }
         )
 
+    approvals: list[dict[str, Any]] = []
+    for approval, workflow in db.execute(
+        select(PriceApproval, CustomerWorkflow)
+        .join(CustomerWorkflow, CustomerWorkflow.id == PriceApproval.workflow_id)
+        .order_by(PriceApproval.id.desc())
+        .limit(limit)
+    ).all():
+        approvals.append(
+            {
+                "id": approval.id,
+                "lead_id": approval.bitrix_lead_id,
+                "lead_title": approval.lead_title,
+                "customer_name": workflow.customer_name,
+                "sales_owner": approval.owner_name,
+                "manager_name": approval.manager_name,
+                "manager_email": approval.manager_email,
+                "status": approval.status,
+                "reason": approval.reason,
+                "currency": approval.currency,
+                "total_payable": approval.total_payable,
+                "catalog_minimum_total": approval.catalog_minimum_total,
+                "sent_at": _iso(approval.notified_at),
+                "sent_via": approval.notified_via,
+                "created_at": _iso(approval.created_at),
+                "expires_at": _iso(approval.expires_at),
+                "decided_at": _iso(approval.decided_at),
+                "decision_note": approval.decision_note,
+                "approval_url": f"{base}/approvals/{approval.token}",
+                "emails": _emails_for(approval.token),
+            }
+        )
+
     return {
         "verification_enabled": FinanceVerificationService(db).is_enabled(),
+        "price_approvals": approvals,
         "links": links,
         "pending_approvals": pending,
         "emails": [

@@ -56,8 +56,32 @@ type EmailRow = {
   body: string | null;
 };
 
+type PriceApproval = {
+  id: number;
+  lead_id: number;
+  lead_title: string | null;
+  customer_name: string | null;
+  sales_owner: string | null;
+  manager_name: string | null;
+  manager_email: string | null;
+  status: string;
+  reason: string;
+  currency: string;
+  total_payable: string;
+  catalog_minimum_total: string;
+  sent_at: string | null;
+  sent_via: string | null;
+  created_at: string | null;
+  expires_at: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  approval_url: string;
+  emails: LinkEmail[];
+};
+
 type Overview = {
   verification_enabled: boolean;
+  price_approvals: PriceApproval[];
   links: LinkRow[];
   pending_approvals: Pending[];
   emails: EmailRow[];
@@ -84,6 +108,7 @@ function PaymentLinks() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [openMail, setOpenMail] = useState<number | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
+  const [copiedApproval, setCopiedApproval] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     setData(await api<Overview>("/api/staff/admin/payment-links"));
@@ -119,6 +144,16 @@ function PaymentLinks() {
     }
   }
 
+  async function copyApproval(row: PriceApproval) {
+    try {
+      await navigator.clipboard.writeText(row.approval_url);
+      setCopiedApproval(row.id);
+      setTimeout(() => setCopiedApproval(null), 1500);
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
   const pending = data?.pending_approvals ?? [];
 
   return (
@@ -128,6 +163,91 @@ function PaymentLinks() {
         description="Every payment link, the emails that went out, the method each customer chose, and what a finance manager still has to approve."
       />
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Manager price approvals ({data?.price_approvals.length ?? 0})</CardTitle>
+          <CardDescription>
+            Below-minimum price requests: which manager the approval link went to, how it was sent, and
+            what they decided.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="px-0 pb-0">
+          <Table>
+            <THead>
+              <TR>
+                <TH>Lead</TH>
+                <TH>Manager</TH>
+                <TH>Price</TH>
+                <TH>Sent</TH>
+                <TH>Decision</TH>
+                <TH></TH>
+              </TR>
+            </THead>
+            <TBody>
+              {!data || data.price_approvals.length === 0 ? (
+                <TR>
+                  <TD colSpan={6} className="py-8 text-center text-stone-500">
+                    {data ? "No manager approvals yet" : "Loading..."}
+                  </TD>
+                </TR>
+              ) : (
+                data.price_approvals.map((row) => (
+                  <TR key={row.id}>
+                    <TD>
+                      <div className="font-medium">{row.customer_name || row.lead_title || "Customer"}</div>
+                      <div className="text-xs text-stone-500">
+                        Lead #{row.lead_id}
+                        {row.sales_owner ? ` · sales: ${row.sales_owner}` : ""}
+                      </div>
+                    </TD>
+                    <TD>
+                      <div className="font-medium">{row.manager_name || "Manager not found"}</div>
+                      <div className="text-xs text-stone-500">{row.manager_email || "no email on file"}</div>
+                    </TD>
+                    <TD>
+                      {money(row.total_payable, row.currency)}
+                      <div className="text-xs text-stone-500">
+                        minimum {money(row.catalog_minimum_total, row.currency)}
+                      </div>
+                    </TD>
+                    <TD>
+                      {row.sent_at ? (
+                        <>
+                          <Badge variant="success">sent via {(row.sent_via || "").replace(/\+/g, " + ")}</Badge>
+                          <div className="mt-1 text-xs text-stone-500">{when(row.sent_at)}</div>
+                        </>
+                      ) : (
+                        <Badge variant="warning">not delivered</Badge>
+                      )}
+                      {row.emails.map((mail) => (
+                        <div key={mail.id} className="text-xs text-stone-500">
+                          email to {mail.to}: {mail.status}
+                        </div>
+                      ))}
+                      <div className="text-xs text-stone-500">Expires {when(row.expires_at)}</div>
+                    </TD>
+                    <TD>
+                      <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
+                      {row.decided_at ? (
+                        <div className="mt-1 text-xs text-stone-500">{when(row.decided_at)}</div>
+                      ) : null}
+                      {row.decision_note ? (
+                        <div className="text-xs text-stone-500">{row.decision_note}</div>
+                      ) : null}
+                    </TD>
+                    <TD className="text-right">
+                      <Button size="sm" variant="outline" onClick={() => copyApproval(row)}>
+                        {copiedApproval === row.id ? "Copied" : "Copy link"}
+                      </Button>
+                    </TD>
+                  </TR>
+                ))
+              )}
+            </TBody>
+          </Table>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
