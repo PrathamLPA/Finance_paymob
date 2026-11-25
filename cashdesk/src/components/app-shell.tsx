@@ -112,7 +112,7 @@ export function AppShell({
 
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#f0fdfa_0%,#fafaf9_28%,#f5f5f4_100%)]">
-      <div className="mx-auto flex min-h-screen max-w-7xl">
+      <div className="flex min-h-screen">
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 overflow-hidden border-r border-stone-200/80 bg-white p-4 md:flex md:flex-col">
           <div className="mb-8 px-2">
             <p className="font-serif text-2xl text-teal-950">Finance</p>
@@ -196,7 +196,10 @@ export function AppShell({
               Test data - nothing on this screen is production.{isAdmin ? " Switch to production in Settings." : ""}
             </div>
           ) : null}
-          <main key={here} className="cashdesk-page flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
+          <main key={here} className="cashdesk-page flex-1 px-4 py-6 md:px-8 md:py-8">
+            {/* Readable width on very wide screens, but the sidebar stays on the window edge. */}
+            <div className="mx-auto w-full max-w-[1600px]">{children}</div>
+          </main>
         </div>
       </div>
     </div>
