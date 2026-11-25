@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { SkeletonBlock } from "@/components/skeleton";
 import { rangeForPeriod, toDateInputValue, type DatePeriod } from "@/lib/date-range";
 import { downloadExcelSheet } from "@/lib/excel-export";
 import { useDebounced } from "@/lib/use-debounced";
@@ -165,7 +166,9 @@ function TransactionsPage() {
       <Card>
         <CardContent className="px-0 pb-0 pt-0">
           {loading && items.length === 0 ? (
-            <p className="py-10 text-center text-sm text-stone-500">Loading transactions…</p>
+            <div className="px-5">
+              <SkeletonBlock lines={5} />
+            </div>
           ) : (
             <TransactionTable items={items} onUpdated={refresh} />
           )}

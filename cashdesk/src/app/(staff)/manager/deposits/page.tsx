@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { SkeletonRows } from "@/components/skeleton";
 import { money } from "@/lib/utils";
 import { rangeForPeriod, toDateInputValue, type DatePeriod } from "@/lib/date-range";
 import { downloadExcelSheet } from "@/lib/excel-export";
@@ -133,7 +134,9 @@ function DepositsPage() {
               </TR>
             </THead>
             <TBody>
-              {items.length === 0 ? (
+              {items.length === 0 && loading ? (
+                <SkeletonRows cols={5} />
+              ) : items.length === 0 ? (
                 <TR>
                   <TD colSpan={5} className="py-10 text-center text-stone-500">
                     {loading ? "Loading deposits…" : "No deposits in this period"}

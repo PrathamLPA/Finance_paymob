@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { SkeletonBlock } from "@/components/skeleton";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
 import { TransactionTable, type TxnRow } from "@/components/transaction-table";
@@ -35,7 +36,9 @@ function AdminTransactions() {
       <Card>
         <CardContent className="px-0 pb-0 pt-0">
           {loading && items.length === 0 ? (
-            <p className="py-10 text-center text-sm text-stone-500">Loading transactions…</p>
+            <div className="px-5">
+              <SkeletonBlock lines={5} />
+            </div>
           ) : (
             <TransactionTable items={items} onUpdated={refresh} />
           )}

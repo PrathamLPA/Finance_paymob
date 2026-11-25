@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { money } from "@/lib/utils";
 import { useToast } from "@/components/toast";
+import { SkeletonRows } from "@/components/skeleton";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -250,10 +251,12 @@ function PaymentLinks() {
               </TR>
             </THead>
             <TBody>
-              {!data || data.price_approvals.length === 0 ? (
+              {!data ? (
+                <SkeletonRows cols={5} />
+              ) : data.price_approvals.length === 0 ? (
                 <TR>
                   <TD colSpan={5} className="py-8 text-center text-stone-500">
-                    {data ? "No manager approvals yet" : "Loading..."}
+                    No manager approvals yet
                   </TD>
                 </TR>
               ) : (
@@ -428,10 +431,12 @@ function PaymentLinks() {
               </TR>
             </THead>
             <TBody>
-              {!data || data.links.length === 0 ? (
+              {!data ? (
+                <SkeletonRows cols={7} />
+              ) : data.links.length === 0 ? (
                 <TR>
                   <TD colSpan={7} className="py-8 text-center text-stone-500">
-                    {data ? "No payment links yet" : "Loading..."}
+                    No payment links yet
                   </TD>
                 </TR>
               ) : (
@@ -511,10 +516,12 @@ function PaymentLinks() {
               </TR>
             </THead>
             <TBody>
-              {!data || data.emails.length === 0 ? (
+              {!data ? (
+                <SkeletonRows cols={4} />
+              ) : data.emails.length === 0 ? (
                 <TR>
                   <TD colSpan={4} className="py-8 text-center text-stone-500">
-                    {data ? "No emails recorded yet" : "Loading..."}
+                    No emails recorded yet
                   </TD>
                 </TR>
               ) : (

@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { SkeletonRows } from "@/components/skeleton";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
@@ -33,6 +34,7 @@ function DepositsPanel() {
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     const [list, bal] = await Promise.all([
@@ -41,6 +43,7 @@ function DepositsPanel() {
     ]);
     setItems(list.items);
     setSummary(bal);
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -147,7 +150,9 @@ function DepositsPanel() {
               </TR>
             </THead>
             <TBody>
-              {items.length === 0 ? (
+              {!loaded ? (
+                <SkeletonRows cols={3} />
+              ) : items.length === 0 ? (
                 <TR>
                   <TD colSpan={3} className="py-8 text-center text-stone-500">
                     No deposits yet

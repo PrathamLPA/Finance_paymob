@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Expand, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { SkeletonRows } from "@/components/skeleton";
 import { useToast } from "@/components/toast";
 import { useProof } from "@/lib/use-proof";
 import { money } from "@/lib/utils";
@@ -403,10 +404,12 @@ function BankTransfersPage() {
               </TR>
             </THead>
             <TBody>
-              {items.length === 0 ? (
+              {items.length === 0 && loading ? (
+                <SkeletonRows cols={4} />
+              ) : items.length === 0 ? (
                 <TR>
                   <TD colSpan={4} className="py-10 text-center text-stone-500">
-                    {loading ? "Loading bank transfers…" : "No bank transfer submissions"}
+                    No bank transfer submissions
                   </TD>
                 </TR>
               ) : (

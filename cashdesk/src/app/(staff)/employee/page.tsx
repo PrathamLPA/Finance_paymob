@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CheckCircle2, HandCoins, PiggyBank, Wallet, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { SkeletonBlock } from "@/components/skeleton";
 import { useToast } from "@/components/toast";
 import { useProof } from "@/lib/use-proof";
 import { money } from "@/lib/utils";
@@ -674,13 +675,15 @@ function EmployeeDesk({ userId }: { userId: number }) {
         {list.length === 0 ? (
           <Card>
             <CardContent className="py-10 text-center text-stone-500">
-              {loading
-                ? "Loading…"
-                : tab === "open"
-                ? "No open cash cases right now"
-                : tab === "claimed"
-                  ? "No claimed cases - claim one from Open"
-                  : "No collected cases yet"}
+              {loading ? (
+                <SkeletonBlock lines={4} />
+              ) : tab === "open" ? (
+                "No open cash cases right now"
+              ) : tab === "claimed" ? (
+                "No claimed cases - claim one from Open"
+              ) : (
+                "No collected cases yet"
+              )}
             </CardContent>
           </Card>
         ) : (

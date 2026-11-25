@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { SkeletonRows } from "@/components/skeleton";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -27,10 +28,12 @@ function PeoplePage() {
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     const res = await api<{ items: Person[] }>("/api/staff/admin/people");
     setItems(res.items);
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -151,7 +154,9 @@ function PeoplePage() {
                 </TR>
               </THead>
               <TBody>
-                {items.length === 0 ? (
+                {!loaded ? (
+                  <SkeletonRows cols={3} />
+                ) : items.length === 0 ? (
                   <TR>
                     <TD colSpan={3} className="py-8 text-center text-stone-500">
                       No accounts yet

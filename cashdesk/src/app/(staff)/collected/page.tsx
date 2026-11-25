@@ -102,7 +102,11 @@ function CollectedFromPage({ userId }: { userId: number }) {
           </label>
         </div>
         <p className="text-xs text-stone-500">
-          {loading ? "Loading…" : `${rows.length} payment${rows.length === 1 ? "" : "s"}`}
+          {loading ? (
+            <span className="cashdesk-skeleton inline-block h-3 w-20 align-middle" />
+          ) : (
+            `${rows.length} payment${rows.length === 1 ? "" : "s"}`
+          )}
         </p>
       </div>
 

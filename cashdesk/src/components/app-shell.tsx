@@ -193,7 +193,7 @@ export function AppShell({
           </header>
           {dataMode === "test" ? (
             <div className="bg-amber-100 px-4 py-1.5 text-center text-xs font-medium text-amber-900">
-              Test data - nothing on this screen is production. An admin can switch to production in Settings.
+              Test data - nothing on this screen is production.{isAdmin ? " Switch to production in Settings." : ""}
             </div>
           ) : null}
           <main key={here} className="cashdesk-page flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
