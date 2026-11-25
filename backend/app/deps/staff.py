@@ -55,3 +55,10 @@ def require_admin(staff: StaffUser = Depends(get_current_staff)) -> StaffUser:
     if staff.role != ROLE_ADMIN:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator only")
     return staff
+
+
+def scope_to_data_mode(db: Session = Depends(get_db)) -> None:
+    """Staff and admin screens only see the active mode's records (test or live)."""
+    from app.db.data_mode import enable_filter
+
+    enable_filter(db)

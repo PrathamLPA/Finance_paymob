@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,10 +11,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.deps.staff import require_admin, require_manager
+from app.deps.staff import require_admin, require_manager, scope_to_data_mode
 from app.models.bank_transfer import BankTransferSubmission
 from app.models.cash_collection import STATUS_CLAIMED, STATUS_OPEN, CashCollection
 from app.config import get_settings
+from app.db.data_mode import MODE_LIVE, current_data_mode, set_data_mode
+from app.services.data_reset import clear_mode_data
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.email_log import EmailLog
 from app.models.finance_verification import STATUS_PENDING, FinanceVerification
@@ -23,7 +26,11 @@ from app.models.staff_user import ROLE_ADMIN, ROLE_EMPLOYEE, ROLE_MANAGER, Staff
 from app.services.finance_verification_service import FinanceVerificationService
 from app.services.staff_auth import hash_password
 
-router = APIRouter(prefix="/api/staff/admin", tags=["admin"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter(
+    prefix="/api/staff/admin", tags=["admin"], dependencies=[Depends(scope_to_data_mode)]
+)
 
 _ROLES = {ROLE_ADMIN, ROLE_MANAGER, ROLE_EMPLOYEE}
 
@@ -44,6 +51,14 @@ class StaffPatchBody(BaseModel):
 
 class VerificationToggleBody(BaseModel):
     enabled: bool
+
+
+class DataModeBody(BaseModel):
+    mode: Literal["test", "live"]
+
+
+class ClearDataBody(BaseModel):
+    confirm: str = ""
 
 
 class VerificationDecisionBody(BaseModel):
@@ -86,7 +101,35 @@ def admin_overview(
         "open_cash_collections": int(open_cash),
         "pending_bank_transfers": int(pending_bank),
         "pending_verifications": service.counts()["pending"],
+        "data_mode": current_data_mode(),
     }
+
+
+@router.put("/data-mode")
+def set_mode(
+    body: DataModeBody,
+    db: Session = Depends(get_db),
+    admin: StaffUser = Depends(require_admin),
+) -> dict[str, Any]:
+    mode = set_data_mode(db, body.mode, admin.id)
+    logger.warning("Data mode set to %s by %s", mode, admin.email)
+    return {"data_mode": mode}
+
+
+@router.post("/clear-data")
+def clear_data(
+    body: ClearDataBody,
+    db: Session = Depends(get_db),
+    admin: StaffUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Delete every payment record of the ACTIVE mode only (the other mode is untouched)."""
+    mode = current_data_mode()
+    phrase = "DELETE LIVE DATA" if mode == MODE_LIVE else "CLEAR TEST DATA"
+    if body.confirm.strip() != phrase:
+        raise HTTPException(status_code=400, detail=f"Type {phrase} to confirm")
+    logger.warning("Clearing %s payment data | requested by %s", mode, admin.email)
+    deleted = clear_mode_data(db, mode)
+    return {"data_mode": mode, "deleted": deleted}
 
 
 @router.put("/verification")

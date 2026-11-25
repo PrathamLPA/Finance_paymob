@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.db.data_mode import current_data_mode
 from app.db.session import Base
 
 if TYPE_CHECKING:
@@ -32,6 +33,9 @@ class PaymentSession(Base):
     __tablename__ = "payment_sessions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    data_mode: Mapped[str] = mapped_column(
+        String(10), default=current_data_mode, server_default="test", index=True
+    )
     workflow_id: Mapped[int] = mapped_column(ForeignKey("customer_workflows.id"), index=True)
     token: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     source_type: Mapped[str] = mapped_column(String(50))

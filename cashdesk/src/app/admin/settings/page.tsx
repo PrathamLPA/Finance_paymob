@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 type Overview = {
   finance_manager_verification: boolean;
   pending_verifications: number;
+  data_mode: "test" | "live";
 };
 
 function SettingsPage() {
@@ -44,6 +45,52 @@ function SettingsPage() {
   }
 
   const on = Boolean(data?.finance_manager_verification);
+  const live = data?.data_mode === "live";
+  const [confirmText, setConfirmText] = useState("");
+  const [cleared, setCleared] = useState("");
+  const phrase = live ? "DELETE LIVE DATA" : "CLEAR TEST DATA";
+
+  async function setMode(next: "test" | "live") {
+    const message =
+      next === "live"
+        ? "Switch to PRODUCTION data? Screens will start from zero and show only real payments. Test data is kept and comes back when you switch to test."
+        : "Switch to TEST data? Screens will show only test payments. Production data is kept.";
+    if (!window.confirm(message)) return;
+    setBusy(true);
+    setError("");
+    setCleared("");
+    try {
+      await api("/api/staff/admin/data-mode", {
+        method: "PUT",
+        body: JSON.stringify({ mode: next }),
+      });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not switch the data mode");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clearData() {
+    setBusy(true);
+    setError("");
+    setCleared("");
+    try {
+      const res = await api<{ deleted: Record<string, number> }>("/api/staff/admin/clear-data", {
+        method: "POST",
+        body: JSON.stringify({ confirm: confirmText }),
+      });
+      const total = Object.values(res.deleted).reduce((a, b) => a + b, 0);
+      setCleared(`Cleared ${total} record${total === 1 ? "" : "s"} of ${live ? "production" : "test"} data.`);
+      setConfirmText("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not clear the data");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -84,6 +131,69 @@ function SettingsPage() {
           >
             <span className="block h-5 w-5 rounded-full bg-white shadow-sm" />
           </button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Production data</CardTitle>
+          <CardDescription>
+            Off: every payment, cash collection, bank transfer and email you create is test data. On:
+            they are production data and the screens start from zero. The two sets are kept apart, so
+            switching back and forth never mixes them. Bitrix, Zoho and Paymob are not switched: a test
+            payment still reaches the real systems, so use test leads while this is off.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-stone-900">
+              {data ? (live ? "On - production data" : "Off - test data") : "Loading..."}
+            </p>
+            <p className="text-sm text-stone-600">
+              Do not switch while a customer is in the middle of paying.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={live}
+            aria-label="Production data"
+            disabled={busy || data === null}
+            onClick={() => setMode(live ? "test" : "live")}
+            className={`inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors disabled:opacity-50 ${
+              live ? "justify-end bg-teal-800" : "justify-start bg-stone-300"
+            }`}
+          >
+            <span className="block h-5 w-5 rounded-full bg-white shadow-sm" />
+          </button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Clear {live ? "production" : "test"} payment data</CardTitle>
+          <CardDescription>
+            Permanently deletes every payment, cash collection, deposit, bank transfer, finance check and
+            email of the {live ? "PRODUCTION" : "test"} data set, so collected goes back to 0. The other
+            data set is not touched. Bitrix, Zoho and Google Drive are not changed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-stone-600">
+            Type <span className="font-mono font-semibold">{phrase}</span> to enable the button.
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={phrase}
+              className="h-9 w-64 rounded-md border border-stone-300 px-3 text-sm"
+            />
+            <Button variant="outline" disabled={busy || confirmText.trim() !== phrase} onClick={clearData}>
+              Clear {live ? "production" : "test"} data
+            </Button>
+          </div>
+          {cleared ? <p className="text-sm text-emerald-800">{cleared}</p> : null}
         </CardContent>
       </Card>
 

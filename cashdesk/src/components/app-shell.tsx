@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -31,6 +32,15 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [dataMode, setDataMode] = useState<"test" | "live" | undefined>(user.data_mode);
+  // Re-read on every page change so the banner follows the admin's switch.
+  useEffect(() => {
+    api<StaffUser>("/api/staff/me")
+      .then((me) => setDataMode(me.data_mode))
+      .catch(() => {
+        /* the banner is informational */
+      });
+  }, [pathname]);
   const isAdmin = user.role === "admin";
   const isManager = user.role === "manager" || isAdmin;
 
@@ -152,6 +162,11 @@ export function AppShell({
               })}
             </nav>
           </header>
+          {dataMode === "test" ? (
+            <div className="bg-amber-100 px-4 py-1.5 text-center text-xs font-medium text-amber-900">
+              Test data - nothing on this screen is production. An admin can switch to production in Settings.
+            </div>
+          ) : null}
           <main className="flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
         </div>
       </div>

@@ -8,6 +8,7 @@ from typing import Optional
 from sqlalchemy import DateTime, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.db.data_mode import current_data_mode
 from app.db.session import Base
 
 
@@ -15,6 +16,9 @@ class EmailLog(Base):
     __tablename__ = "email_logs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    data_mode: Mapped[str] = mapped_column(
+        String(10), default=current_data_mode, server_default="test", index=True
+    )
     to_email: Mapped[str] = mapped_column(String(320), index=True)
     subject: Mapped[str] = mapped_column(String(500))
     body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

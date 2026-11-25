@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.db.data_mode import current_data_mode
 from app.db.session import Base
 
 if TYPE_CHECKING:
@@ -35,6 +36,9 @@ class CashCollection(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    data_mode: Mapped[str] = mapped_column(
+        String(10), default=current_data_mode, server_default="test", index=True
+    )
     workflow_id: Mapped[int] = mapped_column(ForeignKey("customer_workflows.id"), index=True)
     bitrix_lead_id: Mapped[int] = mapped_column(Integer, index=True)
     installment_number: Mapped[int] = mapped_column(Integer)

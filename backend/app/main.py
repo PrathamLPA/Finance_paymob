@@ -131,6 +131,10 @@ if origins:
         allow_headers=["*"],
     )
 
+from app.db.data_mode import register_filter  # noqa: E402
+
+register_filter()
+
 app.include_router(health.router)
 app.include_router(webhooks.router)
 app.include_router(payment_api.router)

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.db.data_mode import current_data_mode
 from app.db.session import Base
 
 if TYPE_CHECKING:
@@ -20,6 +21,9 @@ class PaymentTransaction(Base):
     __table_args__ = (UniqueConstraint("transaction_id", name="uq_payment_transactions_transaction_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    data_mode: Mapped[str] = mapped_column(
+        String(10), default=current_data_mode, server_default="test", index=True
+    )
     workflow_id: Mapped[int] = mapped_column(ForeignKey("customer_workflows.id"), index=True)
     payment_session_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("payment_sessions.id"), nullable=True, index=True

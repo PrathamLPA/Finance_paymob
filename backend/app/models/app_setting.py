@@ -11,6 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.session import Base
 
 KEY_FINANCE_MANAGER_VERIFICATION = "finance_manager_verification"
+KEY_DATA_MODE = "data_mode"
 
 
 class AppSetting(Base):

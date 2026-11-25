@@ -45,6 +45,9 @@ def reset_singletons():
     factory._mock_tabby_singleton = None
     factory._mock_tamara_singleton = None
     get_settings.cache_clear()
+    from app.db.data_mode import reset_cache
+
+    reset_cache()
     yield
     factory._mock_bitrix_singleton = None
     factory._mock_email_singleton = None

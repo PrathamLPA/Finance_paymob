@@ -72,4 +72,6 @@ def staff_logout(response: Response) -> dict[str, str]:
 
 @router.get("/me")
 def staff_me(staff: StaffUser = Depends(get_current_staff)) -> dict[str, Any]:
-    return _user_public(staff)
+    from app.db.data_mode import current_data_mode
+
+    return {**_user_public(staff), "data_mode": current_data_mode()}

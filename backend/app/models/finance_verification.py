@@ -8,6 +8,7 @@ from typing import Optional
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.db.data_mode import current_data_mode
 from app.db.session import Base
 
 STATUS_PENDING = "pending"
@@ -19,6 +20,9 @@ class FinanceVerification(Base):
     __tablename__ = "finance_verifications"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    data_mode: Mapped[str] = mapped_column(
+        String(10), default=current_data_mode, server_default="test", index=True
+    )
     payment_transaction_id: Mapped[int] = mapped_column(
         ForeignKey("payment_transactions.id"), unique=True, index=True
     )

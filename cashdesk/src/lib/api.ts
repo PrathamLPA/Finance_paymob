@@ -14,6 +14,7 @@ export type StaffUser = {
   name: string;
   role: "manager" | "employee" | string;
   is_active: boolean;
+  data_mode?: "test" | "live";
 };
 
 /** Thrown by api() for non-2xx responses. `status` is the HTTP status code. */

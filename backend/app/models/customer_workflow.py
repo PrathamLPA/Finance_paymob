@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 from sqlalchemy import JSON, Boolean, DateTime, Integer, Numeric, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.db.data_mode import current_data_mode
 from app.db.session import Base
 
 if TYPE_CHECKING:
@@ -29,6 +30,9 @@ class CustomerWorkflow(Base):
     __tablename__ = "customer_workflows"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    data_mode: Mapped[str] = mapped_column(
+        String(10), default=current_data_mode, server_default="test", index=True
+    )
     bitrix_lead_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     bitrix_lead_stage_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     bitrix_lead_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

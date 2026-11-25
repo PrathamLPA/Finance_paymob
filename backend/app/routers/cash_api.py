@@ -13,14 +13,16 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.db.session import get_db
-from app.deps.staff import get_current_staff, require_manager
+from app.deps.staff import get_current_staff, require_manager, scope_to_data_mode
 from app.models.staff_user import ROLE_MANAGER, StaffUser
 from app.services.cash_collection_service import CashCollectionService
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/staff", tags=["cash-desk"])
+router = APIRouter(
+    prefix="/api/staff", tags=["cash-desk"], dependencies=[Depends(scope_to_data_mode)]
+)
 
 
 def _parse_optional_date(value: str | None, field_name: str) -> date | None:

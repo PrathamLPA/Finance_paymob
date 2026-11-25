@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.db.data_mode import current_data_mode
 from app.db.session import Base
 
 if TYPE_CHECKING:
@@ -19,6 +20,9 @@ class CashDeposit(Base):
     __tablename__ = "cash_deposits"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    data_mode: Mapped[str] = mapped_column(
+        String(10), default=current_data_mode, server_default="test", index=True
+    )
     employee_id: Mapped[int] = mapped_column(ForeignKey("staff_users.id"), index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(10), default="AED")

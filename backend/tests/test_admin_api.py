@@ -161,3 +161,68 @@ def test_payment_links_page_lists_links_emails_and_mode(client, db_session):
     assert [m["to"] for m in link["emails"]] == ["sam@example.com"]
     assert len(body["emails"]) == 2
     assert body["pending_approvals"] == []
+
+
+def test_data_mode_separates_test_and_live_and_clear_only_touches_active_mode(client, db_session):
+    from decimal import Decimal
+
+    from app.models.customer_workflow import CustomerWorkflow
+    from app.models.email_log import EmailLog
+    from app.models.payment_transaction import PaymentTransaction
+
+    _make_user(db_session, email="admin@example.com", role=ROLE_ADMIN)
+    admin = _login(client, "admin@example.com")
+
+    # Fresh installs behave like today: test mode.
+    assert client.get("/api/staff/admin/overview", headers=admin).json()["data_mode"] == "test"
+
+    def add_payment(lead_id: int, txn_id: str) -> None:
+        wf = CustomerWorkflow(bitrix_lead_id=lead_id, customer_name=f"Lead {lead_id}")
+        db_session.add(wf)
+        db_session.commit()
+        db_session.add(
+            PaymentTransaction(
+                workflow_id=wf.id,
+                transaction_id=txn_id,
+                amount=Decimal("10.00"),
+                remaining_balance=Decimal("0.00"),
+            )
+        )
+        db_session.commit()
+
+    add_payment(1, "TEST-1")  # stamped test
+    assert client.get("/api/staff/admin/overview", headers=admin).json()["transactions"] == 1
+
+    # Switch to production: the test payment disappears from the staff view.
+    res = client.put("/api/staff/admin/data-mode", headers=admin, json={"mode": "live"})
+    assert res.json()["data_mode"] == "live"
+    assert client.get("/api/staff/admin/overview", headers=admin).json()["transactions"] == 0
+
+    add_payment(2, "LIVE-1")  # stamped live
+    assert client.get("/api/staff/admin/overview", headers=admin).json()["transactions"] == 1
+    db_session.add(EmailLog(to_email="a@b.c", subject="live mail", status="sent"))
+    db_session.commit()
+
+    # Clear needs the exact phrase, and only deletes the active (live) mode.
+    assert client.post("/api/staff/admin/clear-data", headers=admin, json={"confirm": "yes"}).status_code == 400
+    assert client.post(
+        "/api/staff/admin/clear-data", headers=admin, json={"confirm": "DELETE LIVE DATA"}
+    ).status_code == 200
+    assert client.get("/api/staff/admin/overview", headers=admin).json()["transactions"] == 0
+
+    # Back in test mode the test payment is still there.
+    client.put("/api/staff/admin/data-mode", headers=admin, json={"mode": "test"})
+    assert client.get("/api/staff/admin/overview", headers=admin).json()["transactions"] == 1
+    cleared = client.post(
+        "/api/staff/admin/clear-data", headers=admin, json={"confirm": "CLEAR TEST DATA"}
+    ).json()
+    assert cleared["deleted"]["payment_transactions"] == 1
+    assert cleared["deleted"]["customer_workflows"] == 1
+    assert client.get("/api/staff/admin/overview", headers=admin).json()["transactions"] == 0
+
+
+def test_data_mode_routes_are_admin_only(client, db_session):
+    _make_user(db_session, email="fin@example.com", role=ROLE_MANAGER)
+    manager = _login(client, "fin@example.com")
+    assert client.put("/api/staff/admin/data-mode", headers=manager, json={"mode": "live"}).status_code == 403
+    assert client.post("/api/staff/admin/clear-data", headers=manager, json={"confirm": "x"}).status_code == 403
