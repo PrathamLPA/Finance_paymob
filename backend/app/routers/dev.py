@@ -4,18 +4,40 @@ import html
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.deps.staff import STAFF_COOKIE, get_current_staff
+from app.models.staff_user import ROLE_ADMIN
 from app.config import get_settings
 from app.integrations.factory import get_bitrix_client
 from app.services.seed_mock_data import seed_mock_data
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
-router = APIRouter(prefix="/api/dev", tags=["dev"])
+def _dev_tools_gate(
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None),
+    cashdesk_token: str | None = Cookie(default=None, alias=STAFF_COOKIE),
+) -> None:
+    """In production only a signed-in developer admin may touch the dev / OAuth helpers.
+
+    They list Zoho organisations, reveal which Google account stores proofs and can
+    trigger reminder emails, so they must never be open to the internet.
+    """
+    env = (get_settings().app_env or "").strip().lower()
+    if env not in ("production", "prod"):
+        return
+    staff = get_current_staff(db=db, authorization=authorization, cashdesk_token=cashdesk_token)
+    if staff.role != ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Administrator only")
+
+
+router = APIRouter(
+    prefix="/api/dev", tags=["dev"], dependencies=[Depends(_dev_tools_gate)]
+)
 
 
 def _require_non_production_dev_tools() -> None:

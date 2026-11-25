@@ -26,7 +26,7 @@ from app.models.cash_collection import (
 from app.models.cash_deposit import CashDeposit
 from app.models.customer_workflow import CustomerWorkflow
 from app.models.payment_transaction import PaymentTransaction
-from app.models.staff_user import ROLE_EMPLOYEE, ROLE_MANAGER, StaffUser
+from app.models.staff_user import ROLE_ADMIN, ROLE_EMPLOYEE, ROLE_MANAGER, StaffUser
 from app.services.installment_plan import (
     charge_installment_number_for_workflow,
     resolve_first_charge_for_workflow,
@@ -106,20 +106,17 @@ class CashCollectionService:
         if ctype not in ALLOWED_PROOF_TYPES:
             raise ValueError("Only JPG, PNG, WEBP, or PDF photos are allowed")
 
-        ext = Path(filename).suffix.lower()
-        if not ext:
-            ext = {
-                "image/jpeg": ".jpg",
-                "image/png": ".png",
-                "image/webp": ".webp",
-                "application/pdf": ".pdf",
-            }.get(ctype, ".bin")
-        safe_name = f"{row.id}_{uuid.uuid4().hex[:12]}{ext}"
         from app.services.proof_storage import (
+            content_matches_type,
             delete_proof,
+            extension_for,
             person_folder_name,
             store_proof,
         )
+
+        if not content_matches_type(ctype, data):
+            raise ValueError("The file does not look like a real photo or PDF")
+        safe_name = f"{row.id}_{uuid.uuid4().hex[:12]}{extension_for(ctype)}"
 
         stored = store_proof(
             self.settings,
@@ -517,7 +514,7 @@ class CashCollectionService:
         employee = self.db.get(StaffUser, employee_id)
         if not employee or not employee.is_active:
             raise ValueError("Employee not found")
-        if recorded_by.role != ROLE_MANAGER and recorded_by.id != employee_id:
+        if recorded_by.role not in (ROLE_MANAGER, ROLE_ADMIN) and recorded_by.id != employee_id:
             raise ValueError("Employees can only deposit their own cash")
         balances = self.employee_balances(employee_id)
         if amount > balances["on_hand"]:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -35,11 +35,30 @@ def _user_public(user: StaffUser) -> dict[str, Any]:
 
 
 @router.post("/login")
-def staff_login(body: LoginBody, response: Response, db: Session = Depends(get_db)) -> dict[str, Any]:
+def staff_login(
+    body: LoginBody,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services import login_throttle
+
     email = body.email.strip().lower()
+    # Behind Railway's proxy the real address is the first X-Forwarded-For entry.
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    address = forwarded or (request.client.host if request.client else "unknown")
+    locked_for = login_throttle.seconds_locked(email, address)
+    if locked_for:
+        logger.warning("Staff login blocked email=%s ip=%s locked_for=%ss", email, address, locked_for)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed sign-in attempts. Try again in {max(1, locked_for // 60)} minutes.",
+            headers={"Retry-After": str(locked_for)},
+        )
     logger.info("Staff login attempt email=%s", email)
     user = authenticate_staff(db, email, body.password)
     if not user:
+        login_throttle.record_failure(email, address)
         logger.warning("Staff login failed email=%s reason=invalid_credentials", email)
         raise HTTPException(
             status_code=401,
@@ -60,6 +79,7 @@ def staff_login(body: LoginBody, response: Response, db: Session = Depends(get_d
         max_age=max(1, settings.staff_jwt_ttl_hours) * 3600,
         path="/",
     )
+    login_throttle.record_success(email)
     logger.info("Staff login ok email=%s role=%s user_id=%s", user.email, user.role, user.id)
     return {"token": token, "user": _user_public(user)}
 

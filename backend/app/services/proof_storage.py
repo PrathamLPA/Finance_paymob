@@ -84,3 +84,33 @@ def delete_proof(settings: Settings, stored: str | None, *, local_dir: Path) -> 
             old.unlink(missing_ok=True)
     except OSError:
         logger.exception("Could not remove old proof %s", stored)
+
+
+_EXTENSION_FOR_TYPE = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
+}
+
+
+def extension_for(content_type: str) -> str:
+    """The extension always comes from the verified type, never from the uploaded name."""
+    return _EXTENSION_FOR_TYPE.get(content_type, ".bin")
+
+
+def content_matches_type(content_type: str, data: bytes) -> bool:
+    """True when the file's first bytes really are what the upload claims to be.
+
+    The browser-supplied type is only a claim; without this a script or page could be
+    stored as "image/png".
+    """
+    if content_type in ("image/jpeg", "image/jpg"):
+        return data.startswith(b"\xff\xd8\xff")
+    if content_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/webp":
+        return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    if content_type == "application/pdf":
+        return data[:1024].lstrip().startswith(b"%PDF")
+    return False

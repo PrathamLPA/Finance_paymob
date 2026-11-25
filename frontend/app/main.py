@@ -22,6 +22,19 @@ logging.basicConfig(
 logger = logging.getLogger("frontend")
 
 app = FastAPI(title=settings.app_name)
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    # Stops another site from framing the payment page to trick clicks.
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    # The payment link holds a secret in its address; do not leak it to other sites.
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
 # Compress HTML and the Finance JS/CSS bundles.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(payment.router)

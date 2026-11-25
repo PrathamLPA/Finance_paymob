@@ -241,20 +241,17 @@ class BankTransferService:
         if ctype not in ALLOWED_PROOF_TYPES:
             raise ValueError("Only JPG, PNG, WEBP, or PDF receipts are allowed")
 
-        ext = Path(filename).suffix.lower()
-        if not ext:
-            ext = {
-                "image/jpeg": ".jpg",
-                "image/png": ".png",
-                "image/webp": ".webp",
-                "application/pdf": ".pdf",
-            }.get(ctype, ".bin")
-        safe_name = f"{row.id}_{uuid.uuid4().hex[:12]}{ext}"
         from app.services.proof_storage import (
+            content_matches_type,
             delete_proof,
+            extension_for,
             person_folder_name,
             store_proof,
         )
+
+        if not content_matches_type(ctype, data):
+            raise ValueError("The file does not look like a real photo or PDF")
+        safe_name = f"{row.id}_{uuid.uuid4().hex[:12]}{extension_for(ctype)}"
 
         stored = store_proof(
             self.settings,

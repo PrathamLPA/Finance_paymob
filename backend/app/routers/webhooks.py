@@ -1,6 +1,7 @@
 """Webhook endpoints for Bitrix24 and Paymob."""
 
 import json
+import hmac
 import logging
 from typing import Any
 from uuid import uuid4
@@ -181,8 +182,9 @@ def _authorize(request: Request, payload: dict[str, Any]) -> None:
     header_secret = request.headers.get("X-Webhook-Secret")
     query_token = request.query_params.get("token") or request.query_params.get("secret")
 
-    if application_token == expected or header_secret == expected or query_token == expected:
-        return
+    for supplied in (application_token, header_secret, query_token):
+        if supplied and hmac.compare_digest(str(supplied), expected):
+            return
 
     logger.warning(
         "Bitrix webhook authentication rejected content_type=%s",

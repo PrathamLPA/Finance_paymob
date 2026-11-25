@@ -113,7 +113,30 @@ async def lifespan(_app: FastAPI):
         logger.info("API shutdown complete")
 
 
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
+_is_production = (settings.app_env or "").strip().lower() in ("production", "prod")
+app = FastAPI(
+    title=settings.app_name,
+    lifespan=lifespan,
+    # The interactive API docs map every endpoint for anyone who finds the URL.
+    docs_url=None if _is_production else "/docs",
+    redoc_url=None if _is_production else "/redoc",
+    openapi_url=None if _is_production else "/openapi.json",
+)
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    # Payment and approval links carry a secret in the address; never send it onward.
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if _is_production:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
+
 # Cash Desk list responses are large JSON; gzip cuts transfer time a lot.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 

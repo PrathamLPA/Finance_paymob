@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import logging
 import uuid
 from decimal import Decimal
@@ -125,7 +126,7 @@ class MockTabbyClient:
         if not expected:
             logger.error("TABBY_WEBHOOK_AUTH_VALUE is not configured")
             return False
-        return (header_value or "").strip() == expected
+        return hmac.compare_digest((header_value or "").strip(), expected)
 
     def parse_webhook_payload(self, payload: dict[str, Any]) -> PaymentWebhookData | None:
         if not isinstance(payload, dict):
