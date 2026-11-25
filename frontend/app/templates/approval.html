@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manager approval</title>
-    <link rel="stylesheet" href="/static/styles.css?v=11">
+    <title>Manager approval | Learners Point</title>
+    <link rel="stylesheet" href="/static/styles.css?v=21">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -56,14 +56,13 @@
 <body class="paymob-page">
     <div class="page-bg"></div>
     <header class="site-header">
-        <div class="brand">
-            <div class="brand-icon" aria-hidden="true">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-                    <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                </svg>
-            </div>
+        <div class="brand brand-learners">
+            <picture>
+                <source srcset="/static/brand/learners-point-logo.avif" type="image/avif">
+                <img class="brand-logo" src="/static/brand/learners-point-logo.png" width="40" height="40" alt="Learners Point">
+            </picture>
             <div>
-                <span class="brand-name">Finance Automation</span>
+                <span class="brand-name">Learners Point</span>
                 <span class="brand-tagline">Manager approval</span>
             </div>
         </div>
@@ -75,7 +74,7 @@
                 <div class="card-hero-text">
                     <div class="card-header">
                         <h1>Manager approval</h1>
-                        <span class="version-pill">{{ data.status }}</span>
+                        <span class="version-pill">{{ data.status|capitalize }}</span>
                     </div>
                     <p class="card-subtitle">
                         Approve accepts the current values as-is. Reject asks for preferred values, then notifies the lead owner.
@@ -106,7 +105,7 @@
                 <dl class="amount-summary">
                     <div class="amount-row">
                         <dt>Lead</dt>
-                        <dd>{{ data.lead_title }} (#{{ data.lead_id }})</dd>
+                        <dd>{% if data.lead_title %}{{ data.lead_title }} (#{{ data.lead_id }}){% else %}Lead #{{ data.lead_id }}{% endif %}</dd>
                     </div>
                     <div class="amount-row">
                         <dt>Lead owner</dt>

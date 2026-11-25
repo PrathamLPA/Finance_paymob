@@ -18,6 +18,7 @@ type Overview = {
   open_cash_collections: number;
   pending_bank_transfers: number;
   pending_verifications: number;
+  data_mode: "test" | "live";
 };
 
 function AdminHome() {
@@ -50,6 +51,24 @@ function AdminHome() {
         <StatCard label="Transactions" value={String(data?.transactions ?? "—")} icon={Receipt} accent="sky" />
         <StatCard label="Open cash cases" value={String(data?.open_cash_collections ?? "—")} icon={Banknote} accent="amber" />
         <StatCard label="Bank receipts waiting" value={String(data?.pending_bank_transfers ?? "—")} icon={Receipt} accent="stone" />
+        <Link href="/admin/verification" className="block rounded-xl transition hover:-translate-y-0.5 hover:shadow-md">
+          <StatCard
+            label="Waiting for approval"
+            value={String(data?.pending_verifications ?? "—")}
+            hint="Open Finance check"
+            icon={ShieldCheck}
+            accent="amber"
+          />
+        </Link>
+        <Link href="/admin/settings" className="block rounded-xl transition hover:-translate-y-0.5 hover:shadow-md">
+          <StatCard
+            label="Data in use"
+            value={data ? (data.data_mode === "live" ? "Production" : "Test") : "—"}
+            hint="Change in Settings"
+            icon={Wallet}
+            accent={data?.data_mode === "live" ? "teal" : "amber"}
+          />
+        </Link>
       </div>
 
       <Card>

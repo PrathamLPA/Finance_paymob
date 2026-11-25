@@ -677,6 +677,15 @@ body.error-page-body {
     color: var(--foreground);
     font-variant-numeric: tabular-nums;
     text-align: right;
+    /* Long emails wrap inside the box instead of spilling out of it. */
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+/* Keep "10000.00 AED" together on one line on narrow phones. Free text (name,
+   course, email) is marked .wrap-text in the page and may wrap instead. */
+.amount-row dd:not(.wrap-text) {
+    white-space: nowrap;
 }
 
 .amount-row-total {
@@ -1283,6 +1292,50 @@ body.error-page-body {
 .error-card p {
     color: var(--muted-foreground);
     margin: 0 0 0.5rem;
+}
+
+.error-card {
+    width: 100%;
+    padding: 2.25rem 2rem 2rem;
+}
+
+.error-logo {
+    display: block;
+    margin: 0 auto 1.25rem;
+    border-radius: 10px;
+}
+
+.error-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 0.75rem;
+    border-radius: 999px;
+    background: #fef3f2;
+    color: #b42318;
+}
+
+.error-card .error-message {
+    color: var(--foreground);
+    font-size: 0.95rem;
+    line-height: 1.6;
+    margin: 0 0 1rem;
+}
+
+.error-card .error-help {
+    font-size: 0.8rem;
+    margin: 0 0 1.1rem;
+}
+
+.error-link {
+    display: inline-block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--foreground);
+    text-decoration: underline;
+    text-underline-offset: 3px;
 }
 
 .error-card p:last-child {

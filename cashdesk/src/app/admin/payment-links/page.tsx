@@ -457,5 +457,5 @@ function PaymentLinks() {
 }
 
 export default function AdminPaymentLinksPage() {
-  return <RequireAuth role="manager">{() => <PaymentLinks />}</RequireAuth>;
+  return <RequireAuth role="admin">{() => <PaymentLinks />}</RequireAuth>;
 }

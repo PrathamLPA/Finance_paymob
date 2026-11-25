@@ -118,8 +118,8 @@ def test_payment_links_page_lists_links_emails_and_mode(client, db_session):
     from app.models.email_log import EmailLog
     from app.models.payment_session import PaymentSession
 
-    _make_user(db_session, email="fin@example.com", role=ROLE_MANAGER)
-    manager = _login(client, "fin@example.com")
+    _make_user(db_session, email="admin@example.com", role=ROLE_ADMIN)
+    manager = _login(client, "admin@example.com")
 
     workflow = CustomerWorkflow(
         bitrix_lead_id=777, customer_name="Sam", customer_email="sam@example.com"
@@ -256,3 +256,9 @@ def test_data_mode_routes_are_admin_only(client, db_session):
     manager = _login(client, "fin@example.com")
     assert client.put("/api/staff/admin/data-mode", headers=manager, json={"mode": "live"}).status_code == 403
     assert client.post("/api/staff/admin/clear-data", headers=manager, json={"confirm": "x"}).status_code == 403
+
+
+def test_payment_links_page_is_developer_only(client, db_session):
+    _make_user(db_session, email="fin@example.com", role=ROLE_MANAGER)
+    manager = _login(client, "fin@example.com")
+    assert client.get("/api/staff/admin/payment-links", headers=manager).status_code == 403

@@ -78,7 +78,7 @@ export function RequireAuth({
     } finally {
       setChecking(false);
     }
-  }, [router, role]);
+  }, [router]);
 
   useEffect(() => {
     verify();

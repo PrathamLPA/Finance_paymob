@@ -255,7 +255,7 @@ def _iso(value: Any) -> str | None:
 def payment_links_overview(
     limit: int = 200,
     db: Session = Depends(get_db),
-    _reviewer: StaffUser = Depends(require_manager),
+    _admin: StaffUser = Depends(require_admin),
 ) -> dict[str, Any]:
     """Every payment link, the emails sent, the mode chosen and what still needs approval."""
     limit = max(1, min(limit, 500))

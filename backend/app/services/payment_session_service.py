@@ -224,24 +224,25 @@ class PaymentSessionService:
         session = self.get_session_by_token(token)
         if not session:
             return (
-                "This payment link is not recognized. It may be incomplete, from another "
-                "environment, or was never created successfully."
+                "We couldn't find this payment link. Please make sure you opened the "
+                "complete link from your message, or ask your Learners Point advisor "
+                "to send you a new one."
             )
         if session.status == SESSION_COMPLETED:
             return (
-                "This payment link was already used and completed. "
-                "Ask your sales contact if a new link is needed."
+                "This payment has already been completed, so the link can't be used "
+                "again. Thank you! If you think this is a mistake, please contact "
+                "your Learners Point advisor."
             )
         if session.status == SESSION_EXPIRED or _ensure_utc(session.expires_at) <= _utcnow():
             if session.status != SESSION_EXPIRED:
                 session.status = SESSION_EXPIRED
                 self.db.commit()
             return (
-                "This payment link has expired or was replaced by a newer link. "
-                "Ask your sales contact to move the lead to the payment stage again "
-                "for a fresh link."
+                "This payment link has expired or was replaced by a newer one. "
+                "Please ask your Learners Point advisor to send you a fresh link."
             )
-        return "This payment link is not available right now."
+        return "This payment link isn't available right now. Please try again shortly or contact your Learners Point advisor."
 
     def get_active_session_for_workflow(self, workflow: CustomerWorkflow) -> PaymentSession | None:
         sessions = self.db.scalars(

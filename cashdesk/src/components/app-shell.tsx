@@ -21,7 +21,13 @@ import { api, setToken, type StaffUser } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
+type NavItem = {
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  /** Heading shown above this link on the desktop sidebar (until the next heading). */
+  section?: string;
+};
 
 export function AppShell({
   user,
@@ -45,18 +51,18 @@ export function AppShell({
   const isManager = user.role === "manager" || isAdmin;
 
   const adminLinks: NavItem[] = [
-    { href: "/admin", label: "Control", icon: LayoutDashboard },
+    { href: "/admin", label: "Control", icon: LayoutDashboard, section: "Overview" },
     { href: "/manager", label: "Manager", icon: ClipboardList },
     { href: "/employee", label: "Collections", icon: Banknote },
-    { href: "/admin/settings", label: "Settings", icon: Settings },
-    { href: "/admin/people", label: "People", icon: Users },
-    { href: "/admin/verification", label: "Finance check", icon: ShieldCheck },
+    { href: "/admin/verification", label: "Finance check", icon: ShieldCheck, section: "Money" },
     { href: "/admin/payment-links", label: "Payment links", icon: Link2 },
     { href: "/admin/transactions", label: "Transactions", icon: ArrowLeftRight },
     { href: "/manager/cash-queue", label: "Cash queue", icon: Banknote },
     { href: "/collected", label: "Collected from", icon: List },
     { href: "/manager/bank-transfers", label: "Bank transfers", icon: Receipt },
     { href: "/manager/deposits", label: "Deposits", icon: Wallet },
+    { href: "/admin/people", label: "People", icon: Users, section: "Developer" },
+    { href: "/admin/settings", label: "Settings", icon: Settings },
   ];
 
   const managerLinks: NavItem[] = [
@@ -78,10 +84,20 @@ export function AppShell({
 
   const links = isAdmin ? adminLinks : isManager ? managerLinks : employeeLinks;
 
+  // The app serves trailing-slash URLs ("/employee/"), so compare without the slash.
+  const here = (pathname || "").replace(/\/+$/, "") || "/";
+
   function isActive(href: string) {
-    if (href === "/manager" || href === "/employee" || href === "/admin") return pathname === href;
-    return pathname.startsWith(href);
+    if (href === "/manager" || href === "/employee" || href === "/admin") return here === href;
+    return here === href || here.startsWith(`${href}/`);
   }
+
+  useEffect(() => {
+    // On a phone the menu scrolls sideways; keep the current page's tab visible.
+    document
+      .querySelector<HTMLElement>("[data-mobile-nav] [aria-current='page']")
+      ?.scrollIntoView({ inline: "center", block: "nearest" });
+  }, [here]);
 
   async function logout() {
     // Clear local state first so the UI never waits on the network.
@@ -97,29 +113,41 @@ export function AppShell({
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#f0fdfa_0%,#fafaf9_28%,#f5f5f4_100%)]">
       <div className="mx-auto flex min-h-screen max-w-7xl">
-        <aside className="hidden w-64 shrink-0 border-r border-stone-200/80 bg-white p-4 md:flex md:flex-col">
+        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 overflow-hidden border-r border-stone-200/80 bg-white p-4 md:flex md:flex-col">
           <div className="mb-8 px-2">
             <p className="font-serif text-2xl text-teal-950">Finance</p>
             <p className="text-xs text-stone-500">Learners Point</p>
           </div>
-          <nav className="flex flex-1 flex-col gap-1">
-            {links.map((link) => {
+          <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pr-1">
+            {links.map((link, index) => {
               const Icon = link.icon;
               const active = isActive(link.href);
               return (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className={cn(
-                    "cashdesk-nav-link flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium",
-                    active
-                      ? "bg-teal-900 text-white shadow-sm"
-                      : "text-stone-600 hover:bg-stone-100 hover:text-stone-900"
-                  )}
-                >
-                  <Icon className="h-4 w-4 shrink-0" />
-                  {link.label}
-                </Link>
+                <div key={link.href} className="flex flex-col gap-1">
+                  {link.section ? (
+                    <p
+                      className={cn(
+                        "mb-0.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-stone-400",
+                        index > 0 && "mt-4"
+                      )}
+                    >
+                      {link.section}
+                    </p>
+                  ) : null}
+                  <Link
+                    href={link.href}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "cashdesk-nav-link flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium",
+                      active
+                        ? "bg-teal-900 text-white shadow-sm"
+                        : "text-stone-600 hover:bg-stone-100 hover:text-stone-900"
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    {link.label}
+                  </Link>
+                </div>
               );
             })}
           </nav>
@@ -144,13 +172,14 @@ export function AppShell({
                 <LogOut className="h-4 w-4" />
               </Button>
             </div>
-            <nav className="mt-3 flex gap-1 overflow-x-auto pb-1">
+            <nav data-mobile-nav className="mt-3 flex gap-1 overflow-x-auto pb-1">
               {links.map((link) => {
                 const active = isActive(link.href);
                 return (
                   <Link
                     key={link.href}
                     href={link.href}
+                    aria-current={active ? "page" : undefined}
                     className={cn(
                       "cashdesk-nav-link whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium",
                       active ? "bg-teal-900 text-white" : "bg-stone-100 text-stone-600"

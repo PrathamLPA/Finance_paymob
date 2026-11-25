@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment - Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20">
+    <link rel="stylesheet" href="/static/styles.css?v=21">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -110,11 +110,11 @@
                     <dl class="amount-summary">
                         <div class="amount-row">
                             <dt>Invoice name</dt>
-                            <dd>{{ registrant_name }}</dd>
+                            <dd class="wrap-text">{{ registrant_name }}</dd>
                         </div>
                         <div class="amount-row">
                             <dt>Course</dt>
-                            <dd>
+                            <dd class="wrap-text">
                                 {% for course in courses %}
                                 {{ course.product_name }}{% if not loop.last %}, {% endif %}
                                 {% else %}
@@ -124,11 +124,11 @@
                         </div>
                         <div class="amount-row">
                             <dt>Email ID</dt>
-                            <dd>{{ registrant_email }}</dd>
+                            <dd class="wrap-text">{{ registrant_email }}</dd>
                         </div>
                         <div class="amount-row">
                             <dt>Phone number</dt>
-                            <dd>{{ registrant_phone }}</dd>
+                            <dd class="wrap-text">{{ registrant_phone }}</dd>
                         </div>
                     </dl>
                 </section>

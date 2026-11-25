@@ -143,3 +143,11 @@ body {
     transition: none !important;
   }
 }
+
+/* Phone menu scrolls sideways; hide the scrollbar track. */
+[data-mobile-nav] {
+  scrollbar-width: none;
+}
+[data-mobile-nav]::-webkit-scrollbar {
+  display: none;
+}

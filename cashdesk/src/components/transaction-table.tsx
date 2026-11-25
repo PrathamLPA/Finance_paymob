@@ -28,6 +28,7 @@ export type TxnRow = {
   employee_email: string | null;
   zoho_invoice_id: string | null;
   invoice_synced: boolean;
+  awaiting_approval?: boolean;
 };
 
 type RetriggerResult = {
@@ -150,7 +151,9 @@ function TransactionDetailModal({
               >
                 {row.channel === "pos" ? "POS" : row.channel}
               </Badge>
-              {row.invoice_synced ? (
+              {row.awaiting_approval ? (
+                <Badge variant="warning">Awaiting finance approval</Badge>
+              ) : row.invoice_synced ? (
                 <Badge variant="success">Invoice sent</Badge>
               ) : (
                 <Badge variant="warning">Invoice missing</Badge>
@@ -211,9 +214,11 @@ function TransactionDetailModal({
           >
             {busy
               ? "Working…"
-              : row.invoice_synced
-                ? "Resend invoice"
-                : "Create & send invoice"}
+              : row.awaiting_approval
+                ? "Approve & send invoice"
+                : row.invoice_synced
+                  ? "Resend invoice"
+                  : "Create & send invoice"}
           </Button>
         </footer>
       </div>
@@ -350,7 +355,9 @@ export function TransactionTable({
                   </div>
                 </TD>
                 <TD>
-                  {row.invoice_synced ? (
+                  {row.awaiting_approval ? (
+                    <Badge variant="warning">Awaiting approval</Badge>
+                  ) : row.invoice_synced ? (
                     <Badge variant="success">Sent</Badge>
                   ) : (
                     <Badge variant="warning">Missing</Badge>

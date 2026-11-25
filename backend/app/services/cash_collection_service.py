@@ -937,6 +937,15 @@ class CashCollectionService:
 
         out: list[dict[str, Any]] = []
         needle = (q or "").strip().lower()
+        from app.models.finance_verification import STATUS_PENDING, FinanceVerification
+
+        awaiting_approval_ids = set(
+            self.db.scalars(
+                select(FinanceVerification.payment_transaction_id).where(
+                    FinanceVerification.status == STATUS_PENDING
+                )
+            )
+        )
         for txn in rows:
             wf = txn.workflow
             if txn.source_type == COLLECT_METHOD_CASH:
@@ -999,6 +1008,7 @@ class CashCollectionService:
                     "collection_id": collection_id,
                     "zoho_invoice_id": wf.zoho_invoice_id if wf else None,
                     "invoice_synced": bool(wf and wf.zoho_invoice_id),
+                    "awaiting_approval": txn.id in awaiting_approval_ids,
                 }
             )
 

@@ -3,14 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payment Link Unavailable</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <title>This link can't be opened | Learners Point</title>
+    <link rel="stylesheet" href="/static/styles.css?v=21">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body class="error-page-body">
-    <div class="error-card">
-        <h1>Unable to Proceed</h1>
-        <p>{{ message }}</p>
-    </div>
+    <main class="error-card" role="alert">
+        <picture>
+            <source srcset="/static/brand/learners-point-logo.avif" type="image/avif">
+            <img class="error-logo" src="/static/brand/learners-point-logo.png" width="44" height="44" alt="Learners Point">
+        </picture>
+        <div class="error-icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
+                <path d="M12 7.5v5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <circle cx="12" cy="16.4" r="1.1" fill="currentColor"/>
+            </svg>
+        </div>
+        <h1>We can't open this page</h1>
+        <p class="error-message">{{ message }}</p>
+        <p class="error-help">Need help? Contact your Learners Point advisor and mention this link.</p>
+        <a class="error-link" href="https://learnerspoint.org" rel="noopener noreferrer">Go to learnerspoint.org</a>
+    </main>
 </body>
 </html>
