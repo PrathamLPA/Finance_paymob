@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manager approval | Learners Point</title>
-    <link rel="stylesheet" href="/static/styles.css?v=24">
+    <link rel="stylesheet" href="/static/styles.css?v=26">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -312,6 +312,7 @@
                         </button>
                         <p class="summary-note">All policy cases are approved as-is. This sends one payment link.</p>
                     </div>
+                    <p class="summary-note submit-status" id="submit-status" role="status" aria-live="polite" hidden></p>
                     <p class="summary-note" id="decision-hint">
                         Approve accepts current values. Reject opens preferred fields for that case only.
                     </p>
@@ -450,15 +451,23 @@
                     });
                 }
 
+                const rejecting = decisionInput.value === 'reject';
+                const pressed = event.submitter || document.getElementById('btn-final-approve');
                 const buttons = form.querySelectorAll('button');
-                buttons.forEach((btn) => {
-                    btn.disabled = true;
-                });
-                const finalBtn = document.getElementById('btn-final-approve');
-                if (finalBtn) {
-                    finalBtn.textContent = decisionInput.value === 'reject'
+                // Disable after the browser has read which button was pressed.
+                setTimeout(() => buttons.forEach((btn) => { btn.disabled = true; }), 0);
+                if (pressed) {
+                    pressed.classList.add('is-loading');
+                    pressed.textContent = rejecting
                         ? 'Rejecting...'
                         : 'Approving and generating link...';
+                }
+                const status = document.getElementById('submit-status');
+                if (status) {
+                    status.hidden = false;
+                    status.textContent = rejecting
+                        ? 'Sending your decision. Please keep this page open for a few seconds.'
+                        : 'Creating the payment link and updating the lead. This can take up to 10 seconds. Please keep this page open.';
                 }
             });
 

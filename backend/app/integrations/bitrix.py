@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from app.integrations.http_pool import STALE_CONNECTION_ERRORS, shared_client
+
 from app.config import Settings, get_settings
 from app.integrations.base import InvoiceReference, PaymentSummary
 
@@ -2333,10 +2335,11 @@ class RealBitrixClient:
         last_exc: Exception | None = None
         for attempt in range(2):
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(url, json=params or {})
+                response = await shared_client().post(
+                    url, json=params or {}, timeout=timeout
+                )
                 break
-            except (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout) as exc:
+            except STALE_CONNECTION_ERRORS as exc:
                 last_exc = exc
                 if attempt == 0:
                     logger.warning(

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/toast";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
@@ -27,6 +28,7 @@ function VerificationQueue() {
   const [items, setItems] = useState<Item[]>([]);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
+  const toast = useToast();
 
   const refresh = useCallback(async () => {
     const res = await api<{ enabled: boolean; items: Item[] }>("/api/staff/admin/verifications");
@@ -42,11 +44,27 @@ function VerificationQueue() {
     setBusyId(id);
     setError("");
     try {
-      await api(`/api/staff/admin/verifications/${id}/${action}`, {
-        method: "POST",
-        body: JSON.stringify({ note: null }),
-      });
-      await refresh();
+      const res = await api<{ job?: string | null }>(
+        `/api/staff/admin/verifications/${id}/${action}`,
+        { method: "POST", body: JSON.stringify({ note: null }) }
+      );
+      // Show the result straight away; the invoice and Bitrix steps finish in the background.
+      setItems((list) =>
+        list.map((item) =>
+          item.id === id ? { ...item, status: action === "approve" ? "approved" : "rejected" } : item
+        )
+      );
+      if (action === "approve") {
+        toast.trackJob(res.job, {
+          runningTitle: "Approved. Sending the invoice and updating Bitrix...",
+          runningDetail: "You can keep working. This takes a few seconds.",
+          doneTitle: "Approved. Invoice sent and Bitrix updated.",
+          onFinished: () => void refresh().catch(() => undefined),
+        });
+      } else {
+        toast.show({ tone: "info", title: "Payment rejected. The money stays recorded; no invoice was sent." });
+        void refresh().catch(() => undefined);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed");
     } finally {
@@ -124,10 +142,10 @@ function VerificationQueue() {
                           </Button>
                           <Button
                             size="sm"
-                            disabled={busyId === row.id}
+                            loading={busyId === row.id}
                             onClick={() => decide(row.id, "approve")}
                           >
-                            {busyId === row.id ? "Working…" : "Approve"}
+                            Approve
                           </Button>
                         </div>
                       ) : (

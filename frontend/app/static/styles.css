@@ -2304,3 +2304,55 @@ body.terms-modal-open {
     white-space: pre-line;
     overflow-wrap: anywhere;
 }
+
+
+/* A pressed button shows it is working, and presses feel physical. */
+.btn-paymob {
+    transition: background-color 0.15s ease, transform 0.12s ease, opacity 0.15s ease;
+}
+
+.btn-paymob:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.btn-paymob.is-loading {
+    position: relative;
+    opacity: 0.85;
+    cursor: progress;
+}
+
+.btn-paymob.is-loading::before {
+    content: "";
+    display: inline-block;
+    width: 0.95em;
+    height: 0.95em;
+    margin-right: 0.55rem;
+    vertical-align: -0.12em;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: btn-spin 0.7s linear infinite;
+}
+
+@keyframes btn-spin {
+    to { transform: rotate(360deg); }
+}
+
+.submit-status {
+    color: var(--foreground);
+    font-weight: 500;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .btn-paymob.is-loading::before { animation-duration: 2s; }
+}
+
+.receipt-dropzone.needs-file {
+    border-color: #b42318;
+    animation: receipt-shake 0.3s ease;
+}
+
+@keyframes receipt-shake {
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+}

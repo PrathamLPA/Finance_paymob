@@ -7,9 +7,11 @@ from typing import Any
 
 import httpx
 
+from app.integrations.http_pool import STALE_CONNECTION_ERRORS, shared_client
+
 logger = logging.getLogger(__name__)
 
-_RETRYABLE = (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout)
+_RETRYABLE = STALE_CONNECTION_ERRORS
 
 
 async def request_with_retry(
@@ -26,8 +28,7 @@ async def request_with_retry(
     attempts = max(1, retries + 1)
     for attempt in range(attempts):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                return await client.request(method, url, **kwargs)
+            return await shared_client().request(method, url, timeout=timeout, **kwargs)
         except _RETRYABLE as exc:
             last_exc = exc
             if attempt + 1 < attempts:

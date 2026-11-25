@@ -164,6 +164,7 @@ async def cash_collect(
             "remaining_balance": str(workflow.remaining_balance),
             "payment_status": workflow.payment_status,
         },
+        "job": orchestrator.last_job_key,
     }
 
 
@@ -472,7 +473,7 @@ async def bank_transfer_approve(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return service.submission_to_dict(row)
+    return {**service.submission_to_dict(row), "job": service.last_job_key}
 
 
 @router.post("/bank-transfers/{submission_id}/reject")
@@ -590,6 +591,36 @@ async def retrigger_invoice(
             "steps": {"zoho": "released", "bitrix": "released", "email": "released"},
         }
 
+    from app.config import get_settings
+    from app.services import background_jobs
+
+    if get_settings().post_payment_background:
+        # Zoho + Bitrix + email take many seconds. Answer now, finish in the background,
+        # and let the screen follow the job and show any step that failed.
+        workflow_id, txn_id = workflow.id, txn.id
+
+        async def _run() -> list[str]:
+            with background_jobs.open_session() as bg:
+                bg_workflow = bg.get(CustomerWorkflow, workflow_id)
+                bg_txn = bg.get(PaymentTransaction, txn_id)
+                if bg_workflow is None or bg_txn is None:
+                    return ["The payment record could not be found"]
+                outcome = await InvoiceService(bg).retrigger_invoice_delivery(
+                    bg_workflow, bg_txn
+                )
+            problems = [
+                f"{step}: {str(state)[:120]}"
+                for step, state in (outcome.get("steps") or {}).items()
+                if str(state).startswith("error")
+            ]
+            if not outcome.get("ok") and not problems:
+                problems.append(str(outcome.get("detail") or "Invoice delivery failed"))
+            return problems
+
+        key = f"invoice:{txn_id}"
+        background_jobs.spawn(key, f"Invoice for lead {workflow.bitrix_lead_id}", _run)
+        return {"ok": True, "queued": True, "job": key, "steps": {}}
+
     result = await InvoiceService(db).retrigger_invoice_delivery(workflow, txn)
     if not result.get("ok") and str(result.get("steps", {}).get("zoho", "")).startswith(
         "error"
@@ -599,3 +630,18 @@ async def retrigger_invoice(
             detail=result.get("detail") or "Invoice retrigger failed in Zoho",
         )
     return result
+
+
+@router.get("/jobs/{job_key}")
+def job_status(
+    job_key: str,
+    _staff: StaffUser = Depends(get_current_staff),
+) -> dict[str, Any]:
+    """Progress of work started by an Approve / Collect button (invoice, Bitrix, email)."""
+    from app.services.background_jobs import get_job
+
+    job = get_job(job_key)
+    if job is None:
+        # Nothing running: it finished long ago, ran inline, or the server restarted.
+        return {"key": job_key, "state": "unknown", "problems": [], "label": "", "seconds": 0}
+    return job.to_dict()

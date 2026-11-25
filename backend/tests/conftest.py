@@ -18,6 +18,8 @@ os.environ["FRONTEND_ORIGIN"] = "http://frontend.test"
 os.environ["BITRIX_WEBHOOK_SECRET"] = ""
 os.environ["BITRIX_INVOICE_SENT_TRIGGER_URL"] = ""
 os.environ["REMINDER_SCHEDULER_ENABLED"] = "false"
+# Existing tests expect invoice / Bitrix steps to finish before the call returns.
+os.environ["POST_PAYMENT_BACKGROUND"] = "false"
 os.environ["PAYMENT_REQUIRED_PERCENT"] = "50"
 os.environ["BITRIX_FINANCE_THRESHOLD_MET_STAGE_ID"] = "FINANCE_THRESHOLD_MET"
 # Existing fixtures seed amount-only leads; price gate is covered in dedicated tests.

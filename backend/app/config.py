@@ -356,6 +356,11 @@ class Settings(BaseSettings):
     # Tamara) so the customer picks on Paymob, whatever Payment Mode the lead has.
     # Cash and bank transfer are unaffected (they never reach Paymob).
     paymob_offer_all_methods: bool = False
+    # Save a payment first and run its invoice, Bitrix and email steps in the
+    # background, so Approve / Collect buttons answer in a moment instead of waiting
+    # on Zoho and Bitrix. The screen follows progress. Set false to run everything
+    # before the response again.
+    post_payment_background: bool = True
 
     # Tabby direct API (UAE). Used when Bitrix Payment Mode is Tabby (not via Paymob).
     # Docs: https://docs.tabby.ai/pay-in-4-custom-integration/quick-start

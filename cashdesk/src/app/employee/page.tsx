@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CheckCircle2, HandCoins, PiggyBank, Wallet, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/toast";
 import { useProof } from "@/lib/use-proof";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
@@ -338,12 +339,13 @@ function CollectionDetailModal({
           </Button>
           {isOpen ? (
             <Button
-              disabled={busy || !detailsReady}
+              loading={busy}
+              disabled={!detailsReady}
               onClick={onClaim}
               className="min-w-[10rem]"
             >
               {busy
-                ? "Claiming…"
+                ? "Claiming..."
                 : detailsReady
                   ? "Claim this collection"
                   : "Form fill incomplete"}
@@ -351,12 +353,13 @@ function CollectionDetailModal({
           ) : null}
           {isClaimed ? (
             <Button
-              disabled={busy || !proofFile || !detailsReady}
+              loading={busy}
+              disabled={!proofFile || !detailsReady}
               onClick={onCollect}
               className="min-w-[10rem]"
             >
               {busy
-                ? "Saving…"
+                ? "Uploading proof..."
                 : !detailsReady
                   ? "Form fill incomplete"
                   : isPos
@@ -529,6 +532,8 @@ function EmployeeDesk({ userId }: { userId: number }) {
     setSuccess("");
   }
 
+  const toast = useToast();
+
   async function claim(id: number) {
     setBusyId(id);
     setError("");
@@ -540,7 +545,9 @@ function EmployeeDesk({ userId }: { userId: number }) {
       setSelected(updated);
       setCollectMethod("cash");
       setTab("claimed");
-      await refresh();
+      // Show the claim at once; the lists catch up in the background.
+      setItems((list) => list.map((item) => (item.id === id ? { ...item, ...updated } : item)));
+      void refresh().catch(() => undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Claim failed");
     } finally {
@@ -564,17 +571,28 @@ function EmployeeDesk({ userId }: { userId: number }) {
       const body = new FormData();
       body.append("proof", proofFile);
       body.append("collect_method", collectMethod);
-      await api(`/api/staff/cash/${id}/collect`, { method: "POST", body });
-      setSuccess(
-        collectMethod === "pos"
-          ? "POS payment recorded with proof. It was not added to your cash in hand."
-          : "Cash recorded with photo and added to your cash in hand."
-      );
+      const res = await api<{ job?: string | null }>(`/api/staff/cash/${id}/collect`, {
+        method: "POST",
+        body,
+      });
+      const posPayment = collectMethod === "pos";
       setProofFile(null);
       setCollectMethod("cash");
       setSelected(null);
       setTab("collected");
-      await refresh();
+      // Take it off the open list immediately, then let the lists catch up.
+      setItems((list) => list.filter((item) => item.id !== id));
+      void refresh().catch(() => undefined);
+      toast.trackJob(res.job, {
+        runningTitle: posPayment
+          ? "POS payment saved. Sending the invoice and updating Bitrix..."
+          : "Cash saved. Sending the invoice and updating Bitrix...",
+        runningDetail: "You can keep working. This takes a few seconds.",
+        doneTitle: posPayment
+          ? "POS payment recorded. Invoice sent and Bitrix updated."
+          : "Cash recorded. Invoice sent and Bitrix updated.",
+        onFinished: () => void refresh().catch(() => undefined),
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Collect failed");
     } finally {

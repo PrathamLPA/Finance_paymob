@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/toast";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
 import { PageHeader } from "@/components/page-header";
@@ -106,6 +107,7 @@ function PaymentLinks() {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
+  const toast = useToast();
   const [openMail, setOpenMail] = useState<number | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const [copiedApproval, setCopiedApproval] = useState<number | null>(null);
@@ -122,11 +124,27 @@ function PaymentLinks() {
     setBusyId(id);
     setError("");
     try {
-      await api(`/api/staff/admin/verifications/${id}/${action}`, {
-        method: "POST",
-        body: JSON.stringify({ note: null }),
-      });
-      await refresh();
+      const res = await api<{ job?: string | null }>(
+        `/api/staff/admin/verifications/${id}/${action}`,
+        { method: "POST", body: JSON.stringify({ note: null }) }
+      );
+      // Take it off the waiting list at once; the rest finishes in the background.
+      setData((current) =>
+        current
+          ? { ...current, pending_approvals: current.pending_approvals.filter((p) => p.id !== id) }
+          : current
+      );
+      if (action === "approve") {
+        toast.trackJob(res.job, {
+          runningTitle: "Approved. Sending the invoice and updating Bitrix...",
+          runningDetail: "You can keep working. This takes a few seconds.",
+          doneTitle: "Approved. Invoice sent and Bitrix updated.",
+          onFinished: () => void refresh().catch(() => undefined),
+        });
+      } else {
+        toast.show({ tone: "info", title: "Payment rejected. No invoice was sent." });
+        void refresh().catch(() => undefined);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed");
     } finally {
@@ -298,8 +316,8 @@ function PaymentLinks() {
                         >
                           Reject
                         </Button>
-                        <Button size="sm" disabled={busyId === row.id} onClick={() => decide(row.id, "approve")}>
-                          {busyId === row.id ? "Working..." : "Approve"}
+                        <Button size="sm" loading={busyId === row.id} onClick={() => decide(row.id, "approve")}>
+                          Approve
                         </Button>
                       </div>
                     </TD>

@@ -105,6 +105,13 @@ class WorkflowOrchestrator:
         self.invoice_service = InvoiceService(db, self.settings)
         self.threshold_service = PaymentThresholdService(db, self.settings)
         self.approval_service = PriceApprovalService(db, self.settings)
+        # Follow-up steps that failed during the last apply_recorded_payment call.
+        self.last_problems: list[str] = []
+        # Set when the slow steps were queued to run after the response.
+        self.last_job_key: str | None = None
+
+    def _problem(self, message: str) -> None:
+        self.last_problems.append(message)
 
     def get_or_create_workflow(self, lead_id: int) -> CustomerWorkflow:
         from sqlalchemy.exc import IntegrityError
@@ -2105,12 +2112,96 @@ class WorkflowOrchestrator:
                 workflow.remaining_balance,
             )
         except Exception:
+            self._problem("Bitrix paid status was not updated")
             logger.exception(
                 "Could not update the lead paid status (field=%s value=%s) | lead=%s",
                 field,
                 enum_id,
                 workflow.bitrix_lead_id,
             )
+
+    async def apply_recorded_payment_deferred(
+        self,
+        workflow: CustomerWorkflow,
+        transaction: PaymentTransaction,
+        *,
+        amount: Decimal,
+        currency: str,
+        comment_prefix: str = "Payment successful",
+        skip_zoho: bool = False,
+        skip_deals: bool = False,
+        finance_release: bool = False,
+    ) -> str | None:
+        """Same as apply_recorded_payment, but the slow part runs after the response.
+
+        The payment and the finance-check hold are settled right here (database only).
+        If the payment is not held, the Zoho / Bitrix / email steps run in the
+        background and this returns a job key the screen can poll. Returns None when
+        everything already ran inline (background mode off, or the payment is held).
+        """
+        from app.services import background_jobs
+        from app.services.finance_verification_service import FinanceVerificationService
+
+        if not getattr(self.settings, "post_payment_background", True):
+            await self.apply_recorded_payment(
+                workflow,
+                transaction,
+                amount=amount,
+                currency=currency,
+                comment_prefix=comment_prefix,
+                skip_zoho=skip_zoho,
+                skip_deals=skip_deals,
+                finance_release=finance_release,
+            )
+            return None
+
+        self.db.commit()
+        if FinanceVerificationService(self.db, self.settings).hold_if_required(
+            workflow,
+            transaction,
+            amount=amount,
+            currency=currency,
+            comment_prefix=comment_prefix,
+            skip_zoho=skip_zoho,
+            skip_deals=skip_deals,
+            finance_release=finance_release,
+            dev_simulate=False,
+        ):
+            logger.info(
+                "Payment recorded, waiting for finance manager | lead=%s txn=%s",
+                workflow.bitrix_lead_id,
+                transaction.transaction_id,
+            )
+            return None
+
+        workflow_id = workflow.id
+        transaction_id = transaction.id
+        settings = self.settings
+        lead_id = workflow.bitrix_lead_id
+
+        async def _run() -> list[str]:
+            with background_jobs.open_session() as db:
+                wf = db.get(CustomerWorkflow, workflow_id)
+                txn = db.get(PaymentTransaction, transaction_id)
+                if wf is None or txn is None:
+                    return ["The payment record could not be found"]
+                orchestrator = WorkflowOrchestrator(db, settings)
+                await orchestrator.apply_recorded_payment(
+                    wf,
+                    txn,
+                    amount=amount,
+                    currency=currency,
+                    comment_prefix=comment_prefix,
+                    skip_zoho=skip_zoho,
+                    skip_deals=skip_deals,
+                    finance_release=True,
+                )
+                return orchestrator.last_problems
+
+        key = f"payment:{transaction_id}"
+        background_jobs.spawn(key, f"Invoice and Bitrix updates for lead {lead_id}", _run)
+        logger.info("Queued post-payment steps | lead=%s job=%s", lead_id, key)
+        return key
 
     async def apply_recorded_payment(
         self,
@@ -2150,6 +2241,7 @@ class WorkflowOrchestrator:
             )
             return workflow
 
+        self.last_problems = []
         first_payment = workflow.is_first_payment_pending
         logger.info(
             "Applying payment side effects | lead=%s txn=%s first_payment=%s "
@@ -2188,6 +2280,7 @@ class WorkflowOrchestrator:
                         installment_1_date=installment_1_paid_date,
                     )
             except Exception:
+                self._problem("Bitrix lead was not updated for the first payment")
                 logger.exception(
                     "Failed first-payment Bitrix lead update for lead %s",
                     workflow.bitrix_lead_id,
@@ -2217,6 +2310,7 @@ class WorkflowOrchestrator:
                     workflow.zoho_invoice_id,
                 )
             except Exception:
+                self._problem("The Zoho invoice was not created or sent")
                 logger.exception(
                     "Failed to sync invoice after payment for lead %s",
                     workflow.bitrix_lead_id,
@@ -2228,6 +2322,7 @@ class WorkflowOrchestrator:
             try:
                 await self._autofill_complete_lead_after_invoice(workflow)
             except Exception:
+                self._problem("Bitrix lead fields were not filled")
                 logger.exception(
                     "Complete-lead autofill after invoice failed for lead %s",
                     workflow.bitrix_lead_id,
@@ -2296,6 +2391,7 @@ class WorkflowOrchestrator:
                         "Invoice-sent stage trigger done | lead=%s", workflow.bitrix_lead_id
                     )
                 else:
+                    self._problem("The Bitrix next-stage trigger did not activate")
                     logger.error(
                         "Invoice-sent stage trigger did not activate | lead=%s. "
                         "See the preceding Bitrix trigger diagnostic log.",
@@ -2304,6 +2400,7 @@ class WorkflowOrchestrator:
             except Exception:
                 # Payment and invoice are already committed. Do not make Paymob
                 # retry the transaction when only Bitrix automation is unavailable.
+                self._problem("The Bitrix next-stage trigger failed")
                 logger.exception(
                     "Failed to trigger Bitrix invoice-sent automation | lead=%s",
                     workflow.bitrix_lead_id,
@@ -2315,6 +2412,7 @@ class WorkflowOrchestrator:
                 latest_transaction_id=transaction.transaction_id,
             )
         except Exception:
+            self._problem("The payment stage move in Bitrix failed")
             logger.exception(
                 "Failed to apply payment threshold for lead %s",
                 workflow.bitrix_lead_id,
@@ -2855,13 +2953,15 @@ class WorkflowOrchestrator:
                 staff.email,
             )
 
-        return await self.apply_recorded_payment(
+        self.last_job_key = await self.apply_recorded_payment_deferred(
             workflow,
             transaction,
             amount=collect_amount,
             currency=row.currency or workflow.currency,
             comment_prefix=comment_prefix,
         )
+        self.db.refresh(workflow)
+        return workflow
 
     async def _promote_failed_paymob_to_success(
         self,

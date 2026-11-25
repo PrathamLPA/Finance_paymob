@@ -52,7 +52,10 @@ def test_access_token_uses_refresh_grant(monkeypatch):
         captured["data"] = data
         return Response()
 
-    monkeypatch.setattr("app.integrations.google_drive.httpx.post", fake_post)
+    class FakeClient:
+        post = staticmethod(fake_post)
+
+    monkeypatch.setattr("app.integrations.google_drive._http", lambda: FakeClient())
     monkeypatch.setattr(
         "app.integrations.google_drive._token_cache",
         {"token": "", "exp": 0.0, "key": ""},
@@ -78,10 +81,10 @@ def test_exchange_requires_a_refresh_token(monkeypatch):
         def json(self):
             return {"access_token": "short-lived"}
 
-    monkeypatch.setattr(
-        "app.integrations.google_drive.httpx.post",
-        lambda url, data, timeout: Response(),
-    )
+    class FakeClient:
+        post = staticmethod(lambda url, data, timeout: Response())
+
+    monkeypatch.setattr("app.integrations.google_drive._http", lambda: FakeClient())
     client = GoogleDriveClient(
         _settings(google_drive_client_id="client-id", google_drive_client_secret="secret")
     )

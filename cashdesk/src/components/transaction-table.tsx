@@ -4,6 +4,7 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
@@ -37,6 +38,9 @@ type RetriggerResult = {
   invoice_number?: string | null;
   created_new?: boolean;
   released_hold?: boolean;
+  queued?: boolean;
+  job?: string | null;
+  verification?: { job?: string | null };
   steps?: Record<string, string>;
   detail?: string | null;
 };
@@ -208,12 +212,13 @@ function TransactionDetailModal({
             Close
           </Button>
           <Button
-            disabled={busy || !row.workflow_id}
+            loading={busy}
+            disabled={!row.workflow_id}
             onClick={onRetrigger}
             className="min-w-[10rem]"
           >
             {busy
-              ? "Working…"
+              ? "Starting..."
               : row.awaiting_approval
                 ? "Approve & send invoice"
                 : row.invoice_synced
@@ -256,6 +261,8 @@ export function TransactionTable({
 
   const shown = items.length > visible ? items.slice(0, visible) : items;
 
+  const toast = useToast();
+
   async function retrigger(row: TxnRow) {
     setBusyId(row.id);
     setError("");
@@ -268,6 +275,21 @@ export function TransactionTable({
           workflow_id: row.workflow_id,
         }),
       });
+      // The server answers at once and finishes in the background: follow it with a toast.
+      if (result.queued || result.released_hold) {
+        const approved = Boolean(result.released_hold);
+        toast.trackJob(result.job ?? result.verification?.job, {
+          runningTitle: approved
+            ? "Approved. Sending the invoice and updating Bitrix..."
+            : "Creating the invoice and sending it...",
+          runningDetail: "You can keep working. This takes a few seconds.",
+          doneTitle: approved
+            ? "Approved. Invoice sent and Bitrix updated."
+            : "Invoice created and sent to the customer and Bitrix.",
+          onFinished: () => void onUpdated?.(),
+        });
+        return;
+      }
       const steps = result.steps
         ? `Zoho: ${result.steps.zoho}; Bitrix: ${result.steps.bitrix}; Email: ${result.steps.email}`
         : "";

@@ -33,6 +33,8 @@ class FinanceVerificationService:
     def __init__(self, db: Session, settings: Settings | None = None):
         self.db = db
         self.settings = settings or get_settings()
+        # Job key of the background invoice / Bitrix work started by the last approval.
+        self.last_job_key: str | None = None
 
     def is_enabled(self) -> bool:
         """DB value wins after someone uses the admin switch. Otherwise the env default."""
@@ -154,7 +156,9 @@ class FinanceVerificationService:
             transaction = self.db.get(PaymentTransaction, row.payment_transaction_id)
             if workflow is None or transaction is None:
                 raise ValueError("Payment record is missing")
-            await WorkflowOrchestrator(self.db, self.settings).apply_recorded_payment(
+            self.last_job_key = await WorkflowOrchestrator(
+                self.db, self.settings
+            ).apply_recorded_payment_deferred(
                 workflow,
                 transaction,
                 amount=Decimal(row.amount),
@@ -173,7 +177,7 @@ class FinanceVerificationService:
                 workflow.remaining_balance,
             )
         self.db.refresh(row)
-        return self._to_dict(row, staff.name)
+        return {**self._to_dict(row, staff.name), "job": self.last_job_key}
 
     def staff_counts(self) -> dict[str, int]:
         out = {ROLE_ADMIN: 0, ROLE_MANAGER: 0, ROLE_EMPLOYEE: 0}

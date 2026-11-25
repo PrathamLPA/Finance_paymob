@@ -31,13 +31,16 @@ function SettingsPage() {
   async function setVerification(enabled: boolean) {
     setBusy(true);
     setError("");
+    // Flip the switch at once; put it back if the server says no.
+    setData((d) => (d ? { ...d, finance_manager_verification: enabled } : d));
     try {
       await api("/api/staff/admin/verification", {
         method: "PUT",
         body: JSON.stringify({ enabled }),
       });
-      await refresh();
+      void refresh().catch(() => undefined);
     } catch (err) {
+      setData((d) => (d ? { ...d, finance_manager_verification: !enabled } : d));
       setError(err instanceof Error ? err.message : "Could not update the switch");
     } finally {
       setBusy(false);
@@ -59,13 +62,16 @@ function SettingsPage() {
     setBusy(true);
     setError("");
     setCleared("");
+    const previous = data?.data_mode ?? "test";
+    setData((d) => (d ? { ...d, data_mode: next } : d));
     try {
       await api("/api/staff/admin/data-mode", {
         method: "PUT",
         body: JSON.stringify({ mode: next }),
       });
-      await refresh();
+      void refresh().catch(() => undefined);
     } catch (err) {
+      setData((d) => (d ? { ...d, data_mode: previous } : d));
       setError(err instanceof Error ? err.message : "Could not switch the data mode");
     } finally {
       setBusy(false);
@@ -125,11 +131,11 @@ function SettingsPage() {
             aria-label="Only after manager confirmation"
             disabled={busy || data === null}
             onClick={() => setVerification(!on)}
-            className={`inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors disabled:opacity-50 ${
-              on ? "justify-end bg-teal-800" : "justify-start bg-stone-300"
+            className={`inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors duration-200 disabled:opacity-50 ${
+              on ? "bg-teal-800" : "bg-stone-300"
             }`}
           >
-            <span className="block h-5 w-5 rounded-full bg-white shadow-sm" />
+            <span className={`block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${on ? "translate-x-5" : "translate-x-0"}`} />
           </button>
         </CardContent>
       </Card>
@@ -160,11 +166,11 @@ function SettingsPage() {
             aria-label="Production data"
             disabled={busy || data === null}
             onClick={() => setMode(live ? "test" : "live")}
-            className={`inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors disabled:opacity-50 ${
-              live ? "justify-end bg-teal-800" : "justify-start bg-stone-300"
+            className={`inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors duration-200 disabled:opacity-50 ${
+              live ? "bg-teal-800" : "bg-stone-300"
             }`}
           >
-            <span className="block h-5 w-5 rounded-full bg-white shadow-sm" />
+            <span className={`block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${live ? "translate-x-5" : "translate-x-0"}`} />
           </button>
         </CardContent>
       </Card>

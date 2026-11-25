@@ -47,6 +47,8 @@ class BankTransferService:
     def __init__(self, db: Session, settings: Settings | None = None):
         self.db = db
         self.settings = settings or get_settings()
+        # Job key of the background invoice / Bitrix work started by approve().
+        self.last_job_key: str | None = None
 
     def _proof_dir(self) -> Path:
         root = Path(self.settings.storage_path)
@@ -461,7 +463,7 @@ class BankTransferService:
             comment_prefix += f"\nNote: {row.review_note}"
 
         orchestrator = WorkflowOrchestrator(self.db, self.settings)
-        await orchestrator.apply_recorded_payment(
+        self.last_job_key = await orchestrator.apply_recorded_payment_deferred(
             workflow,
             transaction,
             amount=approve_amount,

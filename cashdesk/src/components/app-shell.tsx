@@ -196,7 +196,7 @@ export function AppShell({
               Test data - nothing on this screen is production. An admin can switch to production in Settings.
             </div>
           ) : null}
-          <main className="flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
+          <main key={here} className="cashdesk-page flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
         </div>
       </div>
     </div>

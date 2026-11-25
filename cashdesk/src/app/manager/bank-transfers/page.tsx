@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Expand, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/toast";
 import { useProof } from "@/lib/use-proof";
 import { money } from "@/lib/utils";
 import { RequireAuth } from "@/components/require-auth";
@@ -276,10 +277,10 @@ function BankTransferDetailModal({
                 onClick={onReject}
                 className="min-w-[6.5rem]"
               >
-                {busy ? "Working…" : "Reject"}
+                Reject
               </Button>
-              <Button disabled={busy} onClick={onApprove} className="min-w-[8rem]">
-                {busy ? "Working…" : "Approve"}
+              <Button loading={busy} onClick={onApprove} className="min-w-[8rem]">
+                Approve
               </Button>
             </>
           ) : null}
@@ -339,18 +340,33 @@ function BankTransfersPage() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [fullscreen]);
 
+  const toast = useToast();
+
   async function act(action: "approve" | "reject") {
     if (!selected) return;
     setBusy(true);
     setError("");
     try {
-      const updated = await api<Submission>(`/api/staff/bank-transfers/${selected.id}/${action}`, {
-        method: "POST",
-        body: JSON.stringify({ note: note || null }),
-      });
+      const updated = await api<Submission & { job?: string | null }>(
+        `/api/staff/bank-transfers/${selected.id}/${action}`,
+        {
+          method: "POST",
+          body: JSON.stringify({ note: note || null }),
+        }
+      );
       setSelected(updated);
       setNote("");
-      await refresh();
+      void refresh().catch(() => undefined);
+      if (action === "approve") {
+        toast.trackJob(updated.job, {
+          runningTitle: "Approved. Sending the invoice and updating Bitrix...",
+          runningDetail: "You can keep working. This takes a few seconds.",
+          doneTitle: "Bank transfer approved. Invoice sent and Bitrix updated.",
+          onFinished: () => void refresh().catch(() => undefined),
+        });
+      } else {
+        toast.show({ tone: "info", title: "Receipt rejected. The customer was asked to upload a new one." });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed");
     } finally {

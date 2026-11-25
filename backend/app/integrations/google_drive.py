@@ -32,6 +32,18 @@ _FOLDER_MIME = "application/vnd.google-apps.folder"
 ROOT_FOLDER_NAME = "fynx"
 OAUTH_CALLBACK_PATH = "/api/dev/google-drive/oauth-callback"
 _token_cache: dict[str, Any] = {"token": "", "exp": 0.0, "key": ""}
+
+_client: "httpx.Client | None" = None
+
+
+def _http() -> "httpx.Client":
+    """One shared client, so uploads reuse the connection to Google instead of reconnecting."""
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.Client(
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=20.0)
+        )
+    return _client
 _folder_cache: dict[tuple[str, str], str] = {}
 
 
@@ -90,7 +102,7 @@ class GoogleDriveClient:
         grant = (code or "").strip()
         if not grant:
             raise GoogleDriveError("Google did not return a sign-in code")
-        response = httpx.post(
+        response = _http().post(
             _TOKEN_URL,
             data={
                 "code": grant,
@@ -132,7 +144,7 @@ class GoogleDriveClient:
             and float(_token_cache["exp"]) > now + 60
         ):
             return str(_token_cache["token"])
-        response = httpx.post(
+        response = _http().post(
             _TOKEN_URL,
             data={
                 "client_id": self._client_id(),
@@ -155,7 +167,7 @@ class GoogleDriveClient:
 
     def account_email(self) -> str:
         """Email of the Google account that owns the Drive folders."""
-        response = httpx.get(
+        response = _http().get(
             _ABOUT_URL,
             params={"fields": "user(emailAddress)"},
             headers={"Authorization": f"Bearer {self._access_token()}"},
@@ -186,7 +198,7 @@ class GoogleDriveClient:
             f"name = '{safe}' and mimeType = '{_FOLDER_MIME}' "
             f"and trashed = false and '{parent_id}' in parents"
         )
-        response = httpx.get(
+        response = _http().get(
             _FILES_URL,
             params={
                 "q": query,
@@ -208,7 +220,7 @@ class GoogleDriveClient:
         return str(files[0].get("id") or "").strip() or None
 
     def _create_folder(self, name: str, parent_id: str) -> str:
-        response = httpx.post(
+        response = _http().post(
             _FILES_URL,
             params={"supportsAllDrives": "true"},
             headers={
@@ -257,7 +269,7 @@ class GoogleDriveClient:
             f"--{boundary}\r\n"
             f"Content-Type: {mime}\r\n\r\n"
         ).encode("utf-8") + data + f"\r\n--{boundary}--".encode("utf-8")
-        response = httpx.post(
+        response = _http().post(
             _UPLOAD_URL,
             params={"uploadType": "multipart", "supportsAllDrives": "true"},
             headers={
@@ -278,7 +290,7 @@ class GoogleDriveClient:
         return file_id
 
     def download(self, file_id: str) -> bytes:
-        response = httpx.get(
+        response = _http().get(
             f"{_FILES_URL}/{file_id}",
             params={"alt": "media", "supportsAllDrives": "true"},
             headers={"Authorization": f"Bearer {self._access_token()}"},

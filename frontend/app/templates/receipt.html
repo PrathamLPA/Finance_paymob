@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Upload Bank Transfer Receipt</title>
-    <link rel="stylesheet" href="/static/styles.css?v=24">
+    <link rel="stylesheet" href="/static/styles.css?v=26">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -151,6 +151,23 @@
                 var file = input.files && input.files[0];
                 hint.textContent = file ? file.name : 'JPG, PNG, WEBP, or PDF - max 8MB';
                 zone.classList.toggle('has-file', Boolean(file));
+            });
+
+            var form = document.getElementById('receipt-form');
+            var button = document.getElementById('receipt-submit');
+            if (!form || !button) return;
+            form.addEventListener('submit', function (event) {
+                if (!input.files || !input.files[0]) {
+                    event.preventDefault();
+                    hint.textContent = 'Please choose your receipt first.';
+                    zone.classList.add('needs-file');
+                    return;
+                }
+                // Photos can take a few seconds to upload on mobile data: show it is working
+                // and stop a second tap from sending the file twice.
+                button.classList.add('is-loading');
+                button.textContent = 'Uploading your receipt...';
+                setTimeout(function () { button.disabled = true; }, 0);
             });
         })();
     </script>
