@@ -59,7 +59,7 @@ function ManagerOverview() {
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
         <StatCard label="Cash on hand" value={money(dash?.cash_on_hand)} icon={Coins} accent="amber" />
         <StatCard label="Total deposited" value={money(dash?.total_deposited)} icon={PiggyBank} accent="teal" />
         <StatCard

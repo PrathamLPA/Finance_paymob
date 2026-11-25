@@ -151,3 +151,20 @@ body {
 [data-mobile-nav]::-webkit-scrollbar {
   display: none;
 }
+
+/* Phones: 16px form text stops iPhones zooming the page when a field is tapped. */
+@media (max-width: 767px) {
+  select,
+  textarea,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]) {
+    font-size: 16px;
+  }
+  select {
+    min-height: 44px;
+  }
+  button,
+  [role="button"],
+  [role="switch"] {
+    touch-action: manipulation;
+  }
+}

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Payment - Terms &amp; Conditions</title>
-    <link rel="stylesheet" href="/static/styles.css?v=21">
+    <link rel="stylesheet" href="/static/styles.css?v=24">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -355,7 +355,7 @@
                                 </svg>
                             </span>
                             <input type="number" name="payment_amount" id="payment-amount" class="field-input"
-                                required step="0.01"
+                                required step="0.01" inputmode="decimal"
                                 min="{{ payment_amount if amount_locked else minimum_amount }}"
                                 max="{{ payment_amount if amount_locked else remaining_balance }}"
                                 value="{{ payment_amount }}"

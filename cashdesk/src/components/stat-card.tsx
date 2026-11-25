@@ -23,13 +23,13 @@ export function StatCard({
   };
   return (
     <Card className="overflow-hidden border-stone-200/80 shadow-sm">
-      <CardContent className="flex items-start gap-4 p-5">
-        <div className={cn("rounded-xl p-3 ring-1", accents[accent])}>
-          <Icon className="h-5 w-5" />
+      <CardContent className="flex flex-col items-start gap-2 p-3.5 sm:flex-row sm:gap-4 sm:p-5">
+        <div className={cn("rounded-xl p-2 ring-1 sm:p-3", accents[accent])}>
+          <Icon className="h-4 w-4 sm:h-5 sm:w-5" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium uppercase tracking-wide text-stone-500">{label}</p>
-          <p className="mt-1 truncate text-2xl font-semibold text-stone-900">{value}</p>
+          <p className="text-[11px] font-medium uppercase tracking-wide text-stone-500 sm:text-xs">{label}</p>
+          <p className="mt-0.5 truncate text-xl font-semibold text-stone-900 sm:mt-1 sm:text-2xl">{value}</p>
           {hint ? <p className="mt-1 text-xs text-stone-500">{hint}</p> : null}
         </div>
       </CardContent>

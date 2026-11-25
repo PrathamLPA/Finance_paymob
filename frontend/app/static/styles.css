@@ -686,6 +686,11 @@ body.error-page-body {
    course, email) is marked .wrap-text in the page and may wrap instead. */
 .amount-row dd:not(.wrap-text) {
     white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.amount-row dt {
+    min-width: 0;
 }
 
 .amount-row-total {
@@ -2240,4 +2245,62 @@ body.terms-modal-open {
         animation: none !important;
         transition: none !important;
     }
+}
+
+
+/* ── Phones: comfortable tapping and no zoom-on-focus ──
+   Inputs below 16px make iPhones zoom the whole page when tapped, which shifts the
+   layout. Taps are sized to the 44px guideline so fingers don't miss. */
+@media (max-width: 640px) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]),
+    select,
+    textarea {
+        font-size: 16px;
+    }
+
+    .field-input {
+        min-height: 48px;
+    }
+
+    .btn-paymob,
+    .submit-btn,
+    button[type="submit"] {
+        min-height: 52px;
+        font-size: 1rem;
+    }
+
+    .consent-row {
+        align-items: flex-start;
+        gap: 0.85rem;
+    }
+
+    .consent-row input[type="checkbox"] {
+        width: 24px;
+        height: 24px;
+        flex-shrink: 0;
+        margin-top: 0.1rem;
+    }
+
+    .terms-link-btn {
+        padding: 0.2rem 0;
+        min-height: 32px;
+    }
+
+    .btn-paymob,
+    button,
+    label,
+    summary {
+        touch-action: manipulation;
+    }
+
+    .main-content {
+        padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
+    }
+}
+
+
+/* Bank details may be several lines (account name, IBAN, bank, SWIFT). */
+.receipt-instructions-text {
+    white-space: pre-line;
+    overflow-wrap: anywhere;
 }

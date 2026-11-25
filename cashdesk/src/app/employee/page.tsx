@@ -57,7 +57,7 @@ type TabKey = "open" | "claimed" | "collected";
 
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="grid grid-cols-[6.75rem_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-stone-200/70 py-2 last:border-b-0 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
+    <div className="grid grid-cols-[5.75rem_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-stone-200/70 py-2 last:border-b-0 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
       <dt className="text-[11px] font-medium uppercase tracking-wide text-stone-500">{label}</dt>
       <dd className="min-w-0 break-words text-sm text-stone-900">{value || "-"}</dd>
     </div>
@@ -595,13 +595,14 @@ function EmployeeDesk({ userId }: { userId: number }) {
     tab === "open" ? open : tab === "claimed" ? mine : collectedItems;
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       <PageHeader
         title="Collections"
         description="Cases appear when Bitrix is cash. At the desk choose Cash (adds to on hand) or POS machine (proof only, no on hand)."
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      {/* On a phone the cases come first; the totals sit below them. */}
+      <div className="order-3 grid grid-cols-2 gap-3 sm:gap-4 md:order-none xl:grid-cols-3">
         <StatCard
           label="Cash you collected"
           value={money(summary?.collected, summary?.currency)}
@@ -621,17 +622,19 @@ function EmployeeDesk({ userId }: { userId: number }) {
         <StatCard label="Left to deposit" value={money(summary?.left_to_deposit, summary?.currency)} icon={Wallet} accent="stone" />
       </div>
 
-      <CollectorsTable rows={collectors} highlightId={userId} />
+      <div className="order-4 md:order-none">
+        <CollectorsTable rows={collectors} highlightId={userId} />
+      </div>
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="order-1 text-sm text-red-700 md:order-none">{error}</p> : null}
       {success ? (
-        <p className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+        <p className="order-1 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
           <CheckCircle2 className="h-4 w-4 shrink-0" />
           {success}
         </p>
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
+      <div className="order-2 flex flex-wrap gap-2 md:order-none">
         {tabs.map((t) => (
           <button
             key={t.key}
@@ -649,7 +652,7 @@ function EmployeeDesk({ userId }: { userId: number }) {
         ))}
       </div>
 
-      <section className="space-y-3">
+      <section className="order-2 space-y-3 md:order-none">
         {list.length === 0 ? (
           <Card>
             <CardContent className="py-10 text-center text-stone-500">

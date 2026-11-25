@@ -306,7 +306,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
         variant = "failed"
     elif payment_confirmed:
         heading = "Payment successful"
-        message = "Your payment has been confirmed. Thank you."
+        message = "Your payment has been confirmed. Thank you for choosing Learners Point."
         page_title = "Payment Successful"
         footnote = "Your sales contact will follow up if anything else is needed."
         variant = "success"
@@ -318,7 +318,8 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
         )
         page_title = "Confirming payment"
         footnote = (
-            f"Final confirmation comes from the {gateway_name} webhook, not the redirect alone."
+            "You can safely close this page. We will confirm your payment "
+            "shortly and your Learners Point advisor will be in touch."
         )
         variant = "confirming"
     else:
@@ -328,7 +329,7 @@ async def payment_thank_you(request: Request) -> HTMLResponse:
             "If you cancelled, no charge was made."
         )
         page_title = "Payment Status"
-        footnote = f"Final status comes from the {gateway_name} webhook, not this page."
+        footnote = "If you are unsure whether your payment went through, please contact your Learners Point advisor."
         variant = "neutral"
 
     poll_status_url = (
