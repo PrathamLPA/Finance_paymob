@@ -184,13 +184,13 @@ body {
   to { opacity: 0; transform: translateY(8px) scale(0.98); }
 }
 
-/* Page content eases in instead of popping. */
+/* Only the content area fades when you change page; the sidebar stays put. */
 .cashdesk-page {
-  animation: cashdesk-page-in 0.25s ease-out;
+  animation: cashdesk-page-in 0.15s ease-out;
 }
 @keyframes cashdesk-page-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* A row that was just acted on fades out smoothly instead of vanishing. */
